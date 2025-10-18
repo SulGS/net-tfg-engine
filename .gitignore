@@ -1,6 +1,7 @@
 # Directories
 .vs/
 Binaries/
+vcpkg_installed/
 
 # Files
 *.vcxproj

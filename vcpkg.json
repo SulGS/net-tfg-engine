@@ -1,0 +1,10 @@
+{
+  "dependencies": [
+    "enet",
+    "glew",
+    "glfw3",
+    "glm",
+    "opengl",
+    "freetype"
+  ]
+}
