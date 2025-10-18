@@ -44,8 +44,6 @@ int main(int argc, char** argv) {
         else if (a == "--id" && i + 1 < argc) customClientId = argv[++i];
     }
 
-    ENetSession net;
-
     std::unique_ptr<IGameLogic> gameLogic = std::make_unique<AsteroidShooterGame>();
     std::unique_ptr<IGameRenderer> gameRenderer = std::make_unique<AsteroidShooterGameRenderer>();
 

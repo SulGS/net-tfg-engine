@@ -1,10 +1,10 @@
 {
   "dependencies": [
-    "enet",
+    "freetype",
     "glew",
     "glfw3",
     "glm",
     "opengl",
-    "freetype"
+    "gamenetworkingsockets"
   ]
 }
