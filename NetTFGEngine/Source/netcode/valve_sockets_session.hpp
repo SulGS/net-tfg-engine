@@ -124,24 +124,19 @@ public:
         if (!sockets) return;
 
         ISteamNetworkingMessage* pMsgs[32];
+        int numMsgs;
 
         if (isServer && pollGroup != k_HSteamNetPollGroup_Invalid) {
-            int numMsgs = sockets->ReceiveMessagesOnPollGroup(pollGroup, pMsgs, 32);
-
-            for (int i = 0; i < numMsgs; i++) {
-                handler(static_cast<const uint8_t*>(pMsgs[i]->m_pData),
-                    pMsgs[i]->m_cbSize, pMsgs[i]->m_conn);
-                pMsgs[i]->Release();
-            }
+            numMsgs = sockets->ReceiveMessagesOnPollGroup(pollGroup, pMsgs, 32);
         }
         else if (!isServer && connectedConnection != k_HSteamNetConnection_Invalid) {
-            int numMsgs = sockets->ReceiveMessagesOnConnection(connectedConnection, pMsgs, 32);
+            numMsgs = sockets->ReceiveMessagesOnConnection(connectedConnection, pMsgs, 32);
+        }
 
-            for (int i = 0; i < numMsgs; i++) {
-                handler(static_cast<const uint8_t*>(pMsgs[i]->m_pData),
-                    pMsgs[i]->m_cbSize, pMsgs[i]->m_conn);
-                pMsgs[i]->Release();
-            }
+        for (int i = 0; i < numMsgs; i++) {
+            handler(static_cast<const uint8_t*>(pMsgs[i]->m_pData),
+                pMsgs[i]->m_cbSize, pMsgs[i]->m_conn);
+            pMsgs[i]->Release();
         }
     }
 
@@ -171,6 +166,67 @@ public:
         std::memcpy(buf + 9, input.data, sizeof(InputBlob));
 
         sockets->SendMessageToConnection(conn, buf, sizeof(buf), k_nSteamNetworkingSend_Reliable, nullptr);
+    }
+
+    void SendInputDelaySync(HSteamNetConnection conn, InputDelayPacket InpDel_packet) {
+        if (!sockets || conn == k_HSteamNetConnection_Invalid) return;
+
+        uint8_t buf[1 + sizeof(InputDelayPacket)];
+        uint8_t offset = 0;
+
+        buf[0] = PACKET_INPUT_DELAY;
+        offset += 1;
+        
+        uint32_t f = hostToBigEndian32(InpDel_packet.sendframe);
+        std::memcpy(buf + offset, &f, sizeof(uint32_t));
+        offset += sizeof(uint32_t);
+
+        f = hostToBigEndian32(InpDel_packet.recframe);
+        std::memcpy(buf + offset, &f, sizeof(uint32_t));
+        offset += sizeof(uint32_t);
+
+        uint32_t pid = hostToBigEndian32(InpDel_packet.playerId);
+        std::memcpy(buf + offset, &pid, sizeof(uint32_t));
+        offset += sizeof(uint32_t);
+
+        uint32_t timeSend = hostToBigEndian32(InpDel_packet.timestamp);
+        std::memcpy(buf + offset, &timeSend, sizeof(uint32_t));
+        offset += sizeof(uint32_t);
+
+
+        sockets->SendMessageToConnection(conn, buf, sizeof(buf), k_nSteamNetworkingSend_Reliable, nullptr);
+    }
+
+    InputDelayPacket ParseInputDelaySync(const uint8_t* buf, size_t len) {
+
+        InputDelayPacket packet;
+
+        size_t offset = 0;
+
+        offset += 1;
+
+        uint32_t f = 0;
+        std::memcpy(&f, buf + offset, 4);
+        packet.sendframe = bigEndianToHost32(f);
+        offset += sizeof(uint32_t);
+
+        std::memcpy(&f, buf + offset, 4);
+        packet.recframe = bigEndianToHost32(f);
+        offset += sizeof(uint32_t);
+
+        uint32_t pid = 0;
+        std::memcpy(&f, buf + offset, 4);
+        packet.playerId = bigEndianToHost32(f);
+        offset += sizeof(uint32_t);
+
+        uint32_t timeSend = 0;
+        std::memcpy(&f, buf + offset, 4);
+        packet.timestamp = bigEndianToHost32(f);
+        offset += sizeof(uint32_t);
+
+
+
+        return packet;
     }
 
     inline InputEntry ParseInputEntryPacket(const uint8_t* buf, size_t len) {

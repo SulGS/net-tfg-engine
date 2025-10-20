@@ -31,14 +31,14 @@ using namespace std::chrono_literals;
 const int TICKS_PER_SECOND = 30;
 const int MS_PER_TICK = 1000 / TICKS_PER_SECOND;
 const int MAX_ROLLBACK_FRAMES = 10;
-const int INPUT_DELAY_FRAMES = 3;
 
 enum PacketType : uint8_t {
     PACKET_INPUT = 0x01,
     PACKET_STATE_UPDATE = 0x02,
     PACKET_INPUT_UPDATE = 0x03,
     PACKET_GAME_START = 0x04,
-    PACKET_INPUT_ACK = 0x05
+    PACKET_INPUT_ACK = 0x05,
+    PACKET_INPUT_DELAY = 0x06
 };
 
 struct InputBlob {
@@ -49,6 +49,13 @@ struct InputEntry {
     int frame;
     InputBlob input;
     int playerId;
+};
+
+struct InputDelayPacket {
+    int sendframe;
+    int recframe;
+    int playerId;
+    uint32_t timestamp;
 };
 
 inline InputBlob MakeZeroInputBlob() {

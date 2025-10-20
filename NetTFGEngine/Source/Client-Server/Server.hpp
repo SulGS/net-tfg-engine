@@ -232,6 +232,12 @@ private:
         }
 
         InputEntry ie = net_.ParseInputEntryPacket(data, len);
+
+        if (ie.frame < currentFrame_)
+        {
+            ie.frame = currentFrame_;
+        }
+
         rollback_.OnClientInputReceived(ie.playerId, ie.frame, ie);
 
         for (auto& [peer, info] : peerInfo_) {
@@ -282,6 +288,17 @@ private:
         if (type == PACKET_CLIENT_HELLO) {
             std::cout << "Received CLIENT_HELLO during game, len=" << len << "\n";
             HandleClientHelloDuringGame(conn, data, len);
+            return;
+        }
+
+        if (type == PACKET_INPUT_DELAY) {
+            InputDelayPacket packet = net_.ParseInputDelaySync(data, len);
+
+            packet.recframe = currentFrame_;
+
+            net_.SendInputDelaySync(conn, packet);
+
+
             return;
         }
 
