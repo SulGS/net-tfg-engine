@@ -93,9 +93,9 @@ public:
 
 
 
-class RollbackClient {
+class Client {
 public:
-    RollbackClient(std::unique_ptr<IGameLogic> gameLogic,
+    Client(std::unique_ptr<IGameLogic> gameLogic,
         std::unique_ptr<IGameRenderer> gameRenderer,
         const std::string& customClientId = "")
         : gameLogic_(std::move(gameLogic))
@@ -149,6 +149,7 @@ public:
         );
 
         prediction.GetGameLogic()->playerId = assignedPlayerId_;
+		prediction.GetGameLogic()->isServer = false;
 
         std::cerr << "Before running client loop\n";
         RunClientLoop(prediction, cWindow);

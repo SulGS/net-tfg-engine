@@ -2,98 +2,95 @@
 #define CLIENT_NETCODE_H
 #include "netcode_common.hpp"
 #include <functional>
+#include <deque>
 
 // Client-side prediction netcode
 class ClientPredictionNetcode {
 public:
     ClientPredictionNetcode(int playerId, std::unique_ptr<IGameLogic> logic) : localPlayerId(playerId) {
-        snapshots.resize(MAX_ROLLBACK_FRAMES);
+        snapshots.resize(MAX_ROLLBACK_FRAMES*2);
         SetGameLogic(std::move(logic));
-        SaveSnapshot(0);
     }
 
+    // Replace GetSnapshot(...) with this:
+    template<typename F>
+    void WithSnapshot(int frame, F&& fn) {
+        // search for existing snapshot
+        for (auto it = snapshots.begin(); it != snapshots.end(); ++it) {
+            if (it->frame == frame) {
+                fn(*it);           // operate on real snapshot while lock held
+                return;
+            }
+        }
+        // not found -> create, set its frame, then call fn
+        snapshots.emplace_back(SNAPSHOT{});   // default-constructed
+        snapshots.back().frame = frame;      // IMPORTANT: set the frame
+        fn(snapshots.back());
+    }
+
+
+
     void SubmitLocalInput(int frame, InputBlob input) {
-        std::lock_guard<std::mutex> lk(mtx);
-        localInputs[frame] = {frame, input, localPlayerId};
-        confirmedInputs[frame][localPlayerId] = {frame, input, localPlayerId};
+        // we don't need an extra lock here because WithSnapshot locks internally
+        WithSnapshot(frame, [&](SNAPSHOT& snap) {
+            snap.inputs[localPlayerId] = { frame, input, localPlayerId };
+            });
     }
 
     void OnServerInputUpdate(InputEntry ie)
     {
-        confirmedInputs[ie.frame][ie.playerId] = ie;
+        WithSnapshot(ie.frame, [&](SNAPSHOT& snap) {
+            snap.inputs[ie.playerId] = ie;
+            });
     }
 
     void OnServerStateUpdate(const StateUpdate& update) {
-        std::lock_guard<std::mutex> lk(mtx);
-        //std::cerr << "Client received state update for frame " << update.frame << "\n";
-        // Check if we need to correct our prediction
         bool needCorrection = false;
-        // Find our snapshot for this frame
-        auto snapshotIt = confirmedSnapshots.find(update.frame);
-        if (snapshotIt == confirmedSnapshots.end()) {
-            needCorrection = true;
-        } else {
-            // Compare states
-            const GameStateBlob& ourState = snapshotIt->second;
+
+        WithSnapshot(update.frame, [&](SNAPSHOT& snap) {
+            const GameStateBlob& ourState = snap.state;
             if (!gameLogic->CompareStates(ourState, update.state)) {
                 needCorrection = true;
                 std::cerr << "Misprediction detected at server frame " << update.frame << "\n";
             }
-        }
-        // Store server state
-        serverStates[update.frame] = update.state;
-        confirmedInputs[update.frame] = update.confirmedInputs;
-        // Apply correction if needed
+
+            // Store server state
+            snap.state = update.state;
+            snap.inputs = update.confirmedInputs;
+            });
+
+        // NOTE: we intentionally perform the heavier correction / prediction
+        // outside snapshot lock to avoid holding mutex while simulating.
         if (needCorrection && update.frame <= currentPredictionFrame) {
-            // Rollback and re-predict
             gameState = update.state;
             gameState.frame = update.frame;
-            // Re-simulate from server frame to current prediction
             for (int f = update.frame + 1; f <= currentPredictionFrame; ++f) {
                 PredictFrame(f);
             }
-            std::cerr << "Applied correction from frame " << update.frame 
-                      << " to " << currentPredictionFrame << "\n";
-        } else if (update.frame >= currentPredictionFrame) {
-            // Server is at or ahead, adopt server state
+            std::cerr << "Applied correction from frame " << update.frame
+                << " to " << currentPredictionFrame << "\n";
+        }
+        else if (update.frame >= currentPredictionFrame) {
             gameState = update.state;
             currentPredictionFrame = update.frame;
         }
     }
 
     void PredictFrame(int frame) {
-
         std::map<int, InputEntry> inputs;
-        
-        // Use confirmed input from server if available
-        auto confirmedIt = confirmedInputs.find(frame);
-        if (confirmedIt != confirmedInputs.end()) {
-            inputs = confirmedIt->second;
-        } else {
-            auto lastConfirmedIt = confirmedInputs.rbegin();
-            if (lastConfirmedIt != confirmedInputs.rend()) {
-                inputs = lastConfirmedIt->second;
-            }
+        // copy inputs while holding the lock to ensure consistent view
+        WithSnapshot(frame, [&](SNAPSHOT& snap) {
+            inputs = snap.inputs;
+            });
 
-            // Only use a local input for this frame if we've actually submitted one.
-            auto lit = localInputs.find(frame);
-            if (lit != localInputs.end()) {
-                inputs[localPlayerId] = lit->second;
-            } else {
-                // If we don't have a local input for this frame, fall back to zero input.
-                inputs[localPlayerId] = InputEntry{frame, MakeZeroInputBlob(), localPlayerId};
-            }
-        }
-
-        
-
-        // Simulate frame
+        // Simulate frame (do NOT hold snapshots lock while simulating)
         gameLogic->SimulateFrame(gameState, inputs);
-
         gameState.frame = frame;
-        
-        // Save snapshot of our prediction
-        confirmedSnapshots[frame] = gameState;
+
+        // store resulting state back into snapshot
+        WithSnapshot(frame, [&](SNAPSHOT& snap) {
+            snap.state = gameState;
+            });
     }
 
     void PredictToFrame(int targetFrame) {
@@ -106,17 +103,13 @@ public:
 
         currentPredictionFrame = targetFrame;
         // prune old history, keep last 2*MAX_ROLLBACK_FRAMES frames
-        int keepFrom = (std::max)(0, currentPredictionFrame - (2 * MAX_ROLLBACK_FRAMES));
+        int keepFrom = (std::max)(0, currentPredictionFrame - (MAX_ROLLBACK_FRAMES));
         PruneHistoryBefore(keepFrom);
     }
 
     GameStateBlob GetCurrentState() {
         std::lock_guard<std::mutex> lk(mtx);
         return gameState;
-    }
-
-    void SaveSnapshot(int frame) {
-        // Not needed for client prediction, keeping for compatibility
     }
 
     void SetGameLogic(std::unique_ptr<IGameLogic> logic) {
@@ -136,32 +129,13 @@ private:
     int currentPredictionFrame = 0;
     std::mutex mtx;
     GameStateBlob gameState;
-    std::vector<SNAPSHOT> snapshots; // Keep for compatibility
-    std::map<int, InputEntry> localInputs;
-    std::map<int, GameStateBlob> serverStates;
-    std::map<int, GameStateBlob> confirmedSnapshots;
-    std::map<int, std::map<int, InputEntry>> confirmedInputs; // frame -> confirmed inputs for both players
+    std::deque<SNAPSHOT> snapshots;
 
     // Keep only frames >= keepFrom in all history maps
     void PruneHistoryBefore(int keepFrom) {
-        // localInputs
-        for (auto it = localInputs.begin(); it != localInputs.end();) {
-            if (it->first < keepFrom) it = localInputs.erase(it);
-            else ++it;
-        }
         // confirmedSnapshots
-        for (auto it = confirmedSnapshots.begin(); it != confirmedSnapshots.end();) {
-            if (it->first < keepFrom) it = confirmedSnapshots.erase(it);
-            else ++it;
-        }
-        // serverStates
-        for (auto it = serverStates.begin(); it != serverStates.end();) {
-            if (it->first < keepFrom) it = serverStates.erase(it);
-            else ++it;
-        }
-        // confirmedInputs
-        for (auto it = confirmedInputs.begin(); it != confirmedInputs.end();) {
-            if (it->first < keepFrom) it = confirmedInputs.erase(it);
+        for (auto it = snapshots.begin(); it != snapshots.end();) {
+            if (it->frame < keepFrom) it = snapshots.erase(it);
             else ++it;
         }
     }

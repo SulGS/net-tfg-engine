@@ -30,7 +30,29 @@ using namespace std::chrono_literals;
 
 const int TICKS_PER_SECOND = 30;
 const int MS_PER_TICK = 1000 / TICKS_PER_SECOND;
-const int MAX_ROLLBACK_FRAMES = 10;
+const int MAX_ROLLBACK_FRAMES = 90;
+
+// Tamaños ajustables según tus necesidades
+constexpr size_t GAME_EVENT_BLOB_SIZE = 128;
+constexpr size_t STATE_DELTA_BLOB_SIZE = 1024;
+
+// Evento de juego como blob
+struct GameEventBlob {
+    int frame = 0;
+    int playerId = -1;
+	int eventType = 0;
+    uint8_t data[GAME_EVENT_BLOB_SIZE];
+    int len = 0; // longitud real de datos válidos
+};
+
+// Delta de estado como blob
+struct StateDeltaBlob {
+    int fromFrame = 0;
+    int toFrame = 0;
+	int deltaType = 0;
+    uint8_t data[STATE_DELTA_BLOB_SIZE];
+    int len = 0;
+};
 
 enum PacketType : uint8_t {
     PACKET_INPUT = 0x01,
@@ -94,6 +116,7 @@ static_assert(std::is_trivially_copyable<GameStateBlob>::value,
 
 class IGameLogic {
 public:
+	bool isServer = false;
     int frame = 0;
     int playerId = -1;
     virtual ~IGameLogic() = default;
@@ -114,6 +137,8 @@ struct StateUpdate {
 struct SNAPSHOT {
     int frame = -1;
     GameStateBlob state;
+    std::map<int, InputEntry> inputs;
+	std::vector<GameEventBlob> events;
 };
 
 using InputHistory = std::map<int, std::map<int, InputEntry>>;

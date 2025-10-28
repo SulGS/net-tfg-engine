@@ -52,11 +52,11 @@ struct ServerAcceptPacket {
     bool isReconnection;
 };
 
-class RollbackServer {
+class Server {
 public:
-    RollbackServer(std::unique_ptr<IGameLogic> gameLogic,
+    Server(std::unique_ptr<IGameLogic> gameLogic,
         const ServerConfig& config = ServerConfig())
-        : rollback_(std::move(gameLogic))
+        : server_(std::move(gameLogic))
         , config_(config)
         , currentFrame_(0)
         , running_(true)
@@ -65,6 +65,8 @@ public:
     }
 
     int RunServer() {
+		server_.GetGameLogic()->isServer = true;
+
         if (!net_.InitGNS()) {
             return 1;
         }
@@ -89,7 +91,7 @@ public:
 
 private:
     GNSSession net_;
-    ServerRollbackNetcode rollback_;
+    ServerNetcode server_;
     ServerConfig config_;
     std::map<HSteamNetConnection, PeerInfo> peerInfo_;
     std::vector<PeerInfo> allPlayers_;
@@ -238,7 +240,7 @@ private:
             ie.frame = currentFrame_;
         }
 
-        rollback_.OnClientInputReceived(ie.playerId, ie.frame, ie);
+        server_.OnClientInputReceived(ie);
 
         for (auto& [peer, info] : peerInfo_) {
             if (!info.isConnected) {
@@ -375,7 +377,7 @@ private:
         activePlayerCount_ = CountActivePlayers();
 
         for (auto [conn, info] : peerInfo_) {
-            rollback_.OnPlayerConnected(info.playerId);
+            server_.OnPlayerConnected(info.playerId);
         }
 
         while (running_ && (activePlayerCount_ >= config_.minPlayers || !config_.stopOnBelowMin)) {
@@ -401,10 +403,10 @@ private:
 
             for (auto conn : toRemove) {
                 HandleDisconnectInGame(conn);
-                rollback_.OnPlayerDisconnected(peerInfo_[conn].playerId);
+                server_.OnPlayerDisconnected(peerInfo_[conn].playerId);
             }
 
-            StateUpdate update = rollback_.Tick(currentFrame_);
+            StateUpdate update = server_.Tick(currentFrame_);
 
             if (currentFrame_ % 30 == 0) {
                 for (auto& [conn, info] : peerInfo_) {
@@ -412,7 +414,7 @@ private:
                         continue;
                     }
                     if (pendingReconnections_.find(info.playerId) != pendingReconnections_.end()) {
-                        rollback_.OnPlayerReconnected(info.playerId);
+                        server_.OnPlayerReconnected(info.playerId);
                         pendingReconnections_.erase(info.playerId);
                     }
                     else {
@@ -439,7 +441,7 @@ private:
                 double currentMs = durationUs / 1000.0 / TICKS_PER_SECOND;
                 double meanMs = mean / 1000.0 / TICKS_PER_SECOND;
 
-                GameStateBlob s = rollback_.GetCurrentState();
+                GameStateBlob s = server_.GetCurrentState();
                 //rollback_.GetGameLogic()->PrintState(s);
 
                 std::cout << "Current: " << std::fixed << std::setprecision(5) << currentMs << " ms | "
@@ -511,7 +513,7 @@ private:
 
             SendServerAccept(conn, existingPlayer->playerId, true);
 
-            StateUpdate currentUpdate = rollback_.Tick(currentFrame_);
+            StateUpdate currentUpdate = server_.Tick(currentFrame_);
             net_.SendStateUpdate(conn, currentUpdate);
             std::cerr << "Sent state update to reconnected player " << existingPlayer->playerId << "\n";
 

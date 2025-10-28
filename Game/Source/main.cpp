@@ -55,7 +55,7 @@ int main(int argc, char** argv) {
         config.stopOnBelowMin = false;
         config.reconnectionTimeout = std::chrono::seconds(0);
 
-        RollbackServer server(std::move(gameLogic), config);
+        Server server(std::move(gameLogic), config);
         return server.RunServer();
     }
     else {
@@ -71,7 +71,7 @@ int main(int argc, char** argv) {
             p = static_cast<uint16_t>(std::atoi(connectTo.substr(colon + 1).c_str()));
         }
 
-        RollbackClient client(std::move(gameLogic), std::move(gameRenderer), customClientId);
+        Client client(std::move(gameLogic), std::move(gameRenderer), customClientId);
         return client.RunClient(hoststr, p);
     }
 }
