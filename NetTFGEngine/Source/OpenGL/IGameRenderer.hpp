@@ -13,6 +13,8 @@ public:
     virtual void Init(const GameStateBlob& state, OpenGLWindow* window) = 0;
 
     virtual void Render(const GameStateBlob& state, OpenGLWindow* window) = 0;
+
+    virtual void Interpolate(const GameStateBlob& previousState, const GameStateBlob& currentState, GameStateBlob& renderState, float interpolationFactor) = 0;
     
     virtual ~IGameRenderer() = 0;
 

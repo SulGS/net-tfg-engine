@@ -435,6 +435,50 @@ std::vector<float> BulletVerts() {
         world.AddSystem(std::make_unique<OnDeathRenderSystem>());
     }
 
+    void Interpolate(const GameStateBlob& previousState, const GameStateBlob& currentState, GameStateBlob& renderState, float interpolationFactor) override {
+        // Deserializa los estados
+        const AsteroidShooterGameState& prev = *reinterpret_cast<const AsteroidShooterGameState*>(previousState.data);
+        const AsteroidShooterGameState& curr = *reinterpret_cast<const AsteroidShooterGameState*>(currentState.data);
+        AsteroidShooterGameState& rend = *reinterpret_cast<AsteroidShooterGameState*>(renderState.data);
+
+        // Interpola jugadores
+        for (int i = 0; i < 2; ++i) {
+            rend.posX[i] = prev.posX[i] + (curr.posX[i] - prev.posX[i]) * interpolationFactor;
+            rend.posY[i] = prev.posY[i] + (curr.posY[i] - prev.posY[i]) * interpolationFactor;
+            // Rotación: interpola linealmente (puedes mejorar con shortest path si lo necesitas)
+            rend.rot[i] = static_cast<int>(prev.rot[i] + (curr.rot[i] - prev.rot[i]) * interpolationFactor);
+
+            // No interpolamos salud ni cooldowns, solo copiamos el actual
+            rend.health[i] = curr.health[i];
+            rend.shootCooldown[i] = curr.shootCooldown[i];
+            rend.deathCooldown[i] = curr.deathCooldown[i];
+        }
+
+        // Interpola balas
+        rend.bulletCount = curr.bulletCount;
+        for (int i = 0; i < MAX_BULLETS; ++i) {
+            const Bullet& prevBullet = prev.bullets[i];
+            const Bullet& currBullet = curr.bullets[i];
+            Bullet& rendBullet = rend.bullets[i];
+
+            // Si la bala está activa en ambos estados, interpola posición y velocidad
+            if (prevBullet.active && currBullet.active && prevBullet.id == currBullet.id) {
+                rendBullet.id = currBullet.id;
+                rendBullet.active = true;
+                rendBullet.posX = prevBullet.posX + (currBullet.posX - prevBullet.posX) * interpolationFactor;
+                rendBullet.posY = prevBullet.posY + (currBullet.posY - prevBullet.posY) * interpolationFactor;
+                rendBullet.velX = prevBullet.velX + (currBullet.velX - prevBullet.velX) * interpolationFactor;
+                rendBullet.velY = prevBullet.velY + (currBullet.velY - prevBullet.velY) * interpolationFactor;
+                rendBullet.ownerId = currBullet.ownerId;
+                rendBullet.lifetime = currBullet.lifetime;
+            }
+            else {
+                // Si solo está activa en el estado actual, copia el actual
+                rendBullet = currBullet;
+            }
+        }
+    }
+
     ~AsteroidShooterGameRenderer() override {
         //
     }

@@ -145,7 +145,10 @@ public:
             },
             [this](GameStateBlob& state, OpenGLWindow* win) {
                 gameRenderer_->Render(state, win);
-            }
+            },
+			[this](const GameStateBlob& prevState, const GameStateBlob& currState, GameStateBlob& renderState, float interpFactor) {
+				gameRenderer_->Interpolate(prevState, currState, renderState, interpFactor);
+			}
         );
 
         prediction.GetGameLogic()->playerId = assignedPlayerId_;

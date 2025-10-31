@@ -123,6 +123,7 @@ public:
     virtual std::unique_ptr<IGameLogic> Clone() const = 0;
     virtual InputBlob GenerateLocalInput() = 0;
     virtual void SimulateFrame(GameStateBlob& state, std::map<int, InputEntry> inputs) = 0;
+    virtual void SimulateFrame(GameStateBlob& state, std::vector<GameEventBlob> events, std::map<int, InputEntry> inputs) = 0;
     virtual bool CompareStates(const GameStateBlob& a, const GameStateBlob& b) const = 0;
     virtual void Init(GameStateBlob& state) = 0;
     virtual void PrintState(const GameStateBlob& state) const = 0;

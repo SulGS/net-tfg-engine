@@ -18,6 +18,7 @@ public:
     virtual void ECSWorld_To_GameState(GameStateBlob& state) = 0;
     virtual void GameState_To_ECSWorld(const GameStateBlob& state, std::map<int, InputEntry> inputs) = 0;
 
+
     virtual void InitECSLogic(GameStateBlob& state) = 0;
 
     void Init(GameStateBlob& state) override {
@@ -37,6 +38,11 @@ public:
 
     void SimulateFrame(GameStateBlob& state, std::map<int, InputEntry> inputs) override {
         GameState_To_ECSWorld(state, inputs);
+        world.Update(1 / TICKS_PER_SECOND);
+        ECSWorld_To_GameState(state);
+    }
+
+    void SimulateFrame(GameStateBlob& state, std::vector<GameEventBlob> events, std::map<int, InputEntry> inputs) override {
         world.Update(1 / TICKS_PER_SECOND);
         ECSWorld_To_GameState(state);
     }
