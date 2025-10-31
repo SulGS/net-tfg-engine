@@ -25,6 +25,7 @@ class ClientWindow {
 	GameStateBlob CurrentState;    // last received state from server
     GameStateBlob RenderState;       // last predicted state to draw
     OpenGLWindow* window{nullptr};
+    std::chrono::steady_clock::time_point lastStateUpdate;
     std::function<void(GameStateBlob&,OpenGLWindow*)> renderInitCallback;
     std::function<void(GameStateBlob&,OpenGLWindow*)> renderCallback;
     std::function<void(const GameStateBlob&, const GameStateBlob&, GameStateBlob&, float)> interpolationCallback;
@@ -34,7 +35,7 @@ class ClientWindow {
         std::function<void(const GameStateBlob&, const GameStateBlob&, GameStateBlob&, float)> interpolationCb)
 		: renderInitCallback(initCb), renderCallback(renderCb), interpolationCallback(interpolationCb)
         {
-            
+		lastStateUpdate = std::chrono::steady_clock::now();
         }
 
     void close() {
@@ -48,6 +49,7 @@ class ClientWindow {
         gStateMutex.lock();
         PreviousState = CurrentState;
         CurrentState = std;
+		lastStateUpdate = std::chrono::steady_clock::now();
         gStateMutex.unlock();
     }
 
@@ -70,7 +72,6 @@ class ClientWindow {
             gStateMutex.lock();
             // Calcula el factor de interpolación
             auto now = std::chrono::high_resolution_clock::now();
-            static auto lastStateUpdate = now;
             float interpolationFactor = 0.0f;
             if (CurrentState.frame != PreviousState.frame) {
                 auto frameDelta = std::chrono::milliseconds(RENDER_MS_PER_TICK);
@@ -79,7 +80,6 @@ class ClientWindow {
                 if (interpolationFactor > 1.0f) interpolationFactor = 1.0f;
             }
             interpolationCallback(PreviousState, CurrentState, RenderState, interpolationFactor);
-            lastStateUpdate = now;
             GameStateBlob stateCopy = RenderState;
             gStateMutex.unlock();
 
