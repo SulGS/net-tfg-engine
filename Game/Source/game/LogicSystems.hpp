@@ -6,6 +6,8 @@
 #include "GameState.hpp"
 #include "ecs/Collisions/BoxCollider2D.hpp"
 
+#include "Events.hpp"
+
 
 enum InputMask : uint8_t {
     INPUT_NONE = 0,
@@ -18,7 +20,7 @@ enum InputMask : uint8_t {
 
 class BulletSystem : public ISystem {
 public:
-    void Update(EntityManager& entityManager, float deltaTime) override {
+    void Update(EntityManager& entityManager, std::vector<EventEntry>& events, float deltaTime) override {
         const float WORLD_SIZE = 400.0f;
 
         //std::cout << "BulletSystem Update\n";
@@ -46,7 +48,7 @@ public:
 
 class InputSystem : public ISystem {
 public:
-    void Update(EntityManager& entityManager, float deltaTime) override {
+    void Update(EntityManager& entityManager, std::vector<EventEntry>& events, float deltaTime) override {
         auto query = entityManager.CreateQuery<Transform, Playable, SpaceShip>();
         //std::cout << "InputSystem Update\n";
         for (auto [entity, transform, play, ship] : query) {
@@ -92,6 +94,39 @@ public:
 
             // Update position
             transform->setPosition(transform->getPosition() + glm::vec3(velX, velY, 0.0f));
+        }
+    }
+};
+
+class InputServerSystem : public ISystem {
+public:
+    void Update(EntityManager& entityManager, std::vector<EventEntry>& events, float deltaTime) override {
+        auto query = entityManager.CreateQuery<Transform, Playable, SpaceShip>();
+        //std::cout << "InputSystem Update\n";
+        for (auto [entity, transform, play, ship] : query) {
+            int p = play->playerId;
+            InputBlob input = play->input;
+            uint8_t m = input.data[0];
+
+            const float MOVE_SPEED = 1.0f;
+            const float ROT_SPEED = 5.0f;
+            const float BULLET_SPEED = 2.0f;
+            const int SHOOT_COOLDOWN = 3;  // In ticks
+            const int BULLET_LIFETIME = 30;  // In ticks
+
+            float radians = transform->getRotation().z * 3.14159f / 180.0f;
+
+			EventEntry posEvent;
+			posEvent.event.type = AsteroidEventMask::PLAYER_POSITION;
+			PlayerPositionEventData posData;
+
+			posData.playerId = p;
+			posData.x = transform->getPosition().x;
+			posData.y = transform->getPosition().y;
+			posData.rotation = transform->getRotation().z;
+			std::memcpy(posEvent.event.data, &posData, sizeof(PlayerPositionEventData));
+			posEvent.event.len = sizeof(PlayerPositionEventData);
+			events.push_back(posEvent);
 
             // Shooting
             if ((m & INPUT_SHOOT) && ship->shootCooldown <= 0) {
@@ -114,41 +149,26 @@ public:
                 }
 
                 if (id != -1) {
-                    //std::cout << "Player " << p << " shoots bullet ID " << id << " from (" << transform->getPosition().x << ", " << transform->getPosition().y << ") with rotation " << transform->getRotation().z << "\n";
-
-                    // Create bullet entity
-                    Entity bulletEntity = entityManager.CreateEntity();
-                    Transform* t = entityManager.AddComponent<Transform>(bulletEntity, Transform{});
-                    t->setPosition(glm::vec3(transform->getPosition().x, transform->getPosition().y, 0.0f));
 
                     float bVelX = cos(radians) * BULLET_SPEED;
                     float bVelY = sin(radians) * BULLET_SPEED;
-                    entityManager.AddComponent<ECSBullet>(bulletEntity, ECSBullet{ id, bVelX, bVelY, p, BULLET_LIFETIME });
-                    BoxCollider2D* collider = entityManager.AddComponent<BoxCollider2D>(bulletEntity, BoxCollider2D{ glm::vec2(1.0f, 1.0f) });
-                    collider->layer = CollisionLayer::BULLET;
-                    collider->collidesWith = CollisionLayer::PLAYER;
 
-                    // Capture pointer to EntityManager to avoid copying it into the lambda (and const-qualification issues)
-                    collider->SetOnCollisionEnter([this, em = &entityManager](Entity self, Entity other, const CollisionInfo& info) {
-                        auto bullet = em->GetComponent<ECSBullet>(self);
-                        auto player = em->GetComponent<Playable>(other);
-                        auto ship = em->GetComponent<SpaceShip>(other);
+					EventEntry spawnEvent;
+					spawnEvent.event.type = AsteroidEventMask::SPAWN_BULLET;
+					SpawnBulletEventData spawnData;
+					spawnData.bulletId = id;
+					spawnData.ownerId = p;
+					spawnData.posX = transform->getPosition().x;
+					spawnData.posY = transform->getPosition().y;
+					spawnData.velX = bVelX;
+					spawnData.velY = bVelY;
 
-                        // Only apply damage if player is alive
-                        if (bullet && player && ship && bullet->ownerId != player->playerId && ship->health > 0) {
-                            auto col = em->GetComponent<BoxCollider2D>(other);
+					std::memcpy(spawnEvent.event.data, &spawnData, sizeof(SpawnBulletEventData));
+					spawnEvent.event.len = sizeof(SpawnBulletEventData);
 
-                            ship->health -= 5;
+					events.push_back(spawnEvent);
 
-                            if (ship->health <= 0) {
-                                ship->health = 0;
-                                ship->deathCooldown = 10 * TICKS_PER_SECOND;
-                                col->isEnabled = false;
-                            }
-
-                            em->DestroyEntity(self);  // Destroy bullet after damage
-                        }
-                        });
+                  
 
                     // Set cooldown
                     ship->shootCooldown = SHOOT_COOLDOWN;
@@ -160,7 +180,7 @@ public:
 
 class OnDeathLogicSystem : public ISystem {
 public:
-    void Update(EntityManager& entityManager, float deltaTime) override {
+    void Update(EntityManager& entityManager, std::vector<EventEntry>& events, float deltaTime) override {
         bool foundLocal = false;
         auto playerQuery = entityManager.CreateQuery<Transform, Playable, SpaceShip, BoxCollider2D>();
 

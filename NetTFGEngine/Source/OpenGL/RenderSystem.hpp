@@ -19,7 +19,7 @@ public:
         }
     }
 
-    void Update(EntityManager& entityManager, float deltaTime) override {
+    void Update(EntityManager& entityManager, std::vector<EventEntry>& events, float deltaTime) override {
     
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);

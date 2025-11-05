@@ -17,7 +17,7 @@ public:
     UIRenderSystem(int screenWidth, int screenHeight);
     ~UIRenderSystem();
 
-    void Update(EntityManager& entityManager, float deltaTime) override;
+    void Update(EntityManager& entityManager, std::vector<EventEntry>& events, float deltaTime) override;
     void UpdateScreenSize(int width, int height);
     
     // Font management

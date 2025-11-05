@@ -151,8 +151,15 @@ public:
 			}
         );
 
+        if (isReconnection_) 
+        {
+			std::cout << "Waiting for state update after reconnection...\n";
+			if (!WaitForStateUpdateAfterReconnection(prediction)) {
+				return 1;
+			}
+        }
+
         prediction.GetGameLogic()->playerId = assignedPlayerId_;
-		prediction.GetGameLogic()->isServer = false;
 
         std::cerr << "Before running client loop\n";
         RunClientLoop(prediction, cWindow);
@@ -171,6 +178,8 @@ private:
     int assignedPlayerId_;
     bool isReconnection_;
     HSteamNetConnection serverConnection_;
+
+    int currentFrame = 0;
 
     std::string GenerateClientId() {
         auto now = std::chrono::system_clock::now();
@@ -199,6 +208,34 @@ private:
         std::cerr << "Sent CLIENT_HELLO with ID: " << clientId_ << "\n";
         return true;
     }
+
+	bool WaitForStateUpdateAfterReconnection(ClientPredictionNetcode& prediction) {
+		bool stateReceived = false;
+		bool running = true;
+		auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+		while (!stateReceived && running) {
+			if (std::chrono::steady_clock::now() > timeout) {
+				std::cerr << "Timeout waiting for state update after reconnection\n";
+				return false;
+			}
+			net_.PumpCallbacks();
+			net_.Poll([&](const uint8_t* data, int len, HSteamNetConnection conn) {
+				if (len < 1) {
+					return;
+				}
+				uint8_t type = data[0];
+				if (type == PACKET_STATE_UPDATE) {
+					StateUpdate update = net_.ParseStateUpdate(data, len);
+					prediction.OnServerStateUpdate(update);
+					stateReceived = true;
+					currentFrame = update.frame;
+					std::cerr << "Received state update after reconnection\n";
+				}
+				}, true);
+			std::this_thread::sleep_for(std::chrono::milliseconds(50));
+		}
+		return running && stateReceived;
+	}
 
     bool HandleServerAccept(const uint8_t* data, int len) {
         if (len < sizeof(ServerAcceptPacket)) {
@@ -334,11 +371,13 @@ private:
             }
             net_.PumpCallbacks();
             net_.Poll([&](const uint8_t* data, int len, HSteamNetConnection conn) {
-                bool gameStarted = false;
-                if (!HandleReceiveEvent(data, len, gameStarted, serverAccepted)) {
-                    running = false;
+                if (!serverAccepted) {
+                    bool gameStarted = false;
+                    if (!HandleReceiveEvent(data, len, gameStarted, serverAccepted)) {
+                        running = false;
+                    }
                 }
-                });
+                }, true);
 
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
@@ -361,11 +400,13 @@ private:
 
             net_.PumpCallbacks();
             net_.Poll([&](const uint8_t* data, int len, HSteamNetConnection conn) {
-                bool serverAccepted = false;
-                if (!HandleReceiveEvent(data, len, gameStarted, serverAccepted)) {
-                    running = false;
-                }
-                });
+                    if (!gameStarted) {
+                        bool serverAccepted = false;
+                        if (!HandleReceiveEvent(data, len, gameStarted, serverAccepted)) {
+                            running = false;
+                        }
+                    }
+                },true);
 
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
@@ -426,6 +467,16 @@ private:
                 std::cerr << "[CLIENT] Received malformed PACKET_STATE_UPDATE, len=" << len << "\n";
             }
         }
+        else if (type == PACKET_FRAME_UPDATE) {
+			const size_t EXPECTED_MIN_LEN = 1 + 4;
+			if (len < EXPECTED_MIN_LEN) {
+				std::cerr << "[CLIENT] Malformed frame update packet, len=" << len << "\n";
+			}
+			else {
+				FrameUpdate update = net_.ParseFrameUpdate(data, len);
+				prediction.OnServerFrameUpdate(update);
+			}
+        }
         else if (type == PACKET_INPUT_UPDATE) {
             const size_t EXPECTED_MIN_LEN = 1 + 4 + 4 + sizeof(InputBlob);
 
@@ -436,6 +487,17 @@ private:
                 InputEntry ie = net_.ParseInputEntryPacket(data, len);
                 prediction.OnServerInputUpdate(ie);
             }
+        }
+        else if (type == PACKET_EVENT_UPDATE)  {
+			const size_t EXPECTED_MIN_LEN = 1 + 4 + 4;
+			if (len < EXPECTED_MIN_LEN) {
+				std::cerr << "[CLIENT] Malformed event packet, len=" << len << "\n";
+			}
+			else {
+				//std::cout << "[CLIENT] Received event update packet\n";
+				EventEntry event = net_.ParseEventEntryPacket(data, len);
+				prediction.OnServerEventUpdate(event);
+			}
         }
         else if (type == PACKET_INPUT_DELAY) {
             // ===== FIX: Validate RTT with bounds checking =====
@@ -450,7 +512,6 @@ private:
     // ============================================================================
 
     void RunClientLoop(ClientPredictionNetcode& prediction, ClientWindow& cWindow) {
-        int currentFrame = 0;  // SINGLE frame counter - shared between local and server
         auto nextTick = std::chrono::high_resolution_clock::now();
 
         std::thread renderThread(&ClientWindow::run, &cWindow);
@@ -461,7 +522,7 @@ private:
             // ===== SYNC: Poll and update currentFrame =====
             net_.Poll([&](const uint8_t* data, int len, HSteamNetConnection conn) {
                 ProcessIncomingPacket(prediction, currentFrame, data, len, conn);
-                });
+                },false);
 
             // ===== Use currentFrame (now synced with server) =====
             InputBlob localInput = prediction.GetGameLogic()->GenerateLocalInput();
@@ -474,7 +535,7 @@ private:
             prediction.PredictToFrame(currentFrame);
             cWindow.setRenderState(prediction.GetCurrentState());
 
-            // ===== Debug output every 30 frames =====
+            // ===== Debug output every 150 frames =====
             if (currentFrame % 30 == 0) {
                 GameStateBlob s = prediction.GetCurrentState();
                 std::cout << "[CLIENT] Frame: " << currentFrame

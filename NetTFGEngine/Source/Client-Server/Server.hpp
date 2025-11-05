@@ -65,7 +65,6 @@ public:
     }
 
     int RunServer() {
-		server_.GetGameLogic()->isServer = true;
 
         if (!net_.InitGNS()) {
             return 1;
@@ -381,10 +380,13 @@ private:
         }
 
         while (running_ && (activePlayerCount_ >= config_.minPlayers || !config_.stopOnBelowMin)) {
+
+			//std::cout << "Frame " << currentFrame_ << "\n";
+
             net_.PumpCallbacks();  // CRITICAL: Pump callbacks to process connection state changes
             net_.Poll([&](const uint8_t* data, int len, HSteamNetConnection conn) {
                 HandleReceiveEventInGame(conn, data, len);
-                });
+                }, false);
 
             // Check for disconnections (simplified polling)
             ISteamNetworkingSockets* sockets = net_.GetSockets();
@@ -406,21 +408,46 @@ private:
                 server_.OnPlayerDisconnected(peerInfo_[conn].playerId);
             }
 
-            StateUpdate update = server_.Tick(currentFrame_);
+            FrameUpdate update = server_.Tick(currentFrame_);
+
+            for (auto& [conn, info] : peerInfo_) {
+                if (!info.isConnected) {
+                    continue;
+                }
+                if (pendingReconnections_.find(info.playerId) != pendingReconnections_.end()) {
+                    server_.OnPlayerReconnected(info.playerId);
+                    pendingReconnections_.erase(info.playerId);
+                }
+            }
+
+            std::vector<EventEntry> generatedEvents;
+            server_.GetGameLogic()->GetGeneratedEvents(generatedEvents);
+
+			//std::cout << "Generated " << generatedEvents.size() << " events in frame " << currentFrame_ << "\n";
+
+            for (auto event : generatedEvents)
+            {
+				for (auto& [conn, info] : peerInfo_) {
+					if (!info.isConnected) {
+						continue;
+					}
+					if (pendingReconnections_.find(info.playerId) == pendingReconnections_.end()) {
+						net_.SendEventUpdate(conn, event);
+					}
+				}
+            }
 
             if (currentFrame_ % 30 == 0) {
-                for (auto& [conn, info] : peerInfo_) {
+
+                /*for (auto& [conn, info] : peerInfo_) {
                     if (!info.isConnected) {
                         continue;
                     }
-                    if (pendingReconnections_.find(info.playerId) != pendingReconnections_.end()) {
-                        server_.OnPlayerReconnected(info.playerId);
-                        pendingReconnections_.erase(info.playerId);
+                    if (pendingReconnections_.find(info.playerId) == pendingReconnections_.end()) {
+                        net_.SendFrameUpdate(conn, update);
                     }
-                    else {
-                        net_.SendStateUpdate(conn, update);
-                    }
-                }
+                }*/
+                
 
                 auto now = std::chrono::high_resolution_clock::now();
                 auto duration = std::chrono::duration_cast<std::chrono::microseconds>(now - nextTick);
@@ -513,7 +540,10 @@ private:
 
             SendServerAccept(conn, existingPlayer->playerId, true);
 
-            StateUpdate currentUpdate = server_.Tick(currentFrame_);
+            StateUpdate currentUpdate;
+			currentUpdate.frame = currentFrame_;
+			currentUpdate.state = server_.GetCurrentState();
+
             net_.SendStateUpdate(conn, currentUpdate);
             std::cerr << "Sent state update to reconnected player " << existingPlayer->playerId << "\n";
 
@@ -583,7 +613,7 @@ private:
                 }
 
                 HandleClientHello(conn, data, len);
-                });
+                }, false);
 
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }

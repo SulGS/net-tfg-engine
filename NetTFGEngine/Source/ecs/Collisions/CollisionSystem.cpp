@@ -6,7 +6,7 @@
 #include "CollisionHelpers.hpp"
 #include <iostream>
 
-void CollisionSystem::Update(EntityManager& entityManager, float deltaTime) {
+void CollisionSystem::Update(EntityManager& entityManager, std::vector<EventEntry>& events, float deltaTime) {
     // Clear current frame collisions
     currentCollisions.clear();
     currentTriggers.clear();

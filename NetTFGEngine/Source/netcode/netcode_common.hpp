@@ -38,13 +38,41 @@ constexpr size_t STATE_DELTA_BLOB_SIZE = 1024;
 
 // Evento de juego como blob
 struct GameEventBlob {
-    int frame = 0;
-    int playerId = -1;
-	int eventType = 0;
+	int type = 0;
     uint8_t data[GAME_EVENT_BLOB_SIZE];
     int len = 0; // longitud real de datos válidos
 };
 
+struct EventEntry {
+    int frame;
+    GameEventBlob event;
+};
+
+inline GameEventBlob MakeEmptyGameEventBlob() {
+	GameEventBlob blob;
+	std::memset(blob.data, 0, sizeof(blob.data));
+	blob.len = 0;
+	return blob;
+}
+
+inline bool operator==(const GameEventBlob& a, const GameEventBlob& b) {
+	if (a.len != b.len || a.type != b.type) return false;
+	return std::memcmp(a.data, b.data, a.len) == 0;
+}
+
+inline bool operator!=(const GameEventBlob& a, const GameEventBlob& b) {
+	return !(a == b);
+}
+
+inline bool operator==(const EventEntry& a, const EventEntry& b) {
+	return a.frame == b.frame && a.event == b.event;
+}
+
+inline bool operator!=(const EventEntry& a, const EventEntry& b) {
+	return !(a == b);
+}
+
+/*
 // Delta de estado como blob
 struct StateDeltaBlob {
     int fromFrame = 0;
@@ -53,6 +81,7 @@ struct StateDeltaBlob {
     uint8_t data[STATE_DELTA_BLOB_SIZE];
     int len = 0;
 };
+*/
 
 enum PacketType : uint8_t {
     PACKET_INPUT = 0x01,
@@ -60,7 +89,9 @@ enum PacketType : uint8_t {
     PACKET_INPUT_UPDATE = 0x03,
     PACKET_GAME_START = 0x04,
     PACKET_INPUT_ACK = 0x05,
-    PACKET_INPUT_DELAY = 0x06
+    PACKET_INPUT_DELAY = 0x06,
+	PACKET_FRAME_UPDATE = 0x07,
+	PACKET_EVENT_UPDATE = 0x08
 };
 
 struct InputBlob {
@@ -119,11 +150,13 @@ public:
 	bool isServer = false;
     int frame = 0;
     int playerId = -1;
+	std::vector<EventEntry> generatedEvents;
+
     virtual ~IGameLogic() = default;
     virtual std::unique_ptr<IGameLogic> Clone() const = 0;
     virtual InputBlob GenerateLocalInput() = 0;
-    virtual void SimulateFrame(GameStateBlob& state, std::map<int, InputEntry> inputs) = 0;
-    virtual void SimulateFrame(GameStateBlob& state, std::vector<GameEventBlob> events, std::map<int, InputEntry> inputs) = 0;
+    virtual void SimulateFrame(GameStateBlob& state, std::vector<EventEntry> events, std::map<int, InputEntry> inputs) = 0;
+    virtual void GetGeneratedEvents(std::vector<EventEntry>& events) { events = generatedEvents; }
     virtual bool CompareStates(const GameStateBlob& a, const GameStateBlob& b) const = 0;
     virtual void Init(GameStateBlob& state) = 0;
     virtual void PrintState(const GameStateBlob& state) const = 0;
@@ -132,17 +165,23 @@ public:
 struct StateUpdate {
     int frame;
     GameStateBlob state;
-    std::map<int, InputEntry> confirmedInputs;
+};
+
+struct FrameUpdate {
+    int frame;
+    std::map<int, InputEntry> inputs;
+    std::vector<EventEntry> events;
 };
 
 struct SNAPSHOT {
     int frame = -1;
     GameStateBlob state;
     std::map<int, InputEntry> inputs;
-	std::vector<GameEventBlob> events;
+	std::vector<EventEntry> events;
 };
 
 using InputHistory = std::map<int, std::map<int, InputEntry>>;
+using EventsHistory = std::map<int, std::vector<EventEntry>>;
 
 // GameNetworkingSockets connection wrapper
 // Replaces ENetPeer with HSteamNetConnection
@@ -170,6 +209,19 @@ inline uint32_t hostToBigEndian32(uint32_t x) {
 
 inline uint32_t bigEndianToHost32(uint32_t x) {
     return ntohl(x);
+}
+
+inline uint32_t f_hostToBigEndian32(float x) {
+    uint32_t asInt;
+    std::memcpy(&asInt, &x, sizeof(asInt));
+    return hostToBigEndian32(asInt);
+}
+
+inline uint32_t f_bigEndianToHost32(float x) {
+    uint32_t hostValue = bigEndianToHost32(x);
+    float value;
+    std::memcpy(&value, &hostValue, sizeof(value));
+    return value;
 }
 
 #endif // NETCODE_COMMON_H

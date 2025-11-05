@@ -350,12 +350,13 @@ public:
 class ISystem {
 public:
     virtual ~ISystem() = default;
-    virtual void Update(EntityManager& entityManager, float deltaTime) = 0;
+    virtual void Update(EntityManager& entityManager, std::vector<EventEntry>& events, float deltaTime) = 0;
 };
 
 class ECSWorld {
     EntityManager entityManager;
     std::vector<std::unique_ptr<ISystem>> systems;
+	std::vector<EventEntry> events;
 
 public:
     EntityManager& GetEntityManager() {
@@ -367,9 +368,13 @@ public:
     }
 
     void Update(float deltaTime) {
+        events.clear();
         for (auto& system : systems) {
-            system->Update(entityManager, deltaTime);
+            system->Update(entityManager,events, deltaTime);
         }
+		//std::cout << "ECSWorld Update: " << entityManager.GetEntityCount() << " entities, "
+		//	<< systems.size() << " systems, "
+		//	<< events.size() << " events generated.\n";
     }
 
     void Clear() {
@@ -388,11 +393,15 @@ public:
         return nullptr; // Not found
     }
 
+	std::vector<EventEntry>& GetEvents() {
+		return events;
+	}
+
 };
 
 class DestroyingSystem : public ISystem {
 public:
-    void Update(EntityManager& entityManager, float deltaTime) override {
+    void Update(EntityManager& entityManager, std::vector<EventEntry>& events, float deltaTime) override {
         entityManager.FlushDestroyedEntities();
     }
 };

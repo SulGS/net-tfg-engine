@@ -13,7 +13,7 @@
 
 class CameraFollowSystem : public ISystem {
 public:
-    void Update(EntityManager& entityManager, float deltaTime) override {
+    void Update(EntityManager& entityManager, std::vector<EventEntry>& events, float deltaTime) override {
         // Query cameras with their transforms
         auto camQuery = entityManager.CreateQuery<Camera, Transform>();
         if (camQuery.Count() == 0) return; // No camera found
@@ -69,7 +69,7 @@ public:
 
 class OnDeathRenderSystem : public ISystem {
 public:
-    void Update(EntityManager& entityManager, float deltaTime) override {
+    void Update(EntityManager& entityManager, std::vector<EventEntry>& events, float deltaTime) override {
         bool foundLocal = false;
         auto playerQuery = entityManager.CreateQuery<Transform, Playable, SpaceShip, MeshComponent>();
 

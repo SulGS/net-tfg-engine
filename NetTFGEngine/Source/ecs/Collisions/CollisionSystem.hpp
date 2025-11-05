@@ -15,7 +15,7 @@ public:
     CollisionSystem() = default;
     ~CollisionSystem() = default;
 
-    void Update(EntityManager& entityManager, float deltaTime) override;
+    void Update(EntityManager& entityManager, std::vector<EventEntry>& events, float deltaTime) override;
 
     // Query collisions at a point
     std::vector<Entity> QueryPoint2D(EntityManager& entityManager, const glm::vec2& point);

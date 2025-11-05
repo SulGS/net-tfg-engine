@@ -15,7 +15,7 @@ public:
 
     void OnClientInputReceived(InputEntry input) {
         std::lock_guard<std::mutex> lk(mtx);
-        inputHistory[input.frame][input.playerId] = input;
+        appliedInputs[input.frame][input.playerId] = input;
     }
 
     // Mark a player as connected (use on first connect or reconnect)
@@ -30,8 +30,6 @@ public:
     // entries caused by the disconnect. It also marks the player as connected.
     void OnPlayerReconnected(int playerId) {
         std::lock_guard<std::mutex> lk(mtx);
-
-
         // mark connected
         connectedPlayers.insert(playerId);
 
@@ -48,8 +46,8 @@ public:
 
     InputEntry GetInputForPlayerAtFrame(int playerId, int frame) {
         std::lock_guard<std::mutex> lk(mtx);
-        auto frameIt = inputHistory.find(frame);
-        if (frameIt == inputHistory.end()) return InputEntry{frame, MakeZeroInputBlob(), playerId};
+        auto frameIt = appliedInputs.find(frame);
+        if (frameIt == appliedInputs.end()) return InputEntry{frame, MakeZeroInputBlob(), playerId};
         
         auto playerIt = frameIt->second.find(playerId);
         return playerIt != frameIt->second.end() ? playerIt->second : InputEntry{frame, MakeZeroInputBlob(), playerId};
@@ -57,48 +55,62 @@ public:
 
     int GetSizeOfInputsAtFrame(int frame) {
         std::lock_guard<std::mutex> lk(mtx);
-        auto frameIt = inputHistory.find(frame);
-        if (frameIt == inputHistory.end()) return 0;
+        auto frameIt = appliedInputs.find(frame);
+        if (frameIt == appliedInputs.end()) return 0;
         return frameIt->second.size();
     }
 
     void SimulateFrame(int frame) {
         std::map<int, InputEntry> inputs;
 
-        auto frameIt = inputHistory.find(frame);
-        if (frameIt != inputHistory.end())
+        auto frameInIt = appliedInputs.find(frame);
+        if (frameInIt != appliedInputs.end())
         {
-            inputs = frameIt->second;
+            inputs = frameInIt->second;
         }
 
-        gameLogic->SimulateFrame(gameState, inputs);
+		std::vector<EventEntry> events;
+        auto frameEvIt = appliedEvents.find(frame);
+        if (frameEvIt != appliedEvents.end())
+        {
+            events = frameEvIt->second;
+        }
+
+
+        gameLogic->SimulateFrame(gameState,events, inputs);
+
+		for (auto& event : gameLogic->generatedEvents)
+		{
+			event.frame = frame + 1;
+		}
+
+		appliedEvents[frame+1] = gameLogic->generatedEvents;
 
         gameState.frame = frame;
     }
 
-    StateUpdate Tick(int currentFrame) {
+    FrameUpdate Tick(int currentFrame) {
         
         SimulateFrame(currentFrame);
 
-        
-        // Use iterators for appliedInputs
-        auto frameIt = inputHistory.find(currentFrame);
-        if (frameIt != inputHistory.end()) {
-            for (const auto& [playerId, inputEntry] : frameIt->second) {
-                appliedInputs[currentFrame][playerId] = inputEntry;
+        // Create state update
+        FrameUpdate update;
+        update.frame = currentFrame;
+        auto frameInputsIt = appliedInputs.find(currentFrame);
+        // Use iterators for confirmedInputs
+        if (frameInputsIt != appliedInputs.end()) {
+            for (const auto& [playerId, inputEntry] : frameInputsIt->second) {
+                update.inputs[playerId] = inputEntry;
             }
         }
 
-        // Create state update
-        StateUpdate update;
-        update.frame = currentFrame;
-        update.state = GetCurrentState();
-        // Use iterators for confirmedInputs
-        if (frameIt != inputHistory.end()) {
-            for (const auto& [playerId, inputEntry] : frameIt->second) {
-                update.confirmedInputs[playerId] = inputEntry;
-            }
-        }
+		auto eventsIt = appliedEvents.find(currentFrame);
+		if (eventsIt != appliedEvents.end()) {
+			update.events = eventsIt->second;
+		}
+
+
+
         return update;
     }
 
@@ -110,6 +122,7 @@ public:
     void SetGameLogic(std::unique_ptr<IGameLogic> logic) {
         std::lock_guard<std::mutex> lk(mtx);
         gameLogic = std::move(logic);
+		gameLogic->isServer = true;
         gameLogic->Init(gameState);
     }
 
@@ -123,8 +136,8 @@ private:
     std::mutex mtx;
     GameStateBlob gameState;
     std::unique_ptr<IGameLogic> gameLogic;
-    InputHistory inputHistory;
-    InputHistory appliedInputs; // frame -> applied inputs for both players
+    InputHistory appliedInputs; 
+	EventsHistory appliedEvents; 
 
     std::set<int> connectedPlayers;
 };

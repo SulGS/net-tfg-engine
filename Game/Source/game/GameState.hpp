@@ -18,7 +18,7 @@ struct AsteroidShooterGameState {
     float posX[2];
     float posY[2];
     int health[2];
-    int rot[2];
+    float rot[2];
 
     // Bullet pool
     Bullet bullets[MAX_BULLETS];

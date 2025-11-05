@@ -16,8 +16,10 @@ protected:
 public:
     virtual ~IECSGameLogic() = default;
     virtual void ECSWorld_To_GameState(GameStateBlob& state) = 0;
-    virtual void GameState_To_ECSWorld(const GameStateBlob& state, std::map<int, InputEntry> inputs) = 0;
+    virtual void GameState_To_ECSWorld(const GameStateBlob& state) = 0;
 
+    virtual void ProcessEvents(std::vector<EventEntry> events) = 0;
+    virtual void ProcessInputs(std::map<int, InputEntry> inputs) = 0;
 
     virtual void InitECSLogic(GameStateBlob& state) = 0;
 
@@ -25,25 +27,30 @@ public:
         world.GetEntityManager().RegisterComponentType<Transform>();
         world.GetEntityManager().RegisterComponentType<Playable>();
 
-        world.GetEntityManager().RegisterComponentType<BoxCollider2D>();
-        world.GetEntityManager().RegisterComponentType<CircleCollider2D>();
-        world.GetEntityManager().RegisterComponentType<BoxCollider3D>();
-        world.GetEntityManager().RegisterComponentType<SphereCollider3D>();
+        if (isServer) {
+            world.GetEntityManager().RegisterComponentType<BoxCollider2D>();
+            world.GetEntityManager().RegisterComponentType<CircleCollider2D>();
+            world.GetEntityManager().RegisterComponentType<BoxCollider3D>();
+            world.GetEntityManager().RegisterComponentType<SphereCollider3D>();
+            world.AddSystem(std::make_unique<CollisionSystem>());
+        }
 
-        world.AddSystem(std::make_unique<CollisionSystem>());
         world.AddSystem(std::make_unique<DestroyingSystem>());
 
         InitECSLogic(state);
     }
 
-    void SimulateFrame(GameStateBlob& state, std::map<int, InputEntry> inputs) override {
-        GameState_To_ECSWorld(state, inputs);
+    void SimulateFrame(GameStateBlob& state, std::vector<EventEntry> events, std::map<int, InputEntry> inputs) override {
+		GameState_To_ECSWorld(state);
+        this->generatedEvents.clear();
+        ProcessEvents(events);
+		ProcessInputs(inputs);
         world.Update(1 / TICKS_PER_SECOND);
-        ECSWorld_To_GameState(state);
-    }
-
-    void SimulateFrame(GameStateBlob& state, std::vector<GameEventBlob> events, std::map<int, InputEntry> inputs) override {
-        world.Update(1 / TICKS_PER_SECOND);
+        if (isServer)
+        {
+            this->generatedEvents = world.GetEvents();
+        }
+        
         ECSWorld_To_GameState(state);
     }
 };

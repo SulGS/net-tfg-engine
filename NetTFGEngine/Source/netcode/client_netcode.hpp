@@ -40,9 +40,21 @@ public:
     void OnServerInputUpdate(InputEntry ie)
     {
         WithSnapshot(ie.frame, [&](SNAPSHOT& snap) {
-            snap.inputs[ie.playerId] = ie;
+                snap.inputs[ie.playerId] = ie;
             });
     }
+
+	void OnServerEventUpdate(const EventEntry& event)
+	{
+		WithSnapshot(event.frame, [&](SNAPSHOT& snap) {
+                snap.events.push_back(event);
+			});
+
+        if (event.event.type == 1) 
+        {
+			std::cout << "[DEBUG] Received event type 1 for frame " << event.frame << "\n";
+        }
+	}
 
     void OnServerStateUpdate(const StateUpdate& update) {
         bool needCorrection = false;
@@ -51,13 +63,12 @@ public:
             const GameStateBlob& ourState = snap.state;
             if (!gameLogic->CompareStates(ourState, update.state)) {
                 needCorrection = true;
-                std::cerr << "Misprediction detected at server frame " << update.frame << "\n";
+                std::cerr << "State misprediction detected at server frame " << update.frame << "\n";
             }
 
             // Store server state
             snap.state = update.state;
-            snap.inputs = update.confirmedInputs;
-            });
+         });
 
         // NOTE: we intentionally perform the heavier correction / prediction
         // outside snapshot lock to avoid holding mutex while simulating.
@@ -76,15 +87,70 @@ public:
         }
     }
 
+    void OnServerFrameUpdate(const FrameUpdate& update) {
+        bool needCorrection = false;
+
+        WithSnapshot(update.frame, [&](SNAPSHOT& snap) {
+
+            // Print sizes
+			std::cout << "[DEBUG] Frame " << update.frame
+				<< ": snap.inputs.size()=" << snap.inputs.size()
+				<< ", update.inputs.size()=" << update.inputs.size()
+				<< ", snap.events.size()=" << snap.events.size()
+				<< ", update.events.size()=" << update.events.size() << "\n";
+
+            // Verifica si inputs o eventos difieren
+            bool eventsDifferent =
+                (snap.events.size() != update.events.size()) ||
+                !std::is_permutation(snap.events.begin(), snap.events.end(), update.events.begin());
+
+            if (snap.inputs != update.inputs) {
+                needCorrection = true;
+                std::cerr << "Input misprediction detected at server frame "
+                    << update.frame << "\n";
+            }
+
+            if (eventsDifferent) {
+                needCorrection = true;
+                std::cerr << "Event misprediction detected at server frame "
+                    << update.frame << "\n";
+            }
+
+            // Actualiza solo inputs y eventos con los del servidor (no todo el snapshot)
+            snap.inputs = update.inputs;
+            snap.events = update.events;
+            });
+
+        // Si hay desincronización y el frame es anterior o igual al actual, re-predice desde ese frame
+        if (needCorrection && update.frame <= currentPredictionFrame) {
+            WithSnapshot(update.frame, [&](SNAPSHOT& snap) {
+                gameState = snap.state;
+            });
+            for (int f = update.frame; f <= currentPredictionFrame; ++f) {
+                PredictFrame(f);
+            }
+
+            std::cerr << "Applied input/event correction from frame " << update.frame
+                << " to " << currentPredictionFrame << "\n";
+        }
+        // Si el frame es más reciente, simplemente avanzamos
+        else if (update.frame > currentPredictionFrame) {
+            currentPredictionFrame = update.frame;
+        }
+    }
+
+
     void PredictFrame(int frame) {
         std::map<int, InputEntry> inputs;
+		std::vector<EventEntry> events;
         // copy inputs while holding the lock to ensure consistent view
         WithSnapshot(frame, [&](SNAPSHOT& snap) {
             inputs = snap.inputs;
+            events = snap.events;
             });
 
         // Simulate frame (do NOT hold snapshots lock while simulating)
-        gameLogic->SimulateFrame(gameState, inputs);
+        gameLogic->SimulateFrame(gameState, events, inputs);
         gameState.frame = frame;
 
         // store resulting state back into snapshot
@@ -115,6 +181,7 @@ public:
     void SetGameLogic(std::unique_ptr<IGameLogic> logic) {
         std::lock_guard<std::mutex> lk(mtx);
         gameLogic = std::move(logic);
+		gameLogic->isServer = false;
         gameLogic->Init(gameState);
     }
 

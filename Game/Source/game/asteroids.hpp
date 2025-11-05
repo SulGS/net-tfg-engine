@@ -22,6 +22,7 @@
 #include "Components.hpp"
 #include "LogicSystems.hpp"
 #include "RenderSystems.hpp"
+#include "Events.hpp"
 
 
 
@@ -87,45 +88,121 @@ public:
         return buf;
     }
 
-    void ECSWorld_To_GameState(GameStateBlob& state) {
-        AsteroidShooterGameState& s = *reinterpret_cast<AsteroidShooterGameState*>(state.data);
-        
-        // Clear state
-        std::memset(&s, 0, sizeof(s));
-        s.bulletCount = 0;
-        
-        auto query = world.GetEntityManager().CreateQuery<Transform, Playable, SpaceShip>();
-        for (auto [entity, transform, play, ship] : query) {
-            int p = play->playerId;
-            s.posX[p] = transform->getPosition().x;
-            s.posY[p] = transform->getPosition().y;
-            s.rot[p] = static_cast<int>(transform->getRotation().z);
-            s.shootCooldown[p] = ship->shootCooldown;
-            s.health[p] = ship->health;
-            s.deathCooldown[p] = ship->deathCooldown;
-        }
-        
-        auto bulletQuery = world.GetEntityManager().CreateQuery<Transform, ECSBullet>();
+	void ProcessEvents(std::vector<EventEntry> events) override {
+		for (const auto& eventEntry : events) {
+			switch (eventEntry.event.type) {
+                case AsteroidEventMask::PLAYER_POSITION: 
+                    {
+					//std::cout << "Processing PLAYER_POSITION event\n";
+                        auto pos_ev = *reinterpret_cast<const PlayerPositionEventData*>(eventEntry.event.data);
 
-        int i = 0;
-        for (auto [entity, transform, ecsb] : bulletQuery) {
-            if (s.bulletCount < MAX_BULLETS) {
-                Bullet& b = s.bullets[i];
-                b.id = ecsb->id;
-                b.posX = transform->getPosition().x;
-                b.posY = transform->getPosition().y;
-                b.velX = ecsb->velX;
-                b.velY = ecsb->velY;
-                b.ownerId = ecsb->ownerId;
-                b.active = true;
-                b.lifetime = ecsb->lifetime;
-                s.bulletCount++;
-                i++;
-            }
-        }
-    }
+						//std::cout << "Player " << pos_ev.playerId << " position update: (" << pos_ev.x << ", " << pos_ev.y << "), rotation: " << pos_ev.rotation << "\n";
 
-    void GameState_To_ECSWorld(const GameStateBlob& state, std::map<int, InputEntry> inputs) {
+                        auto query = world.GetEntityManager().CreateQuery<Playable, Transform>();
+                        for (auto [entity, play, transform] : query) {
+                            if (play->playerId == pos_ev.playerId) {
+                                transform->setPosition(glm::vec3(pos_ev.x, pos_ev.y, 0.0f));
+								transform->setRotation(glm::vec3(0.0f, 0.0f, pos_ev.rotation));
+                            }
+                        }
+                    }
+                    break;
+                case AsteroidEventMask::SPAWN_BULLET:
+                    {
+                        const int BULLET_LIFETIME = 30;
+
+						//std::cout << "Processing SPAWN_BULLET event\n";
+
+                        auto spawn_ev = *reinterpret_cast<const SpawnBulletEventData*>(eventEntry.event.data);
+
+						//std::cout << "Spawning bullet ID " << spawn_ev.bulletId << " at (" << spawn_ev.posX << ", " << spawn_ev.posY << ") with velocity (" << spawn_ev.velX << ", " << spawn_ev.velY << ")\n";
+
+                        Entity bulletEntity = world.GetEntityManager().CreateEntity();
+                        Transform* t = world.GetEntityManager().AddComponent<Transform>(bulletEntity, Transform{});
+                        t->setPosition(glm::vec3(spawn_ev.posX, spawn_ev.posY, 0.0f));
+                        world.GetEntityManager().AddComponent<ECSBullet>(bulletEntity, ECSBullet{ spawn_ev.bulletId, spawn_ev.velX, spawn_ev.velY, spawn_ev.ownerId, BULLET_LIFETIME });
+                        if (isServer){
+                            BoxCollider2D* collider = world.GetEntityManager().AddComponent<BoxCollider2D>(bulletEntity, BoxCollider2D{ glm::vec2(1.0f, 1.0f) });
+                            collider->layer = CollisionLayer::BULLET;
+                            collider->collidesWith = CollisionLayer::PLAYER;
+                            collider->SetOnCollisionEnter([this](Entity self, Entity other, const CollisionInfo& info) {
+								    Playable* p = world.GetEntityManager().GetComponent<Playable>(other);
+
+								    std::vector<EventEntry>& evs = this->world.GetEvents();
+                                
+								    if (!p || p->playerId == world.GetEntityManager().GetComponent<ECSBullet>(self)->ownerId)
+								    {
+									    // Ignore collisions with the owner
+									    return;
+								    }
+
+								    EntityManager& em = world.GetEntityManager();
+                                    EventEntry eventEntry;
+                                    eventEntry.event.type = AsteroidEventMask::BULLET_COLLIDES;
+                                    BulletCollidesEventData data;
+                                    ECSBullet* ecsb = em.GetComponent<ECSBullet>(self);
+                                    Playable* play = em.GetComponent<Playable>(other);
+                                    data.bulletId = ecsb->id;
+                                    data.playerId = play->playerId;
+                                    std::memcpy(eventEntry.event.data, &data, sizeof(BulletCollidesEventData));
+                                    eventEntry.event.len = sizeof(BulletCollidesEventData);
+
+                                    evs.push_back(eventEntry);
+                                });
+                        }
+                    }
+				    break;
+			    case AsteroidEventMask::BULLET_COLLIDES:
+				    {
+					std::cout << "Processing BULLET_COLLIDES event\n";
+
+					    auto coll_ev = *reinterpret_cast<const BulletCollidesEventData*>(eventEntry.event.data);
+					    auto query = world.GetEntityManager().CreateQuery<Transform, ECSBullet>();
+					    for (auto [entity, transform, ecsb] : query) {
+						    if (ecsb->id == coll_ev.bulletId) {
+							    world.GetEntityManager().DestroyEntity(entity);
+						    }
+					    }
+
+						auto query2 = world.GetEntityManager().CreateQuery<Playable, SpaceShip>();
+                        for (auto [entity, play, ship] : query2) {
+                            if (play->playerId == coll_ev.playerId) {
+                                ship->health -= 5;
+                                if (ship->health < 0)
+                                {
+                                    ship->health = 0;
+                                    ship->deathCooldown = 10 * TICKS_PER_SECOND;
+                                    if (isServer)
+                                    {
+                                        auto col = world.GetEntityManager().GetComponent<BoxCollider2D>(entity);
+                                        if (col)
+                                        {
+                                            col->isEnabled = false;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+				    }
+				    break;
+			    default:
+				        break;
+			}
+		}
+	}
+
+	void ProcessInputs(std::map<int, InputEntry> inputs) override {
+		auto query = world.GetEntityManager().CreateQuery<Playable>();
+		for (auto [entity, play] : query) {
+			auto it = inputs.find(play->playerId);
+			if (it != inputs.end()) {
+				play->input = it->second.input;
+			}
+		}
+	}
+
+    void GameState_To_ECSWorld(const GameStateBlob& state) {
         AsteroidShooterGameState s = *reinterpret_cast<const AsteroidShooterGameState*>(state.data);
 
         auto query = world.GetEntityManager().CreateQuery<Transform, Playable, SpaceShip>();
@@ -136,11 +213,6 @@ public:
             ship->shootCooldown = s.shootCooldown[p];
             ship->health = s.health[p];
             ship->deathCooldown = s.deathCooldown[p];
-            // Update input
-            auto it = inputs.find(p);
-            if (it != inputs.end()) {
-                play->input = it->second.input;
-            }
         }
 
         // First, collect all existing bullet IDs in ECS
@@ -187,8 +259,46 @@ public:
                     Entity newBullet = world.GetEntityManager().CreateEntity();
                     Transform* t = world.GetEntityManager().AddComponent<Transform>(newBullet);
                     t->setPosition(glm::vec3(b.posX, b.posY, 0.0f));
-                    world.GetEntityManager().AddComponent<ECSBullet>(newBullet, ECSBullet{b.id, b.velX, b.velY, b.ownerId, b.lifetime});
+                    world.GetEntityManager().AddComponent<ECSBullet>(newBullet, ECSBullet{ b.id, b.velX, b.velY, b.ownerId, b.lifetime });
                 }
+            }
+        }
+    }
+
+    void ECSWorld_To_GameState(GameStateBlob& state) {
+        AsteroidShooterGameState& s = *reinterpret_cast<AsteroidShooterGameState*>(state.data);
+        
+        // Clear state
+        std::memset(&s, 0, sizeof(s));
+        s.bulletCount = 0;
+        
+        auto query = world.GetEntityManager().CreateQuery<Transform, Playable, SpaceShip>();
+        for (auto [entity, transform, play, ship] : query) {
+            int p = play->playerId;
+            s.posX[p] = transform->getPosition().x;
+            s.posY[p] = transform->getPosition().y;
+            s.rot[p] = transform->getRotation().z;
+            s.shootCooldown[p] = ship->shootCooldown;
+            s.health[p] = ship->health;
+            s.deathCooldown[p] = ship->deathCooldown;
+        }
+        
+        auto bulletQuery = world.GetEntityManager().CreateQuery<Transform, ECSBullet>();
+
+        int i = 0;
+        for (auto [entity, transform, ecsb] : bulletQuery) {
+            if (s.bulletCount < MAX_BULLETS) {
+                Bullet& b = s.bullets[i];
+                b.id = ecsb->id;
+                b.posX = transform->getPosition().x;
+                b.posY = transform->getPosition().y;
+                b.velX = ecsb->velX;
+                b.velY = ecsb->velY;
+                b.ownerId = ecsb->ownerId;
+                b.active = true;
+                b.lifetime = ecsb->lifetime;
+                s.bulletCount++;
+                i++;
             }
         }
     }
@@ -238,9 +348,6 @@ public:
 
         world.GetEntityManager().AddComponent<Playable>(player1, Playable{0, MakeZeroInputBlob(), (0 == playerId ? true : false)});
         world.GetEntityManager().AddComponent<SpaceShip>(player1, SpaceShip{100,0,0});
-        BoxCollider2D* collider1 = world.GetEntityManager().AddComponent<BoxCollider2D>(player1, BoxCollider2D{glm::vec2(1.5f, 3.0f)});
-        collider1->layer = CollisionLayer::PLAYER;
-        collider1->collidesWith = CollisionLayer::BULLET;
 
         Entity player2 = world.GetEntityManager().CreateEntity();
         Transform* t2 = world.GetEntityManager().AddComponent<Transform>(player2, Transform{});
@@ -249,11 +356,24 @@ public:
         
         world.GetEntityManager().AddComponent<Playable>(player2, Playable{1, MakeZeroInputBlob(), (1 == playerId ? true : false)});
         world.GetEntityManager().AddComponent<SpaceShip>(player2, SpaceShip{100,0,0});
-        BoxCollider2D* collider2 = world.GetEntityManager().AddComponent<BoxCollider2D>(player2, BoxCollider2D{glm::vec2(1.5f, 3.0f)});
-        collider2->layer = CollisionLayer::PLAYER;
-        collider2->collidesWith = CollisionLayer::BULLET;
+
+        if (isServer) 
+        {
+            BoxCollider2D* collider1 = world.GetEntityManager().AddComponent<BoxCollider2D>(player1, BoxCollider2D{ glm::vec2(1.5f, 3.0f) });
+            collider1->layer = CollisionLayer::PLAYER;
+            collider1->collidesWith = CollisionLayer::BULLET;
+
+            BoxCollider2D* collider2 = world.GetEntityManager().AddComponent<BoxCollider2D>(player2, BoxCollider2D{ glm::vec2(1.5f, 3.0f) });
+            collider2->layer = CollisionLayer::PLAYER;
+            collider2->collidesWith = CollisionLayer::BULLET;
+        }
+        
         
         world.AddSystem(std::make_unique<InputSystem>());
+        if (isServer)
+        {
+            world.AddSystem(std::make_unique<InputServerSystem>());
+        }
         world.AddSystem(std::make_unique<BulletSystem>());
         world.AddSystem(std::make_unique<OnDeathLogicSystem>());
     }
@@ -304,7 +424,7 @@ std::vector<float> BulletVerts() {
         for (auto [entity, transform, play, ship, mesh] : query) {
             int p = play->playerId;
             transform->setPosition(glm::vec3(s.posX[p], s.posY[p], 0.0f));
-            transform->setRotation(glm::vec3(0.0f, 0.0f, static_cast<float>(s.rot[p])));
+            transform->setRotation(glm::vec3(0.0f, 0.0f, s.rot[p]));
 
             ship->shootCooldown = s.shootCooldown[p];
             ship->health = s.health[p];
@@ -446,7 +566,7 @@ std::vector<float> BulletVerts() {
             rend.posX[i] = prev.posX[i] + (curr.posX[i] - prev.posX[i]) * interpolationFactor;
             rend.posY[i] = prev.posY[i] + (curr.posY[i] - prev.posY[i]) * interpolationFactor;
             // Rotación: interpola linealmente (puedes mejorar con shortest path si lo necesitas)
-            rend.rot[i] = static_cast<int>(prev.rot[i] + (curr.rot[i] - prev.rot[i]) * interpolationFactor);
+            rend.rot[i] = prev.rot[i] + (curr.rot[i] - prev.rot[i]) * interpolationFactor;
 
             // No interpolamos salud ni cooldowns, solo copiamos el actual
             rend.health[i] = curr.health[i];
