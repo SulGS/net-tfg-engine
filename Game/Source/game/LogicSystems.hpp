@@ -50,6 +50,7 @@ class InputSystem : public ISystem {
 public:
     void Update(EntityManager& entityManager, std::vector<EventEntry>& events, float deltaTime) override {
         auto query = entityManager.CreateQuery<Transform, Playable, SpaceShip>();
+
         //std::cout << "InputSystem Update\n";
         for (auto [entity, transform, play, ship] : query) {
             int p = play->playerId;
@@ -67,7 +68,7 @@ public:
                 ship->shootCooldown--;
             }
 
-            if (ship->health == 0) continue;
+            if (!ship->isAlive) continue;
 
             // Rotation
             if (m & INPUT_LEFT) {
@@ -102,6 +103,13 @@ class InputServerSystem : public ISystem {
 public:
     void Update(EntityManager& entityManager, std::vector<EventEntry>& events, float deltaTime) override {
         auto query = entityManager.CreateQuery<Transform, Playable, SpaceShip>();
+
+        auto colliders = entityManager.CreateQuery<Playable, BoxCollider2D>();
+
+        /*for (auto [entity, play, col] : colliders) {
+            std::cout << "Collider Player: " << play->playerId << " Enabled: " << col->isEnabled << "\n";
+        }*/
+
         //std::cout << "InputSystem Update\n";
         for (auto [entity, transform, play, ship] : query) {
             int p = play->playerId;
@@ -129,7 +137,7 @@ public:
 			events.push_back(posEvent);
 
             // Shooting
-            if ((m & INPUT_SHOOT) && ship->shootCooldown <= 0) {
+            if ((m & INPUT_SHOOT) && ship->shootCooldown <= 0 && ship->isAlive) {
                 // Find first available bullet ID
                 bool usedIds[MAX_BULLETS] = { false };
 
@@ -182,25 +190,24 @@ class OnDeathLogicSystem : public ISystem {
 public:
     void Update(EntityManager& entityManager, std::vector<EventEntry>& events, float deltaTime) override {
         bool foundLocal = false;
-        auto playerQuery = entityManager.CreateQuery<Transform, Playable, SpaceShip, BoxCollider2D>();
+        auto playerQuery = entityManager.CreateQuery<Transform, Playable, SpaceShip>();
 
-        for (auto [entity, playerTransform, play, ship, col] : playerQuery) {
-            if (ship->health == 0)
+        for (auto [entity, playerTransform, play, ship] : playerQuery) {
+            if (!(ship->isAlive))
             {
                 ship->deathCooldown--;
 
                 if (ship->deathCooldown <= 0)
                 {
-                    ship->deathCooldown = 0;
-                    ship->health = 100;
-                    playerTransform->setPosition(glm::vec3(0.0f, 0.0f, 0.0f));
-                    playerTransform->setRotation(glm::vec3(0.0f, 0.0f, 0.0f));
-                    col->isEnabled = true;
+					EventEntry respawnEvent;
+					respawnEvent.event.type = AsteroidEventMask::RESPAWN;
+					RespawnEventData respawnData;
+					respawnData.playerId = play->playerId;
+					std::memcpy(respawnEvent.event.data, &respawnData, sizeof(RespawnEventData));
+					respawnEvent.event.len = sizeof(RespawnEventData);
+					events.push_back(respawnEvent);
+
                 }
-            }
-            else
-            {
-                col->isEnabled = true;
             }
 
         }

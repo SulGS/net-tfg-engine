@@ -5,7 +5,9 @@
 enum AsteroidEventMask : uint8_t {
 	PLAYER_POSITION = 0,
 	SPAWN_BULLET = 1,
-	BULLET_COLLIDES = 2
+	BULLET_COLLIDES = 2,
+	DEATH = 3,
+	RESPAWN = 4
 };
 
 
@@ -27,5 +29,13 @@ struct SpawnBulletEventData {
 
 struct BulletCollidesEventData {
 	int bulletId;
+	int playerId;
+};
+
+struct DeathEventData {
+	int playerId;
+};
+
+struct RespawnEventData {
 	int playerId;
 };

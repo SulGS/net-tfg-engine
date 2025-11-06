@@ -3,6 +3,7 @@
 
 #include "ecs.hpp"
 #include "ecs_common.hpp"
+#include "Events/ecs_event_processor.hpp"
 #include "netcode/netcode_common.hpp"
 #include "Collisions/CollisionSystem.hpp"
 #include "Collisions/BoxCollider2D.hpp"
@@ -13,17 +14,36 @@
 class IECSGameLogic : public IGameLogic {
 protected:
     ECSWorld world;
+	EventProcessor* eventProcessor;
 public:
-    virtual ~IECSGameLogic() = default;
+    virtual ~IECSGameLogic() 
+	{
+		delete eventProcessor;
+	}
+
     virtual void ECSWorld_To_GameState(GameStateBlob& state) = 0;
     virtual void GameState_To_ECSWorld(const GameStateBlob& state) = 0;
 
-    virtual void ProcessEvents(std::vector<EventEntry> events) = 0;
-    virtual void ProcessInputs(std::map<int, InputEntry> inputs) = 0;
+    virtual void ProcessEvents(std::vector<EventEntry> events) 
+    {
+		eventProcessor->ProcessEvents(events);
+    }
+
+    virtual void ProcessInputs(std::map<int, InputEntry> inputs) 
+    {
+        auto query = world.GetEntityManager().CreateQuery<Playable>();
+        for (auto [entity, play] : query) {
+            auto it = inputs.find(play->playerId);
+            if (it != inputs.end()) {
+                play->input = it->second.input;
+            }
+        }
+    }
 
     virtual void InitECSLogic(GameStateBlob& state) = 0;
 
     void Init(GameStateBlob& state) override {
+		eventProcessor = new EventProcessor(world, isServer);
         world.GetEntityManager().RegisterComponentType<Transform>();
         world.GetEntityManager().RegisterComponentType<Playable>();
 
@@ -40,8 +60,13 @@ public:
         InitECSLogic(state);
     }
 
-    void SimulateFrame(GameStateBlob& state, std::vector<EventEntry> events, std::map<int, InputEntry> inputs) override {
+	void Synchronize(GameStateBlob& state) override {
 		GameState_To_ECSWorld(state);
+		ECSWorld_To_GameState(state);
+	}
+
+    void SimulateFrame(GameStateBlob& state, std::vector<EventEntry> events, std::map<int, InputEntry> inputs) override {
+		//GameState_To_ECSWorld(state);
         this->generatedEvents.clear();
         ProcessEvents(events);
 		ProcessInputs(inputs);

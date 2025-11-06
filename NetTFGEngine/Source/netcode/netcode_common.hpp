@@ -156,6 +156,7 @@ public:
     virtual std::unique_ptr<IGameLogic> Clone() const = 0;
     virtual InputBlob GenerateLocalInput() = 0;
     virtual void SimulateFrame(GameStateBlob& state, std::vector<EventEntry> events, std::map<int, InputEntry> inputs) = 0;
+	virtual void Synchronize(GameStateBlob& state) = 0;
     virtual void GetGeneratedEvents(std::vector<EventEntry>& events) { events = generatedEvents; }
     virtual bool CompareStates(const GameStateBlob& a, const GameStateBlob& b) const = 0;
     virtual void Init(GameStateBlob& state) = 0;

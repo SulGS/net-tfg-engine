@@ -24,7 +24,7 @@ public:
         auto playerQuery = entityManager.CreateQuery<Transform, Playable, SpaceShip>();
 
         for (auto [entity, playerTransform, play, ship] : playerQuery) {
-            if (play->isLocal) {
+            if (play->isLocal && ship->isAlive) {
                 localPos = playerTransform->getPosition();
                 foundLocal = true;
 
@@ -75,7 +75,7 @@ public:
 
         for (auto [entity, playerTransform, play, ship, meshC] : playerQuery) {
             if (play->isLocal) {
-                if (ship->health == 0 && ship->deathCooldown > 0)
+                if (!(ship->isAlive))
                 {
                     auto textQuery = entityManager.CreateQuery<UIElement, UIText>();
 
@@ -96,7 +96,7 @@ public:
 
             }
 
-            if (ship->health <= 0)
+            if (!(ship->isAlive))
             {
                 meshC->enabled = false;
             }

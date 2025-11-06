@@ -9,9 +9,10 @@ public:
     int health;
     int shootCooldown; // frames until can shoot again
     int deathCooldown;
+    bool isAlive;
 
-    SpaceShip() : health(100), shootCooldown(0), deathCooldown(0) {}
-    SpaceShip(int h, int cd, int dc) : health(h), shootCooldown(cd), deathCooldown(dc) {}
+    SpaceShip() : health(100), shootCooldown(0), deathCooldown(0), isAlive(true) {}
+    SpaceShip(int h, int cd, int dc, bool al) : health(h), shootCooldown(cd), deathCooldown(dc) , isAlive(al) {}
 };
 
 class ECSBullet : public IComponent {
