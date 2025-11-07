@@ -49,11 +49,6 @@ public:
 		WithSnapshot(event.frame, [&](SNAPSHOT& snap) {
                 snap.events.push_back(event);
 			});
-
-        if (event.event.type == 1) 
-        {
-			std::cout << "[DEBUG] Received event type 1 for frame " << event.frame << "\n";
-        }
 	}
 
     void OnServerStateUpdate(const StateUpdate& update) {

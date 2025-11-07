@@ -74,6 +74,7 @@ public:
         if (isServer)
         {
             this->generatedEvents = world.GetEvents();
+			world.ClearEvents();
         }
         
         ECSWorld_To_GameState(state);

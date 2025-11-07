@@ -26,7 +26,7 @@ class SpawnBulletHandler : public IEventHandler {
 public:
     void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
     {
-		std::cout << "Processing SPAWN_BULLET event\n";
+		//std::cout << "Processing SPAWN_BULLET event\n";
 
         const int BULLET_LIFETIME = 30;
         auto spawn_ev = *reinterpret_cast<const SpawnBulletEventData*>(event.data);
@@ -70,7 +70,7 @@ class BulletCollidesHandler : public IEventHandler {
 public:
     void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
     {
-        std::cout << "Processing BULLET_COLLIDES event\n";
+        //std::cout << "Processing BULLET_COLLIDES event\n";
 
         auto coll_ev = *reinterpret_cast<const BulletCollidesEventData*>(event.data);
 
@@ -81,17 +81,13 @@ public:
             if (play->playerId == coll_ev.playerId && ship->isAlive) {
                 ship->health -= 5;
 
-				std::cout << "Player " << play->playerId << " hit! New health: " << ship->health << "\n";
+				//std::cout << "Player " << play->playerId << " hit! New health: " << ship->health << "\n";
 
 
                 if (ship->health <= 0) {
 
                     if (isServer) 
                     {
-						std::cout << "Player " << play->playerId << " has died.\n";
-                        std::cout << "world address: " << &world << "\n";
-                        std::cout << "GetEvents() address: " << &world.GetEvents() << "\n";
-                        std::cout << "GetEvents() size before: " << world.GetEvents().size() << "\n";
 
                         EventEntry deathEvent;
                         deathEvent.event.type = AsteroidEventMask::DEATH;
@@ -100,8 +96,6 @@ public:
                         std::memcpy(deathEvent.event.data, &deathData, sizeof(DeathEventData));
                         deathEvent.event.len = sizeof(DeathEventData);
                         world.GetEvents().push_back(deathEvent);
-                        std::cout << "GetEvents() size after: " << world.GetEvents().size() << "\n";
-						std::cout << "Death event for player " << play->playerId << " queued.\n";
                     }
 					
 
@@ -122,7 +116,7 @@ class DeathHandler : public IEventHandler {
 public:
 	void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
 	{
-		std::cout << "Processing DEATH event\n";
+		//std::cout << "Processing DEATH event\n";
 
 		auto death_ev = *reinterpret_cast<const DeathEventData*>(event.data);
 		auto query = world.GetEntityManager().CreateQuery<Playable, SpaceShip>();
@@ -136,10 +130,6 @@ public:
 					if (col) {
 						col->isEnabled = false;
 					}
-                    else 
-                    {
-						std::cout << "Warning: No BoxCollider2D found for player " << play->playerId << " on death.\n";
-                    }
 				}
 			}
 		}
@@ -150,7 +140,7 @@ class RespawnHandler : public IEventHandler {
 public:
 	void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
 	{
-		std::cout << "Processing RESPAWN event\n";
+		//std::cout << "Processing RESPAWN event\n";
 
 		auto respawn_ev = *reinterpret_cast<const RespawnEventData*>(event.data);
 		auto query = world.GetEntityManager().CreateQuery<Playable, Transform, SpaceShip>();

@@ -368,7 +368,6 @@ public:
     }
 
     void Update(float deltaTime) {
-        events.clear();
         for (auto& system : systems) {
             system->Update(entityManager,events, deltaTime);
         }
@@ -395,6 +394,10 @@ public:
 
 	std::vector<EventEntry>& GetEvents() {
 		return events;
+	}
+
+	void ClearEvents() {
+		events.clear();
 	}
 
 };
