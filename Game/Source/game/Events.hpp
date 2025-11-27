@@ -3,21 +3,11 @@
 #include "netcode/netcode_common.hpp"
 
 enum AsteroidEventMask : uint8_t {
-	PLAYER_POSITION = 0,
-	SPAWN_BULLET = 1,
-	BULLET_COLLIDES = 2,
-	DEATH = 3,
-	RESPAWN = 4
+	BULLET_COLLIDES = 0,
+	DEATH = 1,
+	RESPAWN = 2
 };
 
-struct SpawnBulletEventData {
-	int bulletId;
-	int ownerId;
-	float posX;
-	float posY;
-	float velX;
-	float velY;
-};
 
 struct BulletCollidesEventData {
 	int bulletId;

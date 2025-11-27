@@ -21,20 +21,21 @@ class ClientWindow {
 public:
 
     std::mutex gStateMutex;
-    GameStateBlob PreviousState;     // previous server state for interpolation
-    GameStateBlob CurrentState;      // current server state for interpolation
+    GameStateBlob PreviousServerState;     // previous server state for interpolation
+    GameStateBlob CurrentServerState;      // current server state for interpolation
     GameStateBlob RenderState;       // final state to render (combines local + interpolated remote)
-    GameStateBlob latestLocalState;  // latest client-side predicted state (local player)
-    GameStateBlob latestServerState; // latest authoritative state from server (remote players)
+    GameStateBlob PreviousLocalState;
+    GameStateBlob CurrentLocalState;  // latest client-side predicted state (local player)
     OpenGLWindow* window{ nullptr };
     std::chrono::steady_clock::time_point lastStateUpdate;
+    std::chrono::steady_clock::time_point lastLocalUpdate;
     std::function<void(GameStateBlob&, OpenGLWindow*)> renderInitCallback;
     std::function<void(GameStateBlob&, OpenGLWindow*)> renderCallback;
-    std::function<void(const GameStateBlob&, const GameStateBlob&, GameStateBlob&, float)> interpolationCallback;
+    std::function<void(const GameStateBlob&, const GameStateBlob&, const GameStateBlob&, const GameStateBlob&, GameStateBlob&, float, float)> interpolationCallback;
 
     ClientWindow(std::function<void(GameStateBlob&, OpenGLWindow*)> initCb,
         std::function<void(GameStateBlob&, OpenGLWindow*)> renderCb,
-        std::function<void(const GameStateBlob&, const GameStateBlob&, GameStateBlob&, float)> interpolationCb)
+        std::function<void(const GameStateBlob&, const GameStateBlob&, const GameStateBlob&, const GameStateBlob&, GameStateBlob&, float, float)> interpolationCb)
         : renderInitCallback(initCb), renderCallback(renderCb), interpolationCallback(interpolationCb)
     {
         lastStateUpdate = std::chrono::steady_clock::now();
@@ -49,26 +50,28 @@ public:
 
     void setServerState(GameStateBlob state) {
         gStateMutex.lock();
-        PreviousState = CurrentState;
-        CurrentState = state;
-        latestServerState = state;
+        PreviousServerState = CurrentServerState;
+        CurrentServerState = state;
         lastStateUpdate = std::chrono::steady_clock::now();
         gStateMutex.unlock();
     }
 
     void setLocalState(GameStateBlob state) {
-        std::lock_guard<std::mutex> lock(gStateMutex);
-        latestLocalState = state;
+        gStateMutex.lock();
+        PreviousLocalState = CurrentLocalState;
+        CurrentLocalState = state;
+        lastLocalUpdate = std::chrono::steady_clock::now();
+        gStateMutex.unlock();
     }
 
     GameStateBlob getLocalState() {
         std::lock_guard<std::mutex> lock(gStateMutex);
-        return latestLocalState;
+        return CurrentLocalState;
     }
 
     GameStateBlob getServerState() {
         std::lock_guard<std::mutex> lock(gStateMutex);
-        return latestServerState;
+        return CurrentServerState;
     }
 
     bool run() {
@@ -91,20 +94,25 @@ public:
 
             // Calculate interpolation factor for remote players
             auto now = std::chrono::high_resolution_clock::now();
-            float interpolationFactor = 0.0f;
-            if (CurrentState.frame != PreviousState.frame) {
+            float serverInterpolationFactor = 0.0f;
+            if (CurrentServerState.frame != PreviousServerState.frame) {
                 auto frameDelta = std::chrono::milliseconds(MS_PER_TICK);
-                auto elapsed = now - lastStateUpdate;
-                interpolationFactor = std::chrono::duration<float, std::milli>(elapsed).count() / frameDelta.count();
-                if (interpolationFactor > 1.0f) interpolationFactor = 1.0f;
+                auto elapsed = now - lastLocalUpdate;
+                serverInterpolationFactor = std::chrono::duration<float, std::milli>(elapsed).count() / frameDelta.count();
+                if (serverInterpolationFactor > 1.0f) serverInterpolationFactor = 1.0f;
             }
 
-            // Copy latest local state into RenderState first (for local player)
-            RenderState = latestLocalState;
+            float localInterpolationFactor = 0.0f;
+            if (CurrentServerState.frame != PreviousServerState.frame) {
+                auto frameDelta = std::chrono::milliseconds(MS_PER_TICK);
+                auto elapsed = now - lastStateUpdate;
+                localInterpolationFactor = std::chrono::duration<float, std::milli>(elapsed).count() / frameDelta.count();
+                if (localInterpolationFactor > 1.0f) localInterpolationFactor = 1.0f;
+            }
 
             // Interpolate remote players from server states
             // The callback should preserve local player and only interpolate remote players
-            interpolationCallback(PreviousState, CurrentState, RenderState, interpolationFactor);
+            interpolationCallback(PreviousServerState, CurrentServerState, PreviousLocalState, CurrentLocalState, RenderState, serverInterpolationFactor, localInterpolationFactor);
 
             GameStateBlob stateCopy = RenderState;
             gStateMutex.unlock();

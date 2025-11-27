@@ -350,7 +350,7 @@ public:
 class ISystem {
 public:
     virtual ~ISystem() = default;
-    virtual void Update(EntityManager& entityManager, std::vector<EventEntry>& events, float deltaTime) = 0;
+    virtual void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) = 0;
 };
 
 class ECSWorld {
@@ -367,9 +367,9 @@ public:
         systems.push_back(std::move(system));
     }
 
-    void Update(float deltaTime) {
+    void Update(bool isServer, float deltaTime) {
         for (auto& system : systems) {
-            system->Update(entityManager,events, deltaTime);
+            system->Update(entityManager,events, isServer, deltaTime);
         }
 		//std::cout << "ECSWorld Update: " << entityManager.GetEntityCount() << " entities, "
 		//	<< systems.size() << " systems, "
@@ -404,7 +404,7 @@ public:
 
 class DestroyingSystem : public ISystem {
 public:
-    void Update(EntityManager& entityManager, std::vector<EventEntry>& events, float deltaTime) override {
+    void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
         entityManager.FlushDestroyedEntities();
     }
 };

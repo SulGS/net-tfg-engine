@@ -94,7 +94,7 @@ bool UIRenderSystem::LoadFont(const std::string& fontName, const std::string& fo
     return fontManager->LoadFont(fontName, fontPath, fontSize);
 }
 
-void UIRenderSystem::Update(EntityManager& entityManager, std::vector<EventEntry>& events, float deltaTime) {
+void UIRenderSystem::Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) {
     // Save previous OpenGL state
     GLboolean depthTest = glIsEnabled(GL_DEPTH_TEST);
     GLboolean blend = glIsEnabled(GL_BLEND);

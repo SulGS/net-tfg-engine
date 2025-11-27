@@ -264,14 +264,10 @@ public:
         
         
         world.AddSystem(std::make_unique<InputSystem>());
-        if (isServer)
-        {
-            world.AddSystem(std::make_unique<InputServerSystem>());
-        }
+        world.AddSystem(std::make_unique<InputServerSystem>());
         world.AddSystem(std::make_unique<BulletSystem>());
         world.AddSystem(std::make_unique<OnDeathLogicSystem>());
 
-        eventProcessor->RegisterHandler(AsteroidEventMask::SPAWN_BULLET,std::make_unique<SpawnBulletHandler>());
         eventProcessor->RegisterHandler(AsteroidEventMask::BULLET_COLLIDES,std::make_unique<BulletCollidesHandler>());
 		eventProcessor->RegisterHandler(AsteroidEventMask::DEATH, std::make_unique<DeathHandler>());
 		eventProcessor->RegisterHandler(AsteroidEventMask::RESPAWN, std::make_unique<RespawnHandler>());
@@ -455,50 +451,107 @@ std::vector<float> BulletVerts() {
         world.AddSystem(std::make_unique<OnDeathRenderSystem>());
     }
 
-    void Interpolate(const GameStateBlob& previousState, const GameStateBlob& currentState, GameStateBlob& renderState, float interpolationFactor) override {
+    void Interpolate(const GameStateBlob& previousServerState, const GameStateBlob& currentServerState, const GameStateBlob& previousLocalState, const GameStateBlob& currentLocalState, GameStateBlob& renderState, float serverInterpolation, float localInterpolation) override {
         // Deserializa los estados
-        const AsteroidShooterGameState& prev = *reinterpret_cast<const AsteroidShooterGameState*>(previousState.data);
-        const AsteroidShooterGameState& curr = *reinterpret_cast<const AsteroidShooterGameState*>(currentState.data);
+        const AsteroidShooterGameState& prevServer = *reinterpret_cast<const AsteroidShooterGameState*>(previousServerState.data);
+        const AsteroidShooterGameState& currServer = *reinterpret_cast<const AsteroidShooterGameState*>(currentServerState.data);
+        const AsteroidShooterGameState& prevLocal = *reinterpret_cast<const AsteroidShooterGameState*>(previousLocalState.data);
+        const AsteroidShooterGameState& currLocal = *reinterpret_cast<const AsteroidShooterGameState*>(currentLocalState.data);
+
         AsteroidShooterGameState& rend = *reinterpret_cast<AsteroidShooterGameState*>(renderState.data);
 
         // Interpola jugadores
         for (int i = 0; i < 2; ++i) {
-            if (playerId != i) 
+            if (playerId == i) 
             {
-                rend.posX[i] = prev.posX[i] + (curr.posX[i] - prev.posX[i]) * interpolationFactor;
-                rend.posY[i] = prev.posY[i] + (curr.posY[i] - prev.posY[i]) * interpolationFactor;
+                rend.posX[i] = prevLocal.posX[i] + (currLocal.posX[i] - prevLocal.posX[i]) * localInterpolation;
+                rend.posY[i] = prevLocal.posY[i] + (currLocal.posY[i] - prevLocal.posY[i]) * localInterpolation;
                 // Rotación: interpola linealmente (puedes mejorar con shortest path si lo necesitas)
-                rend.rot[i] = prev.rot[i] + (curr.rot[i] - prev.rot[i]) * interpolationFactor;
+                float delta = currLocal.rot[i] - prevLocal.rot[i];
+
+                // Normaliza el delta al rango [-180, 180] para tomar el camino más corto
+                while (delta > 180.0f) delta -= 360.0f;
+                while (delta < -180.0f) delta += 360.0f;
+
+                rend.rot[i] = prevLocal.rot[i] + delta * localInterpolation;
+            }
+            else 
+            {
+                rend.posX[i] = prevServer.posX[i] + (currServer.posX[i] - prevServer.posX[i]) * serverInterpolation;
+                rend.posY[i] = prevServer.posY[i] + (currServer.posY[i] - prevServer.posY[i]) * serverInterpolation;
+                // Rotación: interpola linealmente, corrigiendo el camino más corto
+                float delta = currServer.rot[i] - prevServer.rot[i];
+
+                // Normaliza el delta al rango [-180, 180] para tomar el camino más corto
+                while (delta > 180.0f) delta -= 360.0f;
+                while (delta < -180.0f) delta += 360.0f;
+
+                rend.rot[i] = prevServer.rot[i] + delta * serverInterpolation;
+
             }
             
             // No interpolamos salud ni cooldowns, solo copiamos el actual
-            rend.health[i] = curr.health[i];
-            rend.shootCooldown[i] = curr.shootCooldown[i];
-            rend.deathCooldown[i] = curr.deathCooldown[i];
-			rend.alive[i] = curr.alive[i];
+            rend.health[i] = currServer.health[i];
+            rend.shootCooldown[i] = currServer.shootCooldown[i];
+            rend.deathCooldown[i] = currServer.deathCooldown[i];
+			rend.alive[i] = currServer.alive[i];
         }
 
         // Interpola balas
-        rend.bulletCount = curr.bulletCount;
+        rend.bulletCount = currServer.bulletCount;
         for (int i = 0; i < MAX_BULLETS; ++i) {
-            const Bullet& prevBullet = prev.bullets[i];
-            const Bullet& currBullet = curr.bullets[i];
+            const Bullet& prevServerBullet = prevServer.bullets[i];
+            const Bullet& currServerBullet = currServer.bullets[i];
+			const Bullet& prevLocalBullet = prevLocal.bullets[i];
+			const Bullet& currLocalBullet = currLocal.bullets[i];
+
             Bullet& rendBullet = rend.bullets[i];
 
-            // Si la bala está activa en ambos estados, interpola posición y velocidad
-            if (prevBullet.active && currBullet.active && prevBullet.id == currBullet.id) {
-                rendBullet.id = currBullet.id;
-                rendBullet.active = true;
-                rendBullet.posX = prevBullet.posX + (currBullet.posX - prevBullet.posX) * interpolationFactor;
-                rendBullet.posY = prevBullet.posY + (currBullet.posY - prevBullet.posY) * interpolationFactor;
-                rendBullet.velX = prevBullet.velX + (currBullet.velX - prevBullet.velX) * interpolationFactor;
-                rendBullet.velY = prevBullet.velY + (currBullet.velY - prevBullet.velY) * interpolationFactor;
-                rendBullet.ownerId = currBullet.ownerId;
-                rendBullet.lifetime = currBullet.lifetime;
+            if (currLocalBullet.active && currLocalBullet.ownerId == playerId) 
+            {
+                if (prevLocalBullet.active) 
+                {
+					rendBullet.id = currLocalBullet.id;
+					rendBullet.active = true;
+					rendBullet.posX = prevLocalBullet.posX + (currLocalBullet.posX - prevLocalBullet.posX) * localInterpolation;
+					rendBullet.posY = prevLocalBullet.posY + (currLocalBullet.posY - prevLocalBullet.posY) * localInterpolation;
+					rendBullet.velX = prevLocalBullet.velX + (currLocalBullet.velX - prevLocalBullet.velX) * localInterpolation;
+					rendBullet.velY = prevLocalBullet.velY + (currLocalBullet.velY - prevLocalBullet.velY) * localInterpolation;
+					rendBullet.ownerId = currLocalBullet.ownerId;
+					rendBullet.lifetime = currLocalBullet.lifetime;
+                }
+                else 
+                {
+					// Si solo está activa en el estado actual local, copia el actual local
+					rendBullet = currLocalBullet;
+                }
+
+				continue; // Ya hemos procesado esta bala
             }
-            else {
-                // Si solo está activa en el estado actual, copia el actual
-                rendBullet = currBullet;
+
+            if (currServerBullet.active && currServerBullet.ownerId != playerId) 
+            {
+				if (prevServerBullet.active)
+				{
+					rendBullet.id = currServerBullet.id;
+					rendBullet.active = true;
+					rendBullet.posX = prevServerBullet.posX + (currServerBullet.posX - prevServerBullet.posX) * serverInterpolation;
+					rendBullet.posY = prevServerBullet.posY + (currServerBullet.posY - prevServerBullet.posY) * serverInterpolation;
+					rendBullet.velX = prevServerBullet.velX + (currServerBullet.velX - prevServerBullet.velX) * serverInterpolation;
+					rendBullet.velY = prevServerBullet.velY + (currServerBullet.velY - prevServerBullet.velY) * serverInterpolation;
+					rendBullet.ownerId = currServerBullet.ownerId;
+					rendBullet.lifetime = currServerBullet.lifetime;
+				}
+				else
+				{
+					// Si solo está activa en el estado actual del servidor, copia el actual del servidor
+					rendBullet = currServerBullet;
+				}
+			}
+			else
+			{
+				// Bala inactiva
+				rendBullet.active = false;
             }
         }
     }

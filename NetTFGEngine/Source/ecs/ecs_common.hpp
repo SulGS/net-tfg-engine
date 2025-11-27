@@ -268,7 +268,7 @@ public:
 
 class CameraSystem : public ISystem {
 public:
-    void Update(EntityManager& entityManager, std::vector<EventEntry>& events, float deltaTime) override {
+    void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
 
         auto query = entityManager.CreateQuery<Camera, Transform>();
 

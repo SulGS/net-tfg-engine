@@ -20,7 +20,7 @@ enum InputMask : uint8_t {
 
 class BulletSystem : public ISystem {
 public:
-    void Update(EntityManager& entityManager, std::vector<EventEntry>& events, float deltaTime) override {
+    void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
         const float WORLD_SIZE = 400.0f;
 
         //std::cout << "BulletSystem Update\n";
@@ -48,7 +48,7 @@ public:
 
 class InputSystem : public ISystem {
 public:
-    void Update(EntityManager& entityManager, std::vector<EventEntry>& events, float deltaTime) override {
+    void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
         auto query = entityManager.CreateQuery<Transform, Playable, SpaceShip>();
 
         //std::cout << "InputSystem Update\n";
@@ -101,7 +101,7 @@ public:
 
 class InputServerSystem : public ISystem {
 public:
-    void Update(EntityManager& entityManager, std::vector<EventEntry>& events, float deltaTime) override {
+    void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
         auto query = entityManager.CreateQuery<Transform, Playable, SpaceShip>();
 
         auto colliders = entityManager.CreateQuery<Playable, BoxCollider2D>();
@@ -148,21 +148,41 @@ public:
 
                     float bVelX = cos(radians) * BULLET_SPEED;
                     float bVelY = sin(radians) * BULLET_SPEED;
+                    float posX = transform->getPosition().x;
+                    float posY = transform->getPosition().y;
 
-					EventEntry spawnEvent;
-					spawnEvent.event.type = AsteroidEventMask::SPAWN_BULLET;
-					SpawnBulletEventData spawnData;
-					spawnData.bulletId = id;
-					spawnData.ownerId = p;
-					spawnData.posX = transform->getPosition().x;
-					spawnData.posY = transform->getPosition().y;
-					spawnData.velX = bVelX;
-					spawnData.velY = bVelY;
+                    Entity bulletEntity = entityManager.CreateEntity();
+                    Transform* t = entityManager.AddComponent<Transform>(bulletEntity, Transform{});
+                    t->setPosition(glm::vec3(posX, posY, 0.0f));
+                    entityManager.AddComponent<ECSBullet>(bulletEntity,
+                        ECSBullet{ id, bVelX, bVelY, p, BULLET_LIFETIME });
 
-					std::memcpy(spawnEvent.event.data, &spawnData, sizeof(SpawnBulletEventData));
-					spawnEvent.event.len = sizeof(SpawnBulletEventData);
+                    if (isServer) {
+                        BoxCollider2D* collider = entityManager.AddComponent<BoxCollider2D>(
+                            bulletEntity, BoxCollider2D{ glm::vec2(1.0f, 1.0f) });
+                        collider->layer = CollisionLayer::BULLET;
+                        collider->collidesWith = CollisionLayer::PLAYER;
+                        collider->SetOnCollisionEnter([&entityManager, &events](Entity self, Entity other, const CollisionInfo& info) {
+                                Playable* p = entityManager.GetComponent<Playable>(other);
 
-					events.push_back(spawnEvent);
+                                if (!p || p->playerId == entityManager.GetComponent<ECSBullet>(self)->ownerId) {
+                                    return;
+                                }
+
+                                EntityManager& em = entityManager;
+                                EventEntry eventEntry;
+                                eventEntry.event.type = AsteroidEventMask::BULLET_COLLIDES;
+                                BulletCollidesEventData data;
+                                ECSBullet* ecsb = em.GetComponent<ECSBullet>(self);
+                                Playable* play = em.GetComponent<Playable>(other);
+                                data.bulletId = ecsb->id;
+                                data.playerId = play->playerId;
+                                std::memcpy(eventEntry.event.data, &data, sizeof(BulletCollidesEventData));
+                                eventEntry.event.len = sizeof(BulletCollidesEventData);
+
+                                events.push_back(eventEntry);
+                            });
+                    }
 
                   
 
@@ -176,7 +196,7 @@ public:
 
 class OnDeathLogicSystem : public ISystem {
 public:
-    void Update(EntityManager& entityManager, std::vector<EventEntry>& events, float deltaTime) override {
+    void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
         bool foundLocal = false;
         auto playerQuery = entityManager.CreateQuery<Transform, Playable, SpaceShip>();
 

@@ -14,7 +14,7 @@ public:
 
     virtual void Render(const GameStateBlob& state, OpenGLWindow* window) = 0;
 
-    virtual void Interpolate(const GameStateBlob& previousState, const GameStateBlob& currentState, GameStateBlob& renderState, float interpolationFactor) = 0;
+    virtual void Interpolate(const GameStateBlob& previousServerState, const GameStateBlob& currentServerState, const GameStateBlob& previousLocalState, const GameStateBlob& currentLocalState, GameStateBlob& renderState, float serverInterpolation, float localInterpolation) = 0;
     
     virtual ~IGameRenderer() = 0;
 

@@ -71,8 +71,8 @@ public:
             [this](GameStateBlob& state, OpenGLWindow* win) {
                 gameRenderer_->Render(state, win);
             },
-			[this](const GameStateBlob& prevState, const GameStateBlob& currState, GameStateBlob& renderState, float interpFactor) {
-				gameRenderer_->Interpolate(prevState, currState, renderState, interpFactor);
+			[this](const GameStateBlob& previousServerState, const GameStateBlob& currentServerState, const GameStateBlob& previousLocalState, const GameStateBlob& currentLocalState, GameStateBlob& renderState, float serverInterpolation, float localInterpolation) {
+				gameRenderer_->Interpolate(previousServerState,currentServerState,previousLocalState,currentLocalState,renderState,serverInterpolation,localInterpolation);
 			}
         );
 

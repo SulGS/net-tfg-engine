@@ -53,7 +53,7 @@ public:
         UIRenderSystem* ui_system = world.GetSystem<UIRenderSystem>();
         ui_system->UpdateScreenSize(window->getWidth(),window->getHeight());
         
-        world.Update(1.0f / RENDER_TICKS_PER_SECOND); // Assume 60 FPS for now
+        world.Update(false, 1.0f / RENDER_TICKS_PER_SECOND); // Assume 60 FPS for now
     }
 
 };

@@ -69,7 +69,7 @@ public:
         this->generatedEvents.clear();
         ProcessEvents(events);
 		ProcessInputs(inputs);
-        world.Update(1 / TICKS_PER_SECOND);
+        world.Update(isServer, 1 / TICKS_PER_SECOND);
         if (isServer)
         {
             this->generatedEvents = world.GetEvents();
