@@ -177,14 +177,6 @@ public:
 
         buf[0] = PACKET_INPUT_DELAY;
         offset += 1;
-        
-        uint32_t f = hostToBigEndian32(InpDel_packet.sendframe);
-        std::memcpy(buf + offset, &f, sizeof(uint32_t));
-        offset += sizeof(uint32_t);
-
-        f = hostToBigEndian32(InpDel_packet.recframe);
-        std::memcpy(buf + offset, &f, sizeof(uint32_t));
-        offset += sizeof(uint32_t);
 
         uint32_t pid = hostToBigEndian32(InpDel_packet.playerId);
         std::memcpy(buf + offset, &pid, sizeof(uint32_t));
@@ -207,13 +199,6 @@ public:
         offset += 1;
 
         uint32_t f = 0;
-        std::memcpy(&f, buf + offset, 4);
-        packet.sendframe = bigEndianToHost32(f);
-        offset += sizeof(uint32_t);
-
-        std::memcpy(&f, buf + offset, 4);
-        packet.recframe = bigEndianToHost32(f);
-        offset += sizeof(uint32_t);
 
         uint32_t pid = 0;
         std::memcpy(&f, buf + offset, 4);
@@ -249,118 +234,6 @@ public:
         std::memcpy(entry.input.data, buf + offset, sizeof(InputBlob));
 
         return entry;
-    }
-
-	void SendFrameUpdate(HSteamNetConnection conn, const FrameUpdate& update) {
-		if (!sockets || conn == k_HSteamNetConnection_Invalid) return;
-
-        size_t bufSize = 1 + 4; // tipo + frame
-        bufSize += 4; // numInputs
-        bufSize += update.inputs.size() * (4 + sizeof(InputBlob)); // inputs
-        bufSize += 4; // numEvents
-        for (const auto& eventEntry : update.events) {
-            bufSize += 4; // eventType
-            bufSize += 4; // eventSize
-            bufSize += eventEntry.event.len; // eventData
-        }
-        std::vector<uint8_t> buf(bufSize);
-
-		size_t offset = 0;
-		buf[offset++] = PACKET_FRAME_UPDATE;
-		uint32_t f = hostToBigEndian32(update.frame);
-		std::memcpy(&buf[offset], &f, 4);
-		offset += 4;
-		uint32_t numInputs = hostToBigEndian32(static_cast<uint32_t>(update.inputs.size()));
-		std::memcpy(&buf[offset], &numInputs, 4);
-		offset += 4;
-
-		for (const auto& [playerId, inputEntry] : update.inputs) {
-			uint32_t pid = hostToBigEndian32(playerId);
-			std::memcpy(&buf[offset], &pid, 4);
-			offset += 4;
-			std::memcpy(&buf[offset], inputEntry.input.data, sizeof(InputBlob));
-			offset += sizeof(InputBlob);
-		}
-
-		uint32_t numEvents = hostToBigEndian32(static_cast<uint32_t>(update.events.size()));
-		std::memcpy(&buf[offset], &numEvents, 4);
-		offset += 4;
-
-		for (const auto& eventEntry : update.events) {
-			uint32_t eventType = hostToBigEndian32(eventEntry.event.type);
-			std::memcpy(&buf[offset], &eventType, 4);
-			offset += 4;
-
-			uint32_t eventSize = hostToBigEndian32(eventEntry.event.len);
-			std::memcpy(&buf[offset], &eventSize, 4);
-			offset += 4;
-            
-			std::memcpy(&buf[offset], eventEntry.event.data, eventEntry.event.len);
-			offset += eventEntry.event.len;
-		}
-
-		sockets->SendMessageToConnection(conn, buf.data(), buf.size(), k_nSteamNetworkingSend_Reliable, nullptr);
-	}
-
-    FrameUpdate ParseFrameUpdate(const uint8_t* buf, size_t len) {
-        FrameUpdate update;
-        size_t offset = 0;
-
-        offset += 1; // Saltar el tipo de paquete (PACKET_FRAME_UPDATE)
-
-        // Frame
-        uint32_t f = 0;
-        std::memcpy(&f, buf + offset, 4);
-        update.frame = bigEndianToHost32(f);
-        offset += 4;
-
-        // Número de inputs
-        uint32_t numInputs = 0;
-        std::memcpy(&numInputs, buf + offset, 4);
-        numInputs = bigEndianToHost32(numInputs);
-        offset += 4;
-
-        // Inputs
-        for (uint32_t i = 0; i < numInputs; ++i) {
-            uint32_t pid = 0;
-            std::memcpy(&pid, buf + offset, 4);
-            int playerId = bigEndianToHost32(pid);
-            offset += 4;
-
-            InputEntry entry;
-            entry.playerId = playerId;
-            std::memcpy(entry.input.data, buf + offset, sizeof(InputBlob));
-            offset += sizeof(InputBlob);
-
-            update.inputs[playerId] = entry;
-        }
-
-        // Número de eventos
-        uint32_t numEvents = 0;
-        std::memcpy(&numEvents, buf + offset, 4);
-        numEvents = bigEndianToHost32(numEvents);
-        offset += 4;
-
-        // Eventos
-        for (uint32_t i = 0; i < numEvents; ++i) {
-            EventEntry eventEntry;
-            uint32_t eventType = 0;
-            std::memcpy(&eventType, buf + offset, 4);
-            eventEntry.event.type = bigEndianToHost32(eventType);
-            offset += 4;
-
-            uint32_t eventSize = 0;
-            std::memcpy(&eventSize, buf + offset, 4);
-            eventEntry.event.len = bigEndianToHost32(eventSize);
-            offset += 4;
-
-            std::memcpy(eventEntry.event.data, buf + offset, eventEntry.event.len);
-            offset += eventEntry.event.len;
-
-            update.events.push_back(eventEntry);
-        }
-
-        return update;
     }
 
 	void SendEventUpdate(HSteamNetConnection conn, const EventEntry& event) {

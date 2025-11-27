@@ -105,8 +105,6 @@ struct InputEntry {
 };
 
 struct InputDelayPacket {
-    int sendframe;
-    int recframe;
     int playerId;
     uint32_t timestamp;
 };
@@ -168,17 +166,12 @@ struct StateUpdate {
     GameStateBlob state;
 };
 
-struct FrameUpdate {
-    int frame;
-    std::map<int, InputEntry> inputs;
-    std::vector<EventEntry> events;
-};
-
-struct SNAPSHOT {
+struct Snapshot {
     int frame = -1;
     GameStateBlob state;
     std::map<int, InputEntry> inputs;
 	std::vector<EventEntry> events;
+    bool stateConfirmed = false;
 };
 
 using InputHistory = std::map<int, std::map<int, InputEntry>>;

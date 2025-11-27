@@ -14,82 +14,7 @@
 #include <cstdint>
 #include <cmath>    // for std::ceil
 
-class InputDelayCalculator {
-public:
-    InputDelayCalculator()
-        : m_lastRttMs(0),
-        m_lastLatencyMs(0.0f),
-        m_lastInputDelayFrames(0)
-    {
-    }
-
-    static uint32_t GetTimestampMs() {
-        auto now = std::chrono::high_resolution_clock::now();
-        auto ms = std::chrono::time_point_cast<std::chrono::milliseconds>(now);
-        uint64_t totalMs = ms.time_since_epoch().count();
-        return static_cast<uint32_t>(totalMs & 0xFFFFFFFF);
-    }
-
-    void UpdateRtt(uint32_t sentTimestampMs, int tickRate, int logicalTicksDelay) {
-        uint32_t now = GetTimestampMs();
-        uint32_t rtt = now - sentTimestampMs;
-
-        uint32_t logicalDelayMs = 1000 / tickRate;  // Integer division
-        logicalDelayMs *= logicalTicksDelay;
-        rtt = (rtt > logicalDelayMs) ? (rtt - logicalDelayMs) : 1;
-
-        // ===== FIX #1: Validate RTT before using it =====
-        const uint32_t MAX_REASONABLE_RTT = 10000;  // 10 seconds
-        const uint32_t MIN_REASONABLE_RTT = 1;      // 1ms minimum
-
-        if (rtt > MAX_REASONABLE_RTT) {
-            std::cerr << "[WARNING] RTT too high: " << rtt
-                << "ms (likely clock wrap or packet loss). Ignoring.\n";
-            return;
-        }
-
-        if (rtt < MIN_REASONABLE_RTT) {
-            std::cerr << "[WARNING] RTT suspiciously low: " << rtt
-                << "ms. Ignoring.\n";
-            return;
-        }
-
-        // ===== FIX #2: Use moving average instead of single sample =====
-        m_rttSamples.push_back(rtt);
-        if (m_rttSamples.size() > RTT_SAMPLE_WINDOW) {
-            m_rttSamples.pop_front();
-        }
-
-        // Calculate average of all samples in window
-        uint32_t sum = 0;
-        for (uint32_t sample : m_rttSamples) {
-            sum += sample;
-        }
-        m_lastRttMs = sum / static_cast<uint32_t>(m_rttSamples.size());
-        m_lastLatencyMs = m_lastRttMs / 2.0f;
-
-        CalculateInputDelayFrames(TICKS_PER_SECOND);
-    }
-
-    // Accessors
-    uint32_t GetLastRttMs() const { return m_lastRttMs; }
-    float GetLastLatencyMs() const { return m_lastLatencyMs; }
-    int GetInputDelayFrames() const { return m_lastInputDelayFrames; }
-    uint32_t m_lastRttMs;
-    float m_lastLatencyMs;
-    int m_lastInputDelayFrames;
-
-    // ===== FIX #2 (continued): Moving average window =====
-    static constexpr size_t RTT_SAMPLE_WINDOW = 5;  // Keep last 5 samples
-    std::deque<uint32_t> m_rttSamples;
-
-    void CalculateInputDelayFrames(int tickRate) {
-        if (tickRate <= 0) return;
-
-        float frameTimeMs = 1000.0f / tickRate;
-        m_lastInputDelayFrames = static_cast<int>(std::ceil(m_lastLatencyMs / frameTimeMs));
-    }
-};
+#include "Client-Server/InputDelayCalculator.hpp"
 
 
 
@@ -179,8 +104,6 @@ private:
     bool isReconnection_;
     HSteamNetConnection serverConnection_;
 
-    int currentFrame = 0;
-
     std::string GenerateClientId() {
         auto now = std::chrono::system_clock::now();
         auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -228,7 +151,6 @@ private:
 					StateUpdate update = net_.ParseStateUpdate(data, len);
 					prediction.OnServerStateUpdate(update);
 					stateReceived = true;
-					currentFrame = update.frame;
 					std::cerr << "Received state update after reconnection\n";
 				}
 				}, true);
@@ -419,7 +341,7 @@ private:
     // ============================================================================
 
     void ProcessIncomingPacket(ClientPredictionNetcode& prediction,
-        int& currentFrame,  // Pass by reference!
+		ClientWindow& cWin,
         const uint8_t* data,
         int len,
         HSteamNetConnection conn)
@@ -438,46 +360,20 @@ private:
             std::memcpy(&lenState, data + 1 + 4, sizeof(uint32_t));
             lenState = bigEndianToHost32(lenState);
 
-            if (len >= 1 + 4 + 4 + lenState + 4) {
-                uint32_t countRaw = 0;
-                std::memcpy(&countRaw, data + 1 + 4 + 4 + lenState, sizeof(uint32_t));
-                lenVector = bigEndianToHost32(countRaw);
-
-                size_t expectedLen = 1 + 4 + 4 + lenState + 4 + lenVector * (4 + sizeof(InputBlob));
-
-                if (len != expectedLen) {
-                    correctPacket = false;
-                }
-            }
-            else {
-                correctPacket = false;
+            if (len >= 1 + 4 + 4 + lenState) {
+                correctPacket = true;
             }
 
             if (correctPacket) {
                 StateUpdate update = net_.ParseStateUpdate(data, len);
 
-                // ===== SYNC: Update frame to match server =====
-                if (currentFrame < update.frame) {
-                    currentFrame = update.frame;
-                    std::cerr << "[SYNC] Synced to server frame: " << currentFrame << "\n";
-                }
                 prediction.OnServerStateUpdate(update);
+				cWin.setServerState(prediction.GetLatestServerState());
             }
             else {
                 std::cerr << "[CLIENT] Received malformed PACKET_STATE_UPDATE, len=" << len << "\n";
             }
-        }
-        else if (type == PACKET_FRAME_UPDATE) {
-			const size_t EXPECTED_MIN_LEN = 1 + 4;
-			if (len < EXPECTED_MIN_LEN) {
-				std::cerr << "[CLIENT] Malformed frame update packet, len=" << len << "\n";
-			}
-			else {
-				FrameUpdate update = net_.ParseFrameUpdate(data, len);
-				prediction.OnServerFrameUpdate(update);
-			}
-        }
-        else if (type == PACKET_INPUT_UPDATE) {
+        }else if (type == PACKET_INPUT_UPDATE) {
             const size_t EXPECTED_MIN_LEN = 1 + 4 + 4 + sizeof(InputBlob);
 
             if (len < EXPECTED_MIN_LEN) {
@@ -502,8 +398,9 @@ private:
         else if (type == PACKET_INPUT_DELAY) {
             // ===== FIX: Validate RTT with bounds checking =====
             InputDelayPacket packet = net_.ParseInputDelaySync(data, len);
-            std::cout << "Logical ticks delay: " << (packet.recframe - packet.sendframe) << "\n";
-            inputDelayCalc.UpdateRtt(packet.timestamp, TICKS_PER_SECOND,packet.recframe - packet.sendframe);
+            inputDelayCalc.UpdateRtt(packet.timestamp, TICKS_PER_SECOND);
+
+			prediction.UpdateCurrentFrame(inputDelayCalc.GetInputDelayFrames());
         }
     }
 
@@ -516,51 +413,47 @@ private:
 
         std::thread renderThread(&ClientWindow::run, &cWindow);
 
+		prediction.UpdateCurrentFrame(1);
+
         while (cWindow.isRunning()) {
             net_.PumpCallbacks();
 
             // ===== SYNC: Poll and update currentFrame =====
             net_.Poll([&](const uint8_t* data, int len, HSteamNetConnection conn) {
-                ProcessIncomingPacket(prediction, currentFrame, data, len, conn);
+                ProcessIncomingPacket(prediction,cWindow, data, len, conn);
                 },false);
 
             // ===== Use currentFrame (now synced with server) =====
             InputBlob localInput = prediction.GetGameLogic()->GenerateLocalInput();
 
-            int frameToSubmit = currentFrame + inputDelayCalc.GetInputDelayFrames();
-            prediction.SubmitLocalInput(frameToSubmit, localInput);
+            int frameToSubmit = prediction.SubmitLocalInput(localInput);
             net_.SendInput(serverConnection_, assignedPlayerId_, frameToSubmit, localInput);
 
             // Predict to current frame
-            prediction.PredictToFrame(currentFrame);
-            cWindow.setRenderState(prediction.GetCurrentState());
+            prediction.Tick();
+			cWindow.setLocalState(prediction.GetCurrentState());
+            //cWindow.setRenderState(prediction.GetCurrentState());
 
             // ===== Debug output every 150 frames =====
-            if (currentFrame % 30 == 0) {
+            if (frameToSubmit % 30 == 0) {
                 GameStateBlob s = prediction.GetCurrentState();
-                std::cout << "[CLIENT] Frame: " << currentFrame
+                std::cout << "[CLIENT] Frame: " << frameToSubmit
                     << " | Latency: " << inputDelayCalc.GetLastLatencyMs()
                     << "ms | InputDelayFrames: " << inputDelayCalc.GetInputDelayFrames() << "\n";
 
                 // Send RTT sync
                 InputDelayPacket packet;
 
-                packet.sendframe = currentFrame;
-                packet.recframe = currentFrame;
                 packet.playerId = assignedPlayerId_;
                 packet.timestamp = inputDelayCalc.GetTimestampMs();
 
                 net_.SendInputDelaySync(serverConnection_, packet);
             }
 
-            ++currentFrame;
 
             nextTick += std::chrono::milliseconds(MS_PER_TICK);
             std::this_thread::sleep_until(nextTick);
 
-            if (currentFrame > 200000) {
-                cWindow.close();
-            }
         }
 
         renderThread.join();

@@ -62,7 +62,6 @@ public:
 
 	void Synchronize(GameStateBlob& state) override {
 		GameState_To_ECSWorld(state);
-		ECSWorld_To_GameState(state);
 	}
 
     void SimulateFrame(GameStateBlob& state, std::vector<EventEntry> events, std::map<int, InputEntry> inputs) override {

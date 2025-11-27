@@ -295,8 +295,6 @@ private:
         if (type == PACKET_INPUT_DELAY) {
             InputDelayPacket packet = net_.ParseInputDelaySync(data, len);
 
-            packet.recframe = currentFrame_;
-
             net_.SendInputDelaySync(conn, packet);
 
 
@@ -408,7 +406,7 @@ private:
                 server_.OnPlayerDisconnected(peerInfo_[conn].playerId);
             }
 
-            FrameUpdate update = server_.Tick(currentFrame_);
+            StateUpdate update = server_.Tick(currentFrame_);
 
             for (auto& [conn, info] : peerInfo_) {
                 if (!info.isConnected) {
@@ -437,17 +435,17 @@ private:
 				}
             }
 
+            for (auto& [conn, info] : peerInfo_) {
+                if (!info.isConnected) {
+                    continue;
+                }
+                if (pendingReconnections_.find(info.playerId) == pendingReconnections_.end()) {
+                    net_.SendStateUpdate(conn, update);
+                }
+            }
+
             if (currentFrame_ % 30 == 0) {
 
-                /*for (auto& [conn, info] : peerInfo_) {
-                    if (!info.isConnected) {
-                        continue;
-                    }
-                    if (pendingReconnections_.find(info.playerId) == pendingReconnections_.end()) {
-                        net_.SendFrameUpdate(conn, update);
-                    }
-                }*/
-                
 
                 auto now = std::chrono::high_resolution_clock::now();
                 auto duration = std::chrono::duration_cast<std::chrono::microseconds>(now - nextTick);

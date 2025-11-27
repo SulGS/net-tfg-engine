@@ -10,14 +10,6 @@ enum AsteroidEventMask : uint8_t {
 	RESPAWN = 4
 };
 
-
-struct PlayerPositionEventData {
-	int playerId;
-	float x;
-	float y;
-	float rotation;
-};
-
 struct SpawnBulletEventData {
 	int bulletId;
 	int ownerId;

@@ -6,22 +6,6 @@
 #include "Events.hpp"
 #include "Components.hpp"
 
-class PlayerPositionHandler : public IEventHandler {
-public:
-    void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
-    {
-        auto pos_ev = *reinterpret_cast<const PlayerPositionEventData*>(event.data);
-
-        auto query = world.GetEntityManager().CreateQuery<Playable, Transform>();
-        for (auto [entity, play, transform] : query) {
-            if (play->playerId == pos_ev.playerId) {
-                transform->setPosition(glm::vec3(pos_ev.x, pos_ev.y, 0.0f));
-                transform->setRotation(glm::vec3(0.0f, 0.0f, pos_ev.rotation));
-            }
-        }
-    }
-};
-
 class SpawnBulletHandler : public IEventHandler {
 public:
     void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override

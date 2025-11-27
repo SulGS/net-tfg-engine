@@ -124,18 +124,6 @@ public:
 
             float radians = transform->getRotation().z * 3.14159f / 180.0f;
 
-			EventEntry posEvent;
-			posEvent.event.type = AsteroidEventMask::PLAYER_POSITION;
-			PlayerPositionEventData posData;
-
-			posData.playerId = p;
-			posData.x = transform->getPosition().x;
-			posData.y = transform->getPosition().y;
-			posData.rotation = transform->getRotation().z;
-			std::memcpy(posEvent.event.data, &posData, sizeof(PlayerPositionEventData));
-			posEvent.event.len = sizeof(PlayerPositionEventData);
-			events.push_back(posEvent);
-
             // Shooting
             if ((m & INPUT_SHOOT) && ship->shootCooldown <= 0 && ship->isAlive) {
                 // Find first available bullet ID

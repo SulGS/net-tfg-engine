@@ -190,6 +190,8 @@ public:
                 i++;
             }
         }
+
+		state.len = sizeof(AsteroidShooterGameState);
     }
 
     bool CompareStates(const GameStateBlob& a, const GameStateBlob& b) const override {
@@ -269,7 +271,6 @@ public:
         world.AddSystem(std::make_unique<BulletSystem>());
         world.AddSystem(std::make_unique<OnDeathLogicSystem>());
 
-        eventProcessor->RegisterHandler(AsteroidEventMask::PLAYER_POSITION,std::make_unique<PlayerPositionHandler>());
         eventProcessor->RegisterHandler(AsteroidEventMask::SPAWN_BULLET,std::make_unique<SpawnBulletHandler>());
         eventProcessor->RegisterHandler(AsteroidEventMask::BULLET_COLLIDES,std::make_unique<BulletCollidesHandler>());
 		eventProcessor->RegisterHandler(AsteroidEventMask::DEATH, std::make_unique<DeathHandler>());
@@ -462,11 +463,14 @@ std::vector<float> BulletVerts() {
 
         // Interpola jugadores
         for (int i = 0; i < 2; ++i) {
-            rend.posX[i] = prev.posX[i] + (curr.posX[i] - prev.posX[i]) * interpolationFactor;
-            rend.posY[i] = prev.posY[i] + (curr.posY[i] - prev.posY[i]) * interpolationFactor;
-            // Rotación: interpola linealmente (puedes mejorar con shortest path si lo necesitas)
-            rend.rot[i] = prev.rot[i] + (curr.rot[i] - prev.rot[i]) * interpolationFactor;
-
+            if (playerId != i) 
+            {
+                rend.posX[i] = prev.posX[i] + (curr.posX[i] - prev.posX[i]) * interpolationFactor;
+                rend.posY[i] = prev.posY[i] + (curr.posY[i] - prev.posY[i]) * interpolationFactor;
+                // Rotación: interpola linealmente (puedes mejorar con shortest path si lo necesitas)
+                rend.rot[i] = prev.rot[i] + (curr.rot[i] - prev.rot[i]) * interpolationFactor;
+            }
+            
             // No interpolamos salud ni cooldowns, solo copiamos el actual
             rend.health[i] = curr.health[i];
             rend.shootCooldown[i] = curr.shootCooldown[i];

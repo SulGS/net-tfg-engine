@@ -89,25 +89,14 @@ public:
         gameState.frame = frame;
     }
 
-    FrameUpdate Tick(int currentFrame) {
+    StateUpdate Tick(int currentFrame) {
         
         SimulateFrame(currentFrame);
 
         // Create state update
-        FrameUpdate update;
+        StateUpdate update;
         update.frame = currentFrame;
-        auto frameInputsIt = appliedInputs.find(currentFrame);
-        // Use iterators for confirmedInputs
-        if (frameInputsIt != appliedInputs.end()) {
-            for (const auto& [playerId, inputEntry] : frameInputsIt->second) {
-                update.inputs[playerId] = inputEntry;
-            }
-        }
-
-		auto eventsIt = appliedEvents.find(currentFrame);
-		if (eventsIt != appliedEvents.end()) {
-			update.events = eventsIt->second;
-		}
+		update.state = gameState;
 
 
 
