@@ -4,14 +4,9 @@ workspace "TFG Project"
    configurations { "Debug", "Release", "Dist" }
    startproject "Game"
 
-   -- Enable Visual Studio integrated vcpkg
+   -- Workspace-wide build options for MSVC
    filter "system:windows"
       buildoptions { "/EHsc", "/Zc:preprocessor", "/Zc:__cplusplus" }
-      -- Enable vcpkg manifest mode
-      defines { "VCPKG_MANIFEST_MODE=ON" }
-      
-   -- Set vcpkg configuration at workspace level
-   vcpkgenabled "On"
 
 OutputDir = "%{cfg.system}-%{cfg.architecture}/%{cfg.buildcfg}"
 

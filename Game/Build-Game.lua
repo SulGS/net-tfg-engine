@@ -5,9 +5,6 @@ project "Game"
    targetdir "Binaries/%{cfg.buildcfg}"
    staticruntime "off"
 
-   -- Enable Visual Studio integrated vcpkg
-   vcpkgenabled "On"
-
    files { "Source/**.h", "Source/**.cpp" }
 
    includedirs
