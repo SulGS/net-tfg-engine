@@ -8,6 +8,8 @@
 #include "Client-Server/Client.hpp"  // Include for RunClient
 #include "game/asteroids.hpp"        // Include for game logic
 
+#include "Utils/Debug/Debug.hpp"
+
 void PrintHelp() {
     std::cout << "Usage:\n"
         << "  --host                     Run as server (host) on the given port.\n"
@@ -55,6 +57,8 @@ int main(int argc, char** argv) {
         config.stopOnBelowMin = false;
         config.reconnectionTimeout = std::chrono::seconds(0);
 
+        Debug::Initialize("AsteroidsServer");
+
         Server server(std::move(gameLogic), config);
         return server.RunServer();
     }
@@ -70,6 +74,8 @@ int main(int argc, char** argv) {
         if (colon != std::string::npos) {
             p = static_cast<uint16_t>(std::atoi(connectTo.substr(colon + 1).c_str()));
         }
+
+		Debug::Initialize("AsteroidsClient");
 
         Client client(std::move(gameLogic), std::move(gameRenderer), customClientId);
         return client.RunClient(hoststr, p);

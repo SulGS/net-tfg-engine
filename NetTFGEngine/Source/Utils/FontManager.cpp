@@ -1,4 +1,5 @@
 #include "FontManager.hpp"
+#include "Utils/Debug/Debug.hpp"
 #include <iostream>
 
 FontManager::FontManager() {
@@ -41,7 +42,7 @@ bool FontManager::LoadFont(const std::string& fontName, const std::string& fontP
 
     FT_Done_Face(face);
     
-    std::cout << "Loaded font: " << fontName << " from " << fontPath << std::endl;
+    Debug::Info("FontManager") << "Loaded font: " << fontName << " from " << fontPath << "\n";
     return true;
 }
 

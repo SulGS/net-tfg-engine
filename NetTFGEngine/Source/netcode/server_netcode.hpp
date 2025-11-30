@@ -1,6 +1,5 @@
-#ifndef SERVER_NETCODE_H
+﻿#ifndef SERVER_NETCODE_H
 #define SERVER_NETCODE_H
-
 #include "netcode_common.hpp"
 #include <set>
 #include <algorithm>
@@ -18,39 +17,32 @@ public:
         appliedInputs[input.frame][input.playerId] = input;
     }
 
-    // Mark a player as connected (use on first connect or reconnect)
     void OnPlayerConnected(int playerId) {
         std::lock_guard<std::mutex> lk(mtx);
         connectedPlayers.insert(playerId);
     }
 
-    // Call this when a player successfully reconnected.
-    // This method fills any missing inputs for recent frames with a "zero" input
-    // so the server doesn't detect a spurious rollback due to missing inputHistory
-    // entries caused by the disconnect. It also marks the player as connected.
     void OnPlayerReconnected(int playerId) {
         std::lock_guard<std::mutex> lk(mtx);
-        // mark connected
         connectedPlayers.insert(playerId);
-
     }
 
-
-    // Mark a player as disconnected
     void OnPlayerDisconnected(int playerId) {
         std::lock_guard<std::mutex> lk(mtx);
         connectedPlayers.erase(playerId);
     }
 
-
-
     InputEntry GetInputForPlayerAtFrame(int playerId, int frame) {
         std::lock_guard<std::mutex> lk(mtx);
         auto frameIt = appliedInputs.find(frame);
-        if (frameIt == appliedInputs.end()) return InputEntry{frame, MakeZeroInputBlob(), playerId};
-        
+        if (frameIt == appliedInputs.end()) {
+            return InputEntry{ frame, MakeZeroInputBlob(), playerId };
+        }
+
         auto playerIt = frameIt->second.find(playerId);
-        return playerIt != frameIt->second.end() ? playerIt->second : InputEntry{frame, MakeZeroInputBlob(), playerId};
+        return playerIt != frameIt->second.end() ?
+            playerIt->second :
+            InputEntry{ frame, MakeZeroInputBlob(), playerId };
     }
 
     int GetSizeOfInputsAtFrame(int frame) {
@@ -60,47 +52,32 @@ public:
         return frameIt->second.size();
     }
 
-    void SimulateFrame(int frame) {
-        std::map<int, InputEntry> inputs;
+   
 
-        auto frameInIt = appliedInputs.find(frame);
-        if (frameInIt != appliedInputs.end())
-        {
-            inputs = frameInIt->second;
-        }
+    // ✅ FIXED: Now thread-safe with mutex lock
+    StateUpdate Tick() {
+        std::lock_guard<std::mutex> lk(mtx);
 
-		std::vector<EventEntry> events;
-        auto frameEvIt = appliedEvents.find(frame);
-        if (frameEvIt != appliedEvents.end())
-        {
-            events = frameEvIt->second;
-        }
-
-
-        gameLogic->SimulateFrame(gameState,events, inputs);
-
-		for (auto& event : gameLogic->generatedEvents)
-		{
-			event.frame = frame + 1;
-		}
-
-		appliedEvents[frame+1] = gameLogic->generatedEvents;
-
-        gameState.frame = frame;
-    }
-
-    StateUpdate Tick(int currentFrame) {
-        
         SimulateFrame(currentFrame);
 
         // Create state update
         StateUpdate update;
         update.frame = currentFrame;
-		update.state = gameState;
+        update.state = gameState;
 
+        currentFrame++;
 
+        // Cleanup old frames every 60 frames
+        if (currentFrame % 60 == 0) {
+            CleanupOldFramesInternal();
+        }
 
         return update;
+    }
+
+    int GetCurrentFrame() {
+        std::lock_guard<std::mutex> lk(mtx);
+        return currentFrame;
     }
 
     GameStateBlob GetCurrentState() {
@@ -111,24 +88,79 @@ public:
     void SetGameLogic(std::unique_ptr<IGameLogic> logic) {
         std::lock_guard<std::mutex> lk(mtx);
         gameLogic = std::move(logic);
-		gameLogic->isServer = true;
+        gameLogic->isServer = true;
         gameLogic->Init(gameState);
     }
 
-    IGameLogic* GetGameLogic()
-    {
+    // ✅ FIXED: Now thread-safe with mutex lock
+    IGameLogic* GetGameLogic() {
+        std::lock_guard<std::mutex> lk(mtx);
         return gameLogic.get();
     }
 
-private:
+    
 
+private:
     std::mutex mtx;
+    int currentFrame = 0;
     GameStateBlob gameState;
     std::unique_ptr<IGameLogic> gameLogic;
-    InputHistory appliedInputs; 
-	EventsHistory appliedEvents; 
-
+    InputHistory appliedInputs;
+    EventsHistory appliedEvents;
     std::set<int> connectedPlayers;
+
+    // ✅ FIXED: Now private and assumes lock is held
+    void SimulateFrame(int frame) {
+        // Assumes caller holds mtx lock
+
+        std::map<int, InputEntry> inputs;
+        auto frameInIt = appliedInputs.find(frame);
+        if (frameInIt != appliedInputs.end()) {
+            inputs = frameInIt->second;
+        }
+
+        std::vector<EventEntry> events;
+        auto frameEvIt = appliedEvents.find(frame);
+        if (frameEvIt != appliedEvents.end()) {
+            events = frameEvIt->second;
+        }
+
+        gameLogic->SimulateFrame(gameState, events, inputs);
+
+        for (auto& event : gameLogic->generatedEvents) {
+            event.frame = frame + 1;
+        }
+        appliedEvents[frame + 1] = gameLogic->generatedEvents;
+        gameState.frame = frame;
+    }
+
+    // ✅ NEW: Cleanup old frames to prevent unbounded memory growth
+    // Internal version called from Tick() - assumes lock is held
+    void CleanupOldFramesInternal() {
+        // Keep last 300 frames (5 seconds at 60fps)
+        const int FRAMES_TO_KEEP = 300;
+        int minFrameToKeep = currentFrame - FRAMES_TO_KEEP;
+
+        // Clean up old inputs
+        for (auto it = appliedInputs.begin(); it != appliedInputs.end(); ) {
+            if (it->first < minFrameToKeep) {
+                it = appliedInputs.erase(it);
+            }
+            else {
+                ++it;
+            }
+        }
+
+        // Clean up old events
+        for (auto it = appliedEvents.begin(); it != appliedEvents.end(); ) {
+            if (it->first < minFrameToKeep) {
+                it = appliedEvents.erase(it);
+            }
+            else {
+                ++it;
+            }
+        }
+    }
 };
 
 #endif // SERVER_NETCODE_H

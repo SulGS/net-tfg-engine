@@ -20,7 +20,6 @@ public:
     }
 
     void ProcessEvents(const std::vector<EventEntry>& events) {
-		//std::cout << "isServer: " << isServer << "\n";
         for (const auto& eventEntry : events) {
             auto it = handlers.find(eventEntry.event.type);
             if (it != handlers.end()) {

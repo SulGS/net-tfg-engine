@@ -4,6 +4,7 @@
 #include "OpenGL/OpenGLWindow.hpp"
 #include "OpenGL/Mesh.hpp"
 #include "Utils/Input.hpp"
+#include "Utils/Debug/Debug.hpp"
 
 const int RENDER_TICKS_PER_SECOND = 144;
 const int RENDER_MS_PER_TICK = 1000 / RENDER_TICKS_PER_SECOND;
@@ -140,7 +141,7 @@ public:
                 double currentMs = (durationUs / 1000.0) / RENDER_TICKS_PER_SECOND;
                 double meanMs = (mean / 1000.0) / RENDER_TICKS_PER_SECOND;
 
-                std::cout << "Current: " << currentMs << " ms | Mean: " << meanMs << " ms\n";
+                Debug::Info("ClientWindow") << "Current: " << currentMs << " ms | Mean: " << meanMs << " ms\n";
 
                 tickCount = 0;
             }

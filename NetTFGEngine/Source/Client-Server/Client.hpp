@@ -13,6 +13,7 @@
 #include <thread>
 #include <cstdint>
 #include <cmath>    // for std::ceil
+#include "Utils/Debug/Debug.hpp"
 
 #include "Client-Server/InputDelayCalculator.hpp"
 
@@ -78,7 +79,7 @@ public:
 
         if (isReconnection_) 
         {
-			std::cout << "Waiting for state update after reconnection...\n";
+			Debug::Info("Client") << "Waiting for state update after reconnection...\n";
 			if (!WaitForStateUpdateAfterReconnection(prediction)) {
 				return 1;
 			}
@@ -390,7 +391,6 @@ private:
 				std::cerr << "[CLIENT] Malformed event packet, len=" << len << "\n";
 			}
 			else {
-				//std::cout << "[CLIENT] Received event update packet\n";
 				EventEntry event = net_.ParseEventEntryPacket(data, len);
 				prediction.OnServerEventUpdate(event);
 			}
@@ -404,62 +404,76 @@ private:
         }
     }
 
-    // ============================================================================
-    // FIXED RunClientLoop - proper frame management with sync
-    // ============================================================================
+    // Network thread function - processes packets directly
+    void NetworkThread(ClientPredictionNetcode& prediction,
+        ClientWindow& cWindow,
+        std::atomic<bool>& running) {
+        while (running.load()) {
+            net_.PumpCallbacks();
+
+            // Poll and process packets immediately
+            // ClientPredictionNetcode's mutex protects shared state
+            net_.Poll([&](const uint8_t* data, int len, HSteamNetConnection conn) {
+                ProcessIncomingPacket(prediction, cWindow, data, len, conn);
+                }, false);
+
+            // Small sleep to prevent busy-waiting (1ms = ~1000 polls/sec)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
 
     void RunClientLoop(ClientPredictionNetcode& prediction, ClientWindow& cWindow) {
         auto nextTick = std::chrono::high_resolution_clock::now();
 
+        // Start render thread
         std::thread renderThread(&ClientWindow::run, &cWindow);
 
-		prediction.UpdateCurrentFrame(1);
+        // Start network thread - processes packets directly
+        std::atomic<bool> networkRunning(true);
+        std::thread networkThread([this, &prediction, &cWindow, &networkRunning]() {
+            NetworkThread(prediction, cWindow, networkRunning);
+            });
+
+        prediction.UpdateCurrentFrame(1);
 
         while (cWindow.isRunning()) {
-            net_.PumpCallbacks();
+            // Network thread handles all packet processing
+            // No polling needed here!
 
-            // ===== SYNC: Poll and update currentFrame =====
-            net_.Poll([&](const uint8_t* data, int len, HSteamNetConnection conn) {
-                ProcessIncomingPacket(prediction,cWindow, data, len, conn);
-                },false);
-
-            // ===== Use currentFrame (now synced with server) =====
+            // ===== Game logic =====
             InputBlob localInput = prediction.GetGameLogic()->GenerateLocalInput();
-
             int frameToSubmit = prediction.SubmitLocalInput(localInput);
             net_.SendInput(serverConnection_, assignedPlayerId_, frameToSubmit, localInput);
 
-            // Predict to current frame
+            // Predict to current frame (mutex-protected)
             prediction.Tick();
-			cWindow.setLocalState(prediction.GetCurrentState());
-            //cWindow.setRenderState(prediction.GetCurrentState());
+            cWindow.setLocalState(prediction.GetCurrentState());
 
-            // ===== Debug output every 150 frames =====
+            // ===== Debug output every 30 frames =====
             if (frameToSubmit % 30 == 0) {
                 GameStateBlob s = prediction.GetCurrentState();
-                std::cout << "[CLIENT] Frame: " << frameToSubmit
+                Debug::Info("Client") << "[CLIENT] Frame: " << frameToSubmit
                     << " | Latency: " << inputDelayCalc.GetLastLatencyMs()
                     << "ms | InputDelayFrames: " << inputDelayCalc.GetInputDelayFrames() << "\n";
 
                 // Send RTT sync
                 InputDelayPacket packet;
-
                 packet.playerId = assignedPlayerId_;
                 packet.timestamp = inputDelayCalc.GetTimestampMs();
-
                 net_.SendInputDelaySync(serverConnection_, packet);
             }
 
-
             nextTick += std::chrono::milliseconds(MS_PER_TICK);
             std::this_thread::sleep_until(nextTick);
-
         }
 
+        // Clean shutdown
+        networkRunning.store(false);
+        networkThread.join();
         renderThread.join();
 
         if (serverConnection_ != k_HSteamNetConnection_Invalid) {
-            std::cout << "[CLIENT] Window closed, sending disconnect..." << std::endl;
+            Debug::Info("Client") << "[CLIENT] Window closed, sending disconnect..." << "\n";
             net_.GetSockets()->CloseConnection(serverConnection_,
                 k_ESteamNetConnectionEnd_App_Generic, nullptr, false);
             std::this_thread::sleep_for(std::chrono::milliseconds(100));

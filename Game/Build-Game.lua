@@ -5,7 +5,7 @@ project "Game"
    targetdir "Binaries/%{cfg.buildcfg}"
    staticruntime "off"
 
-   files { "Source/**.h", "Source/**.cpp" }
+   files { "Source/**.hpp", "Source/**.cpp" }
 
    includedirs
    {

@@ -71,7 +71,6 @@ private:
     static void keyCallback(GLFWwindow*, int key, int scancode, int action, int mods) {
         if (action == GLFW_PRESS)   keys[key] = KeyState::PRESSED;
         if (action == GLFW_RELEASE) keys[key] = KeyState::RELEASED;
-        //std::cout << "Key event: key=" << key << " action=" << action << "\n";
     }
 
     static void mouseButtonCallback(GLFWwindow*, int button, int action, int mods) {

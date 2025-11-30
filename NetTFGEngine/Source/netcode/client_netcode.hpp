@@ -1,6 +1,7 @@
 #ifndef CLIENT_NETCODE_H
 #define CLIENT_NETCODE_H
 #include "netcode_common.hpp"
+#include "Utils/Debug/Debug.hpp"
 #include <functional>
 #include <map>
 #include <deque>
@@ -78,7 +79,7 @@ public:
 		currentState.len = lastSnapshot.state.len;
 		memcpy(currentState.data, lastSnapshot.state.data, currentState.len);
 
-		std::cout << "[CLIENT] Reconciled to server state at frame " << update.frame
+		Debug::Info("ClientNetcode") << "[CLIENT] Reconciled to server state at frame " << update.frame
 			<< ". Current frame: " << currentFrame << "\n";
 
 		RemoveYetConfirmedSnapshots();

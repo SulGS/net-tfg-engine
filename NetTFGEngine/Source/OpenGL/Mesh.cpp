@@ -1,4 +1,5 @@
 #include "Mesh.hpp"
+#include "Utils/Debug/Debug.hpp"
 #include <iostream>
 
 Mesh::Mesh(const std::vector<float>& verts,
@@ -60,31 +61,26 @@ void Mesh::initBuffers() {
 
 void Mesh::render() const {
     if (VAO == 0) {
-        std::cout << "ERROR: VAO is 0, mesh not initialized!" << std::endl;
+        Debug::Error("RenderSystem") << "ERROR: VAO is 0, mesh not initialized!\n";
         return;
     }
 
-    /*std::cout << "  Mesh::render() - VAO: " << VAO 
-              << ", vertices: " << vertices.size() 
-              << ", indices: " << indices.size() << std::endl;*/
 
     glBindVertexArray(VAO);
     
     if (!indices.empty()) {
-        //std::cout << "    Drawing " << indices.size() << " indices" << std::endl;
         glDrawElements(GL_TRIANGLES, 
                        static_cast<GLsizei>(indices.size()), 
                        GL_UNSIGNED_INT, 
                        0);
     } else {
         int vertCount = static_cast<GLsizei>(vertices.size() / 3);
-        //std::cout << "    Drawing " << vertCount << " vertices" << std::endl;
         glDrawArrays(GL_TRIANGLES, 0, vertCount);
     }
     
     GLenum err = glGetError();
     if (err != GL_NO_ERROR) {
-        std::cout << "    ERROR after draw: " << err << std::endl;
+        Debug::Error("RenderSystem") << "    ERROR after draw: " << err << "\n";
     }
     
     glBindVertexArray(0);

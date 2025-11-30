@@ -371,7 +371,6 @@ public:
         for (auto& system : systems) {
             system->Update(entityManager,events, isServer, deltaTime);
         }
-		//std::cout << "ECSWorld Update: " << entityManager.GetEntityCount() << " entities, "
 		//	<< systems.size() << " systems, "
 		//	<< events.size() << " events generated.\n";
     }

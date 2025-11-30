@@ -5,6 +5,7 @@
 #include "netcode/netcode_common.hpp"
 #include "netcode/server_netcode.hpp"
 #include "netcode/valve_sockets_session.hpp"
+#include "Utils/Debug/Debug.hpp"
 #include <set>
 #include <map>
 #include <vector>
@@ -58,7 +59,6 @@ public:
         const ServerConfig& config = ServerConfig())
         : server_(std::move(gameLogic))
         , config_(config)
-        , currentFrame_(0)
         , running_(true)
         , activePlayerCount_(0)
     {
@@ -94,7 +94,6 @@ private:
     ServerConfig config_;
     std::map<HSteamNetConnection, PeerInfo> peerInfo_;
     std::vector<PeerInfo> allPlayers_;
-    int currentFrame_;
     bool running_;
     size_t activePlayerCount_;
     std::set<int> pendingReconnections_;
@@ -234,9 +233,9 @@ private:
 
         InputEntry ie = net_.ParseInputEntryPacket(data, len);
 
-        if (ie.frame < currentFrame_)
+        if (ie.frame < server_.GetCurrentFrame())
         {
-            ie.frame = currentFrame_;
+            ie.frame = server_.GetCurrentFrame();
         }
 
         server_.OnClientInputReceived(ie);
@@ -287,7 +286,7 @@ private:
         }
 
         if (type == PACKET_CLIENT_HELLO) {
-            std::cout << "Received CLIENT_HELLO during game, len=" << len << "\n";
+            Debug::Info("Server") << "Received CLIENT_HELLO during game, len=" << len << "\n";
             HandleClientHelloDuringGame(conn, data, len);
             return;
         }
@@ -369,121 +368,7 @@ private:
         }
     }
 
-    void RunServerLoop() {
-        auto nextTick = std::chrono::high_resolution_clock::now();
-        activePlayerCount_ = CountActivePlayers();
-
-        for (auto [conn, info] : peerInfo_) {
-            server_.OnPlayerConnected(info.playerId);
-        }
-
-        while (running_ && (activePlayerCount_ >= config_.minPlayers || !config_.stopOnBelowMin)) {
-
-			//std::cout << "Frame " << currentFrame_ << "\n";
-
-            net_.PumpCallbacks();  // CRITICAL: Pump callbacks to process connection state changes
-            net_.Poll([&](const uint8_t* data, int len, HSteamNetConnection conn) {
-                HandleReceiveEventInGame(conn, data, len);
-                }, false);
-
-            // Check for disconnections (simplified polling)
-            ISteamNetworkingSockets* sockets = net_.GetSockets();
-            std::vector<HSteamNetConnection> toRemove;
-
-            for (auto& [conn, info] : peerInfo_) {
-                SteamNetConnectionInfo_t connInfo;
-                if (sockets->GetConnectionInfo(conn, &connInfo)) {
-                    if (connInfo.m_eState == k_ESteamNetworkingConnectionState_ClosedByPeer ||
-                        connInfo.m_eState == k_ESteamNetworkingConnectionState_ProblemDetectedLocally ||
-                        connInfo.m_eState == k_ESteamNetworkingConnectionState_Dead) {
-                        toRemove.push_back(conn);
-                    }
-                }
-            }
-
-            for (auto conn : toRemove) {
-                HandleDisconnectInGame(conn);
-                server_.OnPlayerDisconnected(peerInfo_[conn].playerId);
-            }
-
-            StateUpdate update = server_.Tick(currentFrame_);
-
-            for (auto& [conn, info] : peerInfo_) {
-                if (!info.isConnected) {
-                    continue;
-                }
-                if (pendingReconnections_.find(info.playerId) != pendingReconnections_.end()) {
-                    server_.OnPlayerReconnected(info.playerId);
-                    pendingReconnections_.erase(info.playerId);
-                }
-            }
-
-            std::vector<EventEntry> generatedEvents;
-            server_.GetGameLogic()->GetGeneratedEvents(generatedEvents);
-
-			//std::cout << "Generated " << generatedEvents.size() << " events in frame " << currentFrame_ << "\n";
-
-            for (auto event : generatedEvents)
-            {
-				for (auto& [conn, info] : peerInfo_) {
-					if (!info.isConnected) {
-						continue;
-					}
-					if (pendingReconnections_.find(info.playerId) == pendingReconnections_.end()) {
-						net_.SendEventUpdate(conn, event);
-					}
-				}
-            }
-
-            for (auto& [conn, info] : peerInfo_) {
-                if (!info.isConnected) {
-                    continue;
-                }
-                if (pendingReconnections_.find(info.playerId) == pendingReconnections_.end()) {
-                    net_.SendStateUpdate(conn, update);
-                }
-            }
-
-            if (currentFrame_ % 30 == 0) {
-
-
-                auto now = std::chrono::high_resolution_clock::now();
-                auto duration = std::chrono::duration_cast<std::chrono::microseconds>(now - nextTick);
-                long long durationUs = duration.count();
-
-                tickDurations_.push_back(durationUs);
-
-                if (tickDurations_.size() > MAX_SAMPLES) {
-                    tickDurations_.erase(tickDurations_.begin());
-                }
-
-                long long sum = 0;
-                for (long long d : tickDurations_) {
-                    sum += d;
-                }
-                double mean = static_cast<double>(sum) / tickDurations_.size();
-
-                double currentMs = durationUs / 1000.0 / TICKS_PER_SECOND;
-                double meanMs = mean / 1000.0 / TICKS_PER_SECOND;
-
-                GameStateBlob s = server_.GetCurrentState();
-                //rollback_.GetGameLogic()->PrintState(s);
-
-                std::cout << "Current: " << std::fixed << std::setprecision(5) << currentMs << " ms | "
-                    << "Mean (last " << tickDurations_.size() << "): "
-                    << meanMs << " ms" << std::endl;
-            }
-
-            ++currentFrame_;
-            nextTick += std::chrono::milliseconds(MS_PER_TICK);
-            std::this_thread::sleep_until(nextTick);
-
-            if (config_.maxFrames > 0 && currentFrame_ > config_.maxFrames) {
-                std::cerr << "Reached maximum frames. Stopping server.\n";
-                running_ = false;
-            }
-        }
-    }
+    
 
     bool HandleNewClient(HSteamNetConnection conn, const std::string& clientId) {
         if (config_.requireClientId && !IsValidClientId(clientId)) {
@@ -539,7 +424,7 @@ private:
             SendServerAccept(conn, existingPlayer->playerId, true);
 
             StateUpdate currentUpdate;
-			currentUpdate.frame = currentFrame_;
+			currentUpdate.frame = server_.GetCurrentFrame();
 			currentUpdate.state = server_.GetCurrentState();
 
             net_.SendStateUpdate(conn, currentUpdate);
@@ -623,6 +508,139 @@ private:
         for (const auto& [conn, info] : peerInfo_) {
             net_.BroadcastGameStart(conn, info.playerId);
         }
+    }
+
+    // Network thread function for server
+    void ServerNetworkThread(std::atomic<bool>& running) {
+        while (running.load()) {
+            net_.PumpCallbacks();  // CRITICAL: Pump callbacks to process connection state changes
+
+            // Poll and process packets immediately
+            // Server mutex protects shared state
+            net_.Poll([&](const uint8_t* data, int len, HSteamNetConnection conn) {
+                HandleReceiveEventInGame(conn, data, len);
+                }, false);
+
+            // Check for disconnections
+            ISteamNetworkingSockets* sockets = net_.GetSockets();
+            std::vector<HSteamNetConnection> toRemove;
+
+            for (auto& [conn, info] : peerInfo_) {
+                SteamNetConnectionInfo_t connInfo;
+                if (sockets->GetConnectionInfo(conn, &connInfo)) {
+                    if (connInfo.m_eState == k_ESteamNetworkingConnectionState_ClosedByPeer ||
+                        connInfo.m_eState == k_ESteamNetworkingConnectionState_ProblemDetectedLocally ||
+                        connInfo.m_eState == k_ESteamNetworkingConnectionState_Dead) {
+                        toRemove.push_back(conn);
+                    }
+                }
+            }
+
+            for (auto conn : toRemove) {
+                HandleDisconnectInGame(conn);
+                server_.OnPlayerDisconnected(peerInfo_[conn].playerId);
+            }
+
+            // Small sleep to prevent busy-waiting
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+
+    void RunServerLoop() {
+        auto nextTick = std::chrono::high_resolution_clock::now();
+        activePlayerCount_ = CountActivePlayers();
+
+        for (auto [conn, info] : peerInfo_) {
+            server_.OnPlayerConnected(info.playerId);
+        }
+
+        // Start network thread
+        std::atomic<bool> networkRunning(true);
+        std::thread networkThread([this, &networkRunning]() {
+            ServerNetworkThread(networkRunning);
+            });
+
+        while (running_ && (activePlayerCount_ >= config_.minPlayers || !config_.stopOnBelowMin)) {
+
+            // Run game simulation tick
+            StateUpdate update = server_.Tick();
+
+            // Handle reconnections
+            for (auto& [conn, info] : peerInfo_) {
+                if (!info.isConnected) {
+                    continue;
+                }
+                if (pendingReconnections_.find(info.playerId) != pendingReconnections_.end()) {
+                    server_.OnPlayerReconnected(info.playerId);
+                    pendingReconnections_.erase(info.playerId);
+                }
+            }
+
+            // Send generated events to all connected players
+            std::vector<EventEntry> generatedEvents;
+            server_.GetGameLogic()->GetGeneratedEvents(generatedEvents);
+
+            for (auto event : generatedEvents) {
+                for (auto& [conn, info] : peerInfo_) {
+                    if (!info.isConnected) {
+                        continue;
+                    }
+                    if (pendingReconnections_.find(info.playerId) == pendingReconnections_.end()) {
+                        net_.SendEventUpdate(conn, event);
+                    }
+                }
+            }
+
+            // Send state updates to all connected players
+            for (auto& [conn, info] : peerInfo_) {
+                if (!info.isConnected) {
+                    continue;
+                }
+                if (pendingReconnections_.find(info.playerId) == pendingReconnections_.end()) {
+                    net_.SendStateUpdate(conn, update);
+                }
+            }
+
+            // Performance monitoring every 30 frames
+            if (server_.GetCurrentFrame() % 30 == 0) {
+                auto now = std::chrono::high_resolution_clock::now();
+                auto duration = std::chrono::duration_cast<std::chrono::microseconds>(now - nextTick);
+                long long durationUs = duration.count();
+
+                tickDurations_.push_back(durationUs);
+
+                if (tickDurations_.size() > MAX_SAMPLES) {
+                    tickDurations_.erase(tickDurations_.begin());
+                }
+
+                long long sum = 0;
+                for (long long d : tickDurations_) {
+                    sum += d;
+                }
+                double mean = static_cast<double>(sum) / tickDurations_.size();
+
+                double currentMs = durationUs / 1000.0 / TICKS_PER_SECOND;
+                double meanMs = mean / 1000.0 / TICKS_PER_SECOND;
+
+                GameStateBlob s = server_.GetCurrentState();
+
+                Debug::Info("Server") << "Current: " << std::fixed << std::setprecision(5) << currentMs << " ms | "
+                    << "Mean (last " << tickDurations_.size() << "): "
+                    << meanMs << " ms" << "\n";
+            }
+
+            nextTick += std::chrono::milliseconds(MS_PER_TICK);
+            std::this_thread::sleep_until(nextTick);
+
+            if (config_.maxFrames > 0 && server_.GetCurrentFrame() > config_.maxFrames) {
+                std::cerr << "Reached maximum frames. Stopping server.\n";
+                running_ = false;
+            }
+        }
+
+        // Clean shutdown
+        networkRunning.store(false);
+        networkThread.join();
     }
 
     void PrintServerConfig() {

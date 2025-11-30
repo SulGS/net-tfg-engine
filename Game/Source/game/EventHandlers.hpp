@@ -10,7 +10,6 @@ class SpawnBulletHandler : public IEventHandler {
 public:
     void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
     {
-		//std::cout << "Processing SPAWN_BULLET event\n";
 
         
     }
@@ -20,7 +19,6 @@ class BulletCollidesHandler : public IEventHandler {
 public:
     void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
     {
-        //std::cout << "Processing BULLET_COLLIDES event\n";
 
         auto coll_ev = *reinterpret_cast<const BulletCollidesEventData*>(event.data);
 
@@ -31,7 +29,6 @@ public:
             if (play->playerId == coll_ev.playerId && ship->isAlive) {
                 ship->health -= 5;
 
-				//std::cout << "Player " << play->playerId << " hit! New health: " << ship->health << "\n";
 
 
                 if (ship->health <= 0) {
@@ -66,7 +63,6 @@ class DeathHandler : public IEventHandler {
 public:
 	void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
 	{
-		//std::cout << "Processing DEATH event\n";
 
 		auto death_ev = *reinterpret_cast<const DeathEventData*>(event.data);
 		auto query = world.GetEntityManager().CreateQuery<Playable, SpaceShip>();
@@ -90,7 +86,6 @@ class RespawnHandler : public IEventHandler {
 public:
 	void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
 	{
-		//std::cout << "Processing RESPAWN event\n";
 
 		auto respawn_ev = *reinterpret_cast<const RespawnEventData*>(event.data);
 		auto query = world.GetEntityManager().CreateQuery<Playable, Transform, SpaceShip>();

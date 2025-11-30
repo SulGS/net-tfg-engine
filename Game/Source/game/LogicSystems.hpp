@@ -23,11 +23,9 @@ public:
     void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
         const float WORLD_SIZE = 400.0f;
 
-        //std::cout << "BulletSystem Update\n";
 
         auto query = entityManager.CreateQuery<Transform, ECSBullet>();
         for (auto [entity, transform, ecsb] : query) {
-            //std::cout << "  Bullet ID: " << ecsb->id << " Pos: (" << pos->x << ", " << pos->y << ") Vel: (" << ecsb->velX << ", " << ecsb->velY << ") Lifetime: " << ecsb->lifetime << "\n";
             // Move bullet
 
             transform->translate(glm::vec3(ecsb->velX, ecsb->velY, 0.0f));
@@ -39,7 +37,6 @@ public:
             if (ecsb->lifetime <= 0 ||
                 transform->getPosition().x < -WORLD_SIZE || transform->getPosition().x > WORLD_SIZE ||
                 transform->getPosition().y < -WORLD_SIZE || transform->getPosition().y > WORLD_SIZE) {
-                //std::cout << "  Bullet ID: " << ecsb->id << " expired or out of bounds, destroying entity.\n";
                 entityManager.DestroyEntity(entity);
             }
         }
@@ -51,7 +48,6 @@ public:
     void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
         auto query = entityManager.CreateQuery<Transform, Playable, SpaceShip>();
 
-        //std::cout << "InputSystem Update\n";
         for (auto [entity, transform, play, ship] : query) {
             int p = play->playerId;
             InputBlob input = play->input;
@@ -106,11 +102,7 @@ public:
 
         auto colliders = entityManager.CreateQuery<Playable, BoxCollider2D>();
 
-        /*for (auto [entity, play, col] : colliders) {
-            std::cout << "Collider Player: " << play->playerId << " Enabled: " << col->isEnabled << "\n";
-        }*/
 
-        //std::cout << "InputSystem Update\n";
         for (auto [entity, transform, play, ship] : query) {
             int p = play->playerId;
             InputBlob input = play->input;

@@ -3,6 +3,7 @@
 
 #include "ecs/ecs.hpp"
 #include "ecs/ecs_common.hpp"
+#include "Utils/Debug/Debug.hpp"
 #include "Mesh.hpp"
 #include "OpenGLIncludes.hpp"
 #include <iostream>
@@ -36,7 +37,7 @@ public:
     }
 
     if (!activeCamera || !cameraTransform) {
-        std::cout << "ERROR: No camera found!" << std::endl;
+        Debug::Warning("RenderSystem") << "No camera found" << "\n";
         return;
     }
 
