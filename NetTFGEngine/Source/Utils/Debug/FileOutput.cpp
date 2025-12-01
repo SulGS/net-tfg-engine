@@ -22,9 +22,9 @@ void FileOutput::Write(const LogMessage& msg) {
     char timeBuf[32];
     std::strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", &tm);
 
-    file << timeBuf << " ["
+    file << timeBuf << ": " << LevelToString(msg.level) << " ["
         << msg.channel << "] "
-        << msg.text << "\n";
+        << msg.text;
 }
 
 void FileOutput::Close() {

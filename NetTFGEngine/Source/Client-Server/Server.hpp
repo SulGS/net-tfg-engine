@@ -82,7 +82,7 @@ public:
 
         BroadcastGameStart();
 
-        std::cerr << "Starting server game loop.\n";
+        Debug::Info("Server") << "Starting server game loop.\n";
         RunServerLoop();
 
         return 0;
@@ -149,26 +149,26 @@ private:
 
     bool HandleNewConnectionInGame(HSteamNetConnection conn, const std::string& clientId) {
         if (!config_.allowMidGameJoin) {
-            std::cerr << "New connection rejected (mid-game join disabled): " << clientId << "\n";
+            Debug::Info("Server") << "New connection rejected (mid-game join disabled): " << clientId << "\n";
             net_.GetSockets()->CloseConnection(conn, k_ESteamNetConnectionEnd_App_Generic, nullptr, false);
             return false;
         }
 
         if (peerInfo_.size() >= config_.maxPlayers) {
-            std::cerr << "New connection rejected: server full ("
+            Debug::Info("Server") << "New connection rejected: server full ("
                 << peerInfo_.size() << "/" << config_.maxPlayers << ")\n";
             net_.GetSockets()->CloseConnection(conn, k_ESteamNetConnectionEnd_App_Generic, nullptr, false);
             return false;
         }
 
         if (config_.requireClientId && !IsValidClientId(clientId)) {
-            std::cerr << "New connection rejected (invalid client ID): " << clientId << "\n";
+            Debug::Info("Server") << "New connection rejected (invalid client ID): " << clientId << "\n";
             net_.GetSockets()->CloseConnection(conn, k_ESteamNetConnectionEnd_App_Generic, nullptr, false);
             return false;
         }
 
         if (IsClientIdInUse(clientId)) {
-            std::cerr << "New connection rejected (duplicate ID): " << clientId << "\n";
+            Debug::Info("Server") << "New connection rejected (duplicate ID): " << clientId << "\n";
             net_.GetSockets()->CloseConnection(conn, k_ESteamNetConnectionEnd_App_Generic, nullptr, false);
             return false;
         }
@@ -181,7 +181,7 @@ private:
         allPlayers_.push_back(info);
         peerInfo_[conn] = info;
 
-        std::cerr << "Player " << info.playerId
+        Debug::Info("Server") << "Player " << info.playerId
             << " (" << clientId << ") joined mid-game\n";
 
         SendServerAccept(conn, info.playerId, false);
@@ -194,7 +194,7 @@ private:
         PeerInfo* playerInfo = FindPlayerByClientId(clientId);
 
         if (!playerInfo || playerInfo->isConnected) {
-            std::cerr << "Unknown client attempted reconnection: " << clientId << "\n";
+            Debug::Info("Server") << "Unknown client attempted reconnection: " << clientId << "\n";
             net_.GetSockets()->CloseConnection(conn, k_ESteamNetConnectionEnd_App_Generic, nullptr, false);
             return false;
         }
@@ -204,7 +204,7 @@ private:
             now - playerInfo->disconnectTime);
 
         if (elapsed > config_.reconnectionTimeout && config_.reconnectionTimeout.count() > 0) {
-            std::cerr << "Reconnection timeout exceeded for " << clientId << "\n";
+            Debug::Info("Server") << "Reconnection timeout exceeded for " << clientId << "\n";
             net_.GetSockets()->CloseConnection(conn, k_ESteamNetConnectionEnd_App_Generic, nullptr, false);
             return false;
         }
@@ -216,7 +216,7 @@ private:
         playerInfo->isConnected = true;
         peerInfo_[conn] = *playerInfo;
 
-        std::cerr << "Player " << playerInfo->playerId << " (" << clientId
+        Debug::Info("Server") << "Player " << playerInfo->playerId << " (" << clientId
             << ") reconnected after " << elapsed.count() << "s\n";
 
         SendServerAccept(conn, playerInfo->playerId, true);
@@ -227,7 +227,7 @@ private:
     void HandleInputPacket(HSteamNetConnection conn, const uint8_t* data, int len) {
         const size_t EXPECTED_MIN_LEN = 1 + 4 + 4 + sizeof(InputBlob);
         if (len < EXPECTED_MIN_LEN) {
-            std::cerr << "[SERVER] Malformed input packet, len=" << len << "\n";
+            Debug::Info("Server") << "[SERVER] Malformed input packet, len=" << len << "\n";
             return;
         }
 
@@ -264,7 +264,7 @@ private:
         const ClientHelloPacket* hello = (const ClientHelloPacket*)data;
         std::string clientId(hello->clientId);
 
-        std::cerr << "Client attempting connection/reconnection during game: " << clientId << "\n";
+        Debug::Info("Server") << "Client attempting connection/reconnection during game: " << clientId << "\n";
 
         // Add to poll group
         net_.AddConnectionToPollGroup(conn);
@@ -300,7 +300,7 @@ private:
             return;
         }
 
-        std::cerr << "[SERVER] Received unknown packet type " << (int)type << ", len=" << len << "\n";
+        Debug::Info("Server") << "[SERVER] Received unknown packet type " << (int)type << ", len=" << len << "\n";
     }
 
     void HandleDisconnectInGame(HSteamNetConnection conn) {
@@ -311,7 +311,7 @@ private:
         }
 
         int playerId = it->second.playerId;
-        std::cerr << "Player " << playerId << " disconnected\n";
+        Debug::Info("Server") << "Player " << playerId << " disconnected\n";
 
         if (config_.allowReconnection) {
             // Mark as disconnected but keep in allPlayers_ for reconnection
@@ -327,12 +327,12 @@ private:
             }
 
             if (config_.reconnectionTimeout.count() > 0) {
-                std::cerr << "Player " << playerId
+                Debug::Info("Server") << "Player " << playerId
                     << " can reconnect within "
                     << config_.reconnectionTimeout.count() << " seconds\n";
             }
             else {
-                std::cerr << "Player " << playerId
+                Debug::Info("Server") << "Player " << playerId
                     << " can reconnect indefinitely\n";
             }
         }
@@ -341,14 +341,14 @@ private:
         activePlayerCount_--;
 
         if (config_.stopOnBelowMin && activePlayerCount_ < config_.minPlayers) {
-            std::cerr << "Not enough active clients (" << activePlayerCount_
+            Debug::Info("Server") << "Not enough active clients (" << activePlayerCount_
                 << " < " << config_.minPlayers << "). Stopping server.\n";
             running_ = false;
         }
     }
 
     void HandleConnectInGame(HSteamNetConnection conn) {
-        std::cerr << "New connection during game, waiting for identification...\n";
+        Debug::Info("Server") << "New connection during game, waiting for identification...\n";
     }
 
     size_t CountActivePlayers() {
@@ -372,7 +372,7 @@ private:
 
     bool HandleNewClient(HSteamNetConnection conn, const std::string& clientId) {
         if (config_.requireClientId && !IsValidClientId(clientId)) {
-            std::cerr << "Invalid client ID format: " << clientId << "\n";
+            Debug::Info("Server") << "Invalid client ID format: " << clientId << "\n";
             net_.GetSockets()->CloseConnection(conn, k_ESteamNetConnectionEnd_App_Generic, nullptr, false);
             return false;
         }
@@ -386,13 +386,13 @@ private:
         bool isAlreadyConnected = (existingPlayer != nullptr && existingPlayer->isConnected);
 
         if (isAlreadyConnected) {
-            std::cerr << "Duplicate client ID already connected: " << clientId << "\n";
-            std::cerr << "DEBUG: Existing connection is " << existingPlayer->connection << ", new is " << conn << "\n";
+            Debug::Info("Server") << "Duplicate client ID already connected: " << clientId << "\n";
+            Debug::Info("Server") << "DEBUG: Existing connection is " << existingPlayer->connection << ", new is " << conn << "\n";
 
             // Force close the old connection and accept the new one as reconnection
             auto oldConnIt = peerInfo_.find(existingPlayer->connection);
             if (oldConnIt != peerInfo_.end()) {
-                std::cerr << "Forcing old connection closed and treating as reconnection\n";
+                Debug::Info("Server") << "Forcing old connection closed and treating as reconnection\n";
                 peerInfo_.erase(oldConnIt);
                 net_.GetSockets()->CloseConnection(existingPlayer->connection, 0, nullptr, false);
                 isReconnection = true;
@@ -406,7 +406,7 @@ private:
 
             // Check reconnection timeout
             if (elapsed > config_.reconnectionTimeout && config_.reconnectionTimeout.count() > 0) {
-                std::cerr << "Reconnection timeout exceeded for " << clientId << "\n";
+                Debug::Info("Server") << "Reconnection timeout exceeded for " << clientId << "\n";
                 net_.GetSockets()->CloseConnection(conn, k_ESteamNetConnectionEnd_App_Generic, nullptr, false);
                 return false;
             }
@@ -417,7 +417,7 @@ private:
             peerInfo_[conn] = *existingPlayer;
             activePlayerCount_++;
 
-            std::cerr << "Player " << existingPlayer->playerId
+            Debug::Info("Server") << "Player " << existingPlayer->playerId
                 << " (" << clientId << ") reconnected after "
                 << elapsed.count() << "s\n";
 
@@ -428,14 +428,14 @@ private:
 			currentUpdate.state = server_.GetCurrentState();
 
             net_.SendStateUpdate(conn, currentUpdate);
-            std::cerr << "Sent state update to reconnected player " << existingPlayer->playerId << "\n";
+            Debug::Info("Server") << "Sent state update to reconnected player " << existingPlayer->playerId << "\n";
 
             return true;
         }
 
         // Not a reconnection - new player
         if (peerInfo_.size() >= config_.maxPlayers) {
-            std::cerr << "Connection rejected: server full\n";
+            Debug::Info("Server") << "Connection rejected: server full\n";
             net_.GetSockets()->CloseConnection(conn, k_ESteamNetConnectionEnd_App_Generic, nullptr, false);
             return false;
         }
@@ -450,7 +450,7 @@ private:
         peerInfo_[conn] = info;
         activePlayerCount_++;
 
-        std::cerr << "Client accepted as Player " << info.playerId
+        Debug::Info("Server") << "Client accepted as Player " << info.playerId
             << " (ID: " << clientId << ")"
             << ". Total clients: " << peerInfo_.size() << "/"
             << config_.maxPlayers << "\n";
@@ -458,7 +458,7 @@ private:
         SendServerAccept(conn, info.playerId, false);
 
         if (peerInfo_.size() == config_.minPlayers) {
-            std::cerr << "Minimum players reached. Game will start.\n";
+            Debug::Info("Server") << "Minimum players reached. Game will start.\n";
         }
 
         return true;
@@ -473,7 +473,7 @@ private:
         const ClientHelloPacket* hello = (const ClientHelloPacket*)data;
         std::string clientId(hello->clientId);
 
-        std::cerr << "Received CLIENT_HELLO from " << clientId << "\n";
+        Debug::Info("Server") << "Received CLIENT_HELLO from " << clientId << "\n";
 
         // Add to poll group BEFORE handling (in case it's already connected via callback)
         net_.AddConnectionToPollGroup(conn);
@@ -633,7 +633,7 @@ private:
             std::this_thread::sleep_until(nextTick);
 
             if (config_.maxFrames > 0 && server_.GetCurrentFrame() > config_.maxFrames) {
-                std::cerr << "Reached maximum frames. Stopping server.\n";
+                Debug::Info("Server") << "Reached maximum frames. Stopping server.\n";
                 running_ = false;
             }
         }
@@ -644,23 +644,23 @@ private:
     }
 
     void PrintServerConfig() {
-        std::cerr << "Waiting for " << config_.minPlayers << " clients to connect...\n";
+        Debug::Info("Server") << "Waiting for " << config_.minPlayers << " clients to connect...\n";
 
         if (config_.requireClientId) {
-            std::cerr << "Client ID validation is ENABLED\n";
+            Debug::Info("Server") << "Client ID validation is ENABLED\n";
         }
 
         if (config_.allowReconnection) {
-            std::cerr << "Reconnection is ENABLED (timeout: ";
+            Debug::Info("Server") << "Reconnection is ENABLED (timeout: ";
 
             if (config_.reconnectionTimeout.count() > 0) {
-                std::cerr << config_.reconnectionTimeout.count() << "s";
+                Debug::Info("Server") << config_.reconnectionTimeout.count() << "s";
             }
             else {
-                std::cerr << "infinity";
+                Debug::Info("Server") << "infinity";
             }
 
-            std::cerr << ")\n";
+            Debug::Info("Server") << ")\n";
         }
     }
 };

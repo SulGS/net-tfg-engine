@@ -4,7 +4,7 @@
 
 FontManager::FontManager() {
     if (FT_Init_FreeType(&ft)) {
-        std::cerr << "ERROR: Could not init FreeType Library" << std::endl;
+        Debug::Error("FontManager") << "ERROR: Could not init FreeType Library" << "\n";
     }
 }
 
@@ -22,7 +22,7 @@ FontManager::~FontManager() {
 bool FontManager::LoadFont(const std::string& fontName, const std::string& fontPath, unsigned int fontSize) {
     FT_Face face;
     if (FT_New_Face(ft, fontPath.c_str(), 0, &face)) {
-        std::cerr << "ERROR: Failed to load font: " << fontPath << std::endl;
+        Debug::Error("FontManager") << "ERROR: Failed to load font: " << fontPath << "\n";
         return false;
     }
 
@@ -49,7 +49,7 @@ bool FontManager::LoadFont(const std::string& fontName, const std::string& fontP
 void FontManager::GenerateCharacterTexture(FT_Face face, char c, std::map<char, Character>& characters) {
     // Load character glyph
     if (FT_Load_Char(face, c, FT_LOAD_RENDER)) {
-        std::cerr << "ERROR: Failed to load Glyph for character: " << c << std::endl;
+        Debug::Error("FontManager") << "ERROR: Failed to load Glyph for character: " << c << "\n";
         return;
     }
 

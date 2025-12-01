@@ -205,17 +205,4 @@ inline uint32_t bigEndianToHost32(uint32_t x) {
     return ntohl(x);
 }
 
-inline uint32_t f_hostToBigEndian32(float x) {
-    uint32_t asInt;
-    std::memcpy(&asInt, &x, sizeof(asInt));
-    return hostToBigEndian32(asInt);
-}
-
-inline uint32_t f_bigEndianToHost32(float x) {
-    uint32_t hostValue = bigEndianToHost32(x);
-    float value;
-    std::memcpy(&value, &hostValue, sizeof(value));
-    return value;
-}
-
 #endif // NETCODE_COMMON_H

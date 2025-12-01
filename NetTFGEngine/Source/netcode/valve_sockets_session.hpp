@@ -6,6 +6,7 @@
 #include <GameNetworkingSockets/steam/steamnetworkingsockets.h>
 #include <queue>
 #include <functional>
+#include "Utils/Debug/Debug.hpp"
 
 class GNSSession {
 public:
@@ -35,12 +36,12 @@ public:
     bool InitGNS() {
         SteamNetworkingErrMsg errMsg;
         if (!GameNetworkingSockets_Init(nullptr, errMsg)) {
-            std::cerr << "GameNetworkingSockets initialization failed: " << errMsg << "\n";
+            Debug::Info("Client") << "GameNetworkingSockets initialization failed: " << errMsg << "\n";
             return false;
         }
         sockets = SteamNetworkingSockets();
         if (!sockets) {
-            std::cerr << "Failed to get SteamNetworkingSockets interface\n";
+            Debug::Error("Sockets") << "Failed to get SteamNetworkingSockets interface\n";
             return false;
         }
         return true;
@@ -52,7 +53,7 @@ public:
 
     bool InitHost(uint16_t port) {
         if (!sockets) {
-            std::cerr << "GNS not initialized\n";
+            Debug::Error("Sockets") << "GNS not initialized\n";
             return false;
         }
 
@@ -67,13 +68,13 @@ public:
 
         listenSocket = sockets->CreateListenSocketIP(serverAddr, 1, &opt);
         if (listenSocket == k_HSteamListenSocket_Invalid) {
-            std::cerr << "Failed to create listen socket on port " << port << "\n";
+            Debug::Error("Sockets") << "Failed to create listen socket on port " << port << "\n";
             return false;
         }
 
         pollGroup = sockets->CreatePollGroup();
         if (pollGroup == k_HSteamNetPollGroup_Invalid) {
-            std::cerr << "Failed to create poll group\n";
+            Debug::Error("Sockets") << "Failed to create poll group\n";
             return false;
         }
 
@@ -81,20 +82,20 @@ public:
         s_pInstance = this;
 
         isServer = true;
-        std::cerr << "Server listening on port " << port << "\n";
+        Debug::Info("Sockets") << "Server listening on port " << port << "\n";
         return true;
     }
 
     bool ConnectTo(const std::string& hostStr, uint16_t port) {
         if (!sockets) {
-            std::cerr << "GNS not initialized\n";
+            Debug::Error("Sockets") << "GNS not initialized\n";
             return false;
         }
 
         SteamNetworkingIPAddr serverAddr;
         serverAddr.Clear();
         if (!serverAddr.ParseString(hostStr.c_str())) {
-            std::cerr << "Failed to parse server address: " << hostStr << "\n";
+            Debug::Error("Sockets") << "Failed to parse server address: " << hostStr << "\n";
             return false;
         }
         serverAddr.m_port = port;
@@ -104,13 +105,13 @@ public:
 
         connectedConnection = sockets->ConnectByIPAddress(serverAddr, 1, &opt);
         if (connectedConnection == k_HSteamNetConnection_Invalid) {
-            std::cerr << "Failed to initiate connection to " << hostStr << ":" << port << "\n";
+            Debug::Error("Sockets") << "Failed to initiate connection to " << hostStr << ":" << port << "\n";
             return false;
         }
 
         s_pInstance = this;
         isServer = false;
-        std::cerr << "Client connecting to " << hostStr << ":" << port << "\n";
+        Debug::Info("Sockets") << "Client connecting to " << hostStr << ":" << port << "\n";
         return true;
     }
 
@@ -343,7 +344,7 @@ public:
     void AddConnectionToPollGroup(HSteamNetConnection conn) {
         if (sockets && isServer && pollGroup != k_HSteamNetPollGroup_Invalid) {
             if (!sockets->SetConnectionPollGroup(conn, pollGroup)) {
-                std::cerr << "Warning: Failed to add connection to poll group\n";
+                Debug::Error("Sockets") << "Warning: Failed to add connection to poll group\n";
             }
         }
     }
@@ -385,31 +386,31 @@ private:
         if (isServer) {
             switch (pInfo->m_info.m_eState) {
             case k_ESteamNetworkingConnectionState_Connecting:
-                std::cerr << "New connection attempt from " << pInfo->m_info.m_szConnectionDescription << "\n";
+                Debug::Info("Sockets") << "New connection attempt from " << pInfo->m_info.m_szConnectionDescription << "\n";
                 if (sockets->AcceptConnection(pInfo->m_hConn) == k_EResultOK) {
-                    std::cerr << "Connection accepted, waiting to add to poll group...\n";
+                    Debug::Info("Sockets") << "Connection accepted, waiting to add to poll group...\n";
                 }
                 else {
-                    std::cerr << "Failed to accept connection\n";
+                    Debug::Error("Sockets") << "Failed to accept connection\n";
                     sockets->CloseConnection(pInfo->m_hConn, 0, nullptr, false);
                 }
                 break;
 
             case k_ESteamNetworkingConnectionState_Connected:
-                std::cerr << "Connection now established, adding to poll group\n";
+                Debug::Info("Sockets") << "Connection now established, adding to poll group\n";
                 if (!sockets->SetConnectionPollGroup(pInfo->m_hConn, pollGroup)) {
-                    std::cerr << "Failed to set poll group\n";
+                    Debug::Error("Sockets") << "Failed to set poll group\n";
                     sockets->CloseConnection(pInfo->m_hConn, 0, nullptr, false);
                 }
                 break;
 
             case k_ESteamNetworkingConnectionState_ClosedByPeer:
-                std::cerr << "Connection closed by peer: " << pInfo->m_info.m_szEndDebug << "\n";
+                Debug::Info("Sockets") << "Connection closed by peer: " << pInfo->m_info.m_szEndDebug << "\n";
                 sockets->CloseConnection(pInfo->m_hConn, 0, nullptr, false);
                 break;
 
             case k_ESteamNetworkingConnectionState_ProblemDetectedLocally:
-                std::cerr << "Connection problem detected locally: " << pInfo->m_info.m_szEndDebug << "\n";
+                Debug::Error("Sockets") << "Connection problem detected locally: " << pInfo->m_info.m_szEndDebug << "\n";
                 sockets->CloseConnection(pInfo->m_hConn, 0, nullptr, false);
                 break;
 

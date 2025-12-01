@@ -1,6 +1,7 @@
 #include "UIRenderSystem.hpp"
 #include <iostream>
 #include <algorithm>
+#include "Utils/Debug/Debug.hpp"
 
 // UI Shaders
 const char* uiVertexShader = R"(
@@ -450,7 +451,7 @@ GLuint UIRenderSystem::CompileShader(const char* source, GLenum type) {
     if (!success) {
         char infoLog[512];
         glGetShaderInfoLog(shader, 512, nullptr, infoLog);
-        std::cerr << "UI Shader compilation failed: " << infoLog << std::endl;
+        Debug::Info("UISystem") << "UI Shader compilation failed: " << infoLog << "\n";
     }
     
     return shader;
@@ -470,7 +471,7 @@ GLuint UIRenderSystem::CreateTextShaderProgram() {
     if (!success) {
         char infoLog[512];
         glGetProgramInfoLog(program, 512, nullptr, infoLog);
-        std::cerr << "Text shader linking failed: " << infoLog << std::endl;
+        Debug::Info("UISystem") << "Text shader linking failed: " << infoLog << "\n";
     }
     
     glDeleteShader(vertexShader);
@@ -493,7 +494,7 @@ GLuint UIRenderSystem::CreateShaderProgram() {
     if (!success) {
         char infoLog[512];
         glGetProgramInfoLog(program, 512, nullptr, infoLog);
-        std::cerr << "UI shader linking failed: " << infoLog << std::endl;
+        Debug::Info("UISystem") << "UI shader linking failed: " << infoLog << "\n";
     }
 
     glDeleteShader(vertexShader);

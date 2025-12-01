@@ -8,6 +8,7 @@
 #include <typeindex>
 #include <queue>
 #include <stdexcept>
+#include "Utils/Debug/Debug.hpp"
 
 using Entity = uint32_t;
 constexpr Entity NULL_ENTITY = 0;
@@ -158,7 +159,7 @@ public:
         std::type_index typeIndex(typeid(T));
         auto it = componentArrays.find(typeIndex);
         if (it == componentArrays.end()) {
-            std::cerr << typeIndex.name() << std::endl;
+            Debug::Info("ECS") << typeIndex.name() << "\n";
             throw std::invalid_argument("Component type not registered");
         }
 

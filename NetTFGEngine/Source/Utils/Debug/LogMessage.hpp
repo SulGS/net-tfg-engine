@@ -17,3 +17,13 @@ struct LogMessage {
     std::chrono::system_clock::time_point timestamp;
     std::thread::id threadId;
 };
+
+static const char* LevelToString(LogLevel level) {
+    switch (level) {
+    case LogLevel::Info:    return "[INFO]";
+    case LogLevel::Warning: return "[WARN]";
+    case LogLevel::Error:   return "[ERROR]";
+    case LogLevel::Critical:return "[CRITICAL]";
+    }
+    return "[UNKNOWN]";
+}

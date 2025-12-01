@@ -115,7 +115,7 @@ private:
         glGetProgramiv(shaderProgram, GL_LINK_STATUS, &success);
         if (!success) {
             glGetProgramInfoLog(shaderProgram, 512, nullptr, infoLog);
-            std::cerr << "Shader linking failed: " << infoLog << std::endl;
+            Debug::Error("RenderSystem") << "Shader linking failed: " << infoLog << "\n";
         }
 
         glDeleteShader(vertexShader);
@@ -137,7 +137,7 @@ private:
         glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
         if (!success) {
             glGetShaderInfoLog(shader, 512, nullptr, infoLog);
-            std::cerr << "Shader compilation failed: " << infoLog << std::endl;
+            Debug::Error("RenderSystem") << "Shader compilation failed: " << infoLog << "\n";
         }
 
         return shader;

@@ -1,4 +1,4 @@
-
+#include "Utils/Debug/Debug.hpp"
 
 class InputDelayCalculator {
 public:
@@ -25,13 +25,13 @@ public:
         const uint32_t MIN_REASONABLE_RTT = 1;      // 1ms minimum
 
         if (rtt > MAX_REASONABLE_RTT) {
-            std::cerr << "[WARNING] RTT too high: " << rtt
+            Debug::Info("DelayCalculator") << "[WARNING] RTT too high: " << rtt
                 << "ms (likely clock wrap or packet loss). Ignoring.\n";
             return;
         }
 
         if (rtt < MIN_REASONABLE_RTT) {
-            std::cerr << "[WARNING] RTT suspiciously low: " << rtt
+            Debug::Info("DelayCalculator") << "[WARNING] RTT suspiciously low: " << rtt
                 << "ms. Ignoring.\n";
             return;
         }

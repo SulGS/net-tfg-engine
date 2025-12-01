@@ -23,8 +23,8 @@ Mesh::~Mesh() {
 void Mesh::initBuffers() {
     // Validate vertex data (must be multiples of 3: x, y, z)
     if (vertices.size() % 3 != 0) {
-        std::cerr << "Error: Vertex data must have 3 components (x, y, z) per vertex!" << std::endl;
-        std::cerr << "Current size: " << vertices.size() << std::endl;
+        Debug::Error("RenderSystem") << "Error: Vertex data must have 3 components (x, y, z) per vertex!" << "\n";
+        Debug::Error("RenderSystem") << "Current size: " << vertices.size() << "\n";
         return;
     }
 
@@ -88,12 +88,12 @@ void Mesh::render() const {
 
 void Mesh::updateVertices(const std::vector<float>& newVertices) {
     if (newVertices.size() % 3 != 0) {
-        std::cerr << "Error: New vertex data must have 3 components (x, y, z) per vertex!" << std::endl;
+        Debug::Error("RenderSystem") << "Error: New vertex data must have 3 components (x, y, z) per vertex!" << "\n";
         return;
     }
 
     if (VBO == 0) {
-        std::cerr << "Error: VBO not initialized!" << std::endl;
+        Debug::Error("RenderSystem") << "Error: VBO not initialized!" << "\n";
         return;
     }
 

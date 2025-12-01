@@ -42,30 +42,30 @@ public:
             return 1;
         }
 
-        std::cerr << "Using client ID: " << clientId_ << "\n";
-        std::cerr << "Waiting for connection to server...\n";
+        Debug::Info("Client") << "Using client ID: " << clientId_ << "\n";
+        Debug::Info("Client") << "Waiting for connection to server...\n";
 
         if (!WaitForConnectionAndAuth()) {
             return 1;
         }
 
         if (isReconnection_) {
-            std::cerr << "Successfully reconnected!\n";
+            Debug::Info("Client") << "Successfully reconnected!\n";
         }
         else {
-            std::cerr << "Successfully authenticated!\n";
+            Debug::Info("Client") << "Successfully authenticated!\n";
 
             if (!WaitForGameStart()) {
                 return 1;
             }
         }
 
-        std::cerr << "Before creating prediction netcode\n";
+        Debug::Info("Client") << "Before creating prediction netcode\n";
 
         gameRenderer_->playerId = assignedPlayerId_;
 
-        ClientPredictionNetcode prediction(assignedPlayerId_, std::move(gameLogic_));
-        ClientWindow cWindow(
+        ClientPredictionNetcode* prediction = new ClientPredictionNetcode(assignedPlayerId_, std::move(gameLogic_));
+        ClientWindow* cWindow = new ClientWindow(
             [this](GameStateBlob& state, OpenGLWindow* win) {
                 gameRenderer_->Init(state, win);
             },
@@ -80,15 +80,15 @@ public:
         if (isReconnection_) 
         {
 			Debug::Info("Client") << "Waiting for state update after reconnection...\n";
-			if (!WaitForStateUpdateAfterReconnection(prediction)) {
+			if (!WaitForStateUpdateAfterReconnection(*prediction)) {
 				return 1;
 			}
         }
 
-        prediction.GetGameLogic()->playerId = assignedPlayerId_;
+        prediction->GetGameLogic()->playerId = assignedPlayerId_;
 
-        std::cerr << "Before running client loop\n";
-        RunClientLoop(prediction, cWindow);
+        Debug::Info("Client") << "Before running client loop\n";
+        RunClientLoop(*prediction, *cWindow);
 
         return 0;
     }
@@ -122,14 +122,14 @@ private:
 
         ISteamNetworkingSockets* sockets = net_.GetSockets();
         if (!sockets || serverConnection_ == k_HSteamNetConnection_Invalid) {
-            std::cerr << "Failed to send client hello: invalid connection\n";
+            Debug::Info("Client") << "Failed to send client hello: invalid connection\n";
             return false;
         }
 
         sockets->SendMessageToConnection(serverConnection_, &hello,
             sizeof(hello), k_nSteamNetworkingSend_Reliable, nullptr);
 
-        std::cerr << "Sent CLIENT_HELLO with ID: " << clientId_ << "\n";
+        Debug::Info("Client") << "Sent CLIENT_HELLO with ID: " << clientId_ << "\n";
         return true;
     }
 
@@ -139,7 +139,7 @@ private:
 		auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(15);
 		while (!stateReceived && running) {
 			if (std::chrono::steady_clock::now() > timeout) {
-				std::cerr << "Timeout waiting for state update after reconnection\n";
+				Debug::Info("Client") << "Timeout waiting for state update after reconnection\n";
 				return false;
 			}
 			net_.PumpCallbacks();
@@ -152,7 +152,7 @@ private:
 					StateUpdate update = net_.ParseStateUpdate(data, len);
 					prediction.OnServerStateUpdate(update);
 					stateReceived = true;
-					std::cerr << "Received state update after reconnection\n";
+					Debug::Info("Client") << "Received state update after reconnection\n";
 				}
 				}, true);
 			std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -162,7 +162,7 @@ private:
 
     bool HandleServerAccept(const uint8_t* data, int len) {
         if (len < sizeof(ServerAcceptPacket)) {
-            std::cerr << "Malformed SERVER_ACCEPT packet\n";
+            Debug::Info("Client") << "Malformed SERVER_ACCEPT packet\n";
             return false;
         }
 
@@ -171,23 +171,23 @@ private:
         isReconnection_ = accept->isReconnection;
 
         if (isReconnection_) {
-            std::cerr << "Reconnected as Player ID: " << assignedPlayerId_ << "\n";
+            Debug::Info("Client") << "Reconnected as Player ID: " << assignedPlayerId_ << "\n";
         }
         else {
-            std::cerr << "Assigned Player ID: " << assignedPlayerId_ << "\n";
+            Debug::Info("Client") << "Assigned Player ID: " << assignedPlayerId_ << "\n";
         }
 
         return true;
     }
 
     bool HandleServerReject(const uint8_t* data, int len) {
-        std::cerr << "Server rejected connection\n";
+        Debug::Info("Client") << "Server rejected connection\n";
         return false;
     }
 
     bool HandleGameStart(const uint8_t* data, int len, bool& gameStarted) {
         if (len < 1 + 4) {
-            std::cerr << "Malformed GAME_START packet\n";
+            Debug::Info("Client") << "Malformed GAME_START packet\n";
             return false;
         }
 
@@ -200,14 +200,14 @@ private:
         int playerIdFromStart = bigEndianToHost32(playerIdNet);
 
         if (assignedPlayerId_ != -1 && assignedPlayerId_ != playerIdFromStart) {
-            std::cerr << "WARNING: GAME_START player ID mismatch ("
+            Debug::Info("Client") << "WARNING: GAME_START player ID mismatch ("
                 << playerIdFromStart << " vs " << assignedPlayerId_ << ")\n";
         }
 
         assignedPlayerId_ = playerIdFromStart;
         gameStarted = true;
 
-        std::cerr << "Game starting with Player ID: " << assignedPlayerId_ << "\n";
+        Debug::Info("Client") << "Game starting with Player ID: " << assignedPlayerId_ << "\n";
         return true;
     }
 
@@ -237,7 +237,7 @@ private:
             return true;
         }
 
-        std::cerr << "Received unknown packet type: " << (int)type << "\n";
+        Debug::Info("Client") << "Received unknown packet type: " << (int)type << "\n";
         return true;
     }
 
@@ -261,7 +261,7 @@ private:
                 if (sockets->GetConnectionInfo(serverConnection_, &connInfo)) {
                     if (connInfo.m_eState == k_ESteamNetworkingConnectionState_Connected) {
                         connected = true;
-                        std::cerr << "Connected to server\n";
+                        Debug::Info("Client") << "Connected to server\n";
 
                         if (!SendClientHello()) {
                             running = false;
@@ -270,7 +270,7 @@ private:
                     }
                     else if (connInfo.m_eState == k_ESteamNetworkingConnectionState_ClosedByPeer ||
                         connInfo.m_eState == k_ESteamNetworkingConnectionState_Dead) {
-                        std::cerr << "Connection to server failed\n";
+                        Debug::Info("Client") << "Connection to server failed\n";
                         running = false;
                         break;
                     }
@@ -284,12 +284,12 @@ private:
             return false;
         }
 
-        std::cerr << "Waiting for server acceptance...\n";
+        Debug::Info("Client") << "Waiting for server acceptance...\n";
         auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10);
 
         while (!serverAccepted && running) {
             if (std::chrono::steady_clock::now() > timeout) {
-                std::cerr << "Timeout waiting for server acceptance\n";
+                Debug::Info("Client") << "Timeout waiting for server acceptance\n";
                 return false;
             }
             net_.PumpCallbacks();
@@ -312,12 +312,12 @@ private:
         bool gameStarted = false;
         bool running = true;
 
-        std::cerr << "Waiting for game to start...\n";
+        Debug::Info("Client") << "Waiting for game to start...\n";
         auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(30);
 
         while (!gameStarted && running) {
             if (std::chrono::steady_clock::now() > timeout) {
-                std::cerr << "Timeout waiting for game start\n";
+                Debug::Info("Client") << "Timeout waiting for game start\n";
                 return false;
             }
 
@@ -372,13 +372,13 @@ private:
 				cWin.setServerState(prediction.GetLatestServerState());
             }
             else {
-                std::cerr << "[CLIENT] Received malformed PACKET_STATE_UPDATE, len=" << len << "\n";
+                Debug::Info("Client") << "[CLIENT] Received malformed PACKET_STATE_UPDATE, len=" << len << "\n";
             }
         }else if (type == PACKET_INPUT_UPDATE) {
             const size_t EXPECTED_MIN_LEN = 1 + 4 + 4 + sizeof(InputBlob);
 
             if (len < EXPECTED_MIN_LEN) {
-                std::cerr << "[CLIENT] Malformed input packet, len=" << len << "\n";
+                Debug::Info("Client") << "[CLIENT] Malformed input packet, len=" << len << "\n";
             }
             else {
                 InputEntry ie = net_.ParseInputEntryPacket(data, len);
@@ -388,7 +388,7 @@ private:
         else if (type == PACKET_EVENT_UPDATE)  {
 			const size_t EXPECTED_MIN_LEN = 1 + 4 + 4;
 			if (len < EXPECTED_MIN_LEN) {
-				std::cerr << "[CLIENT] Malformed event packet, len=" << len << "\n";
+				Debug::Info("Client") << "[CLIENT] Malformed event packet, len=" << len << "\n";
 			}
 			else {
 				EventEntry event = net_.ParseEventEntryPacket(data, len);
