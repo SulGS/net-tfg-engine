@@ -7,6 +7,7 @@
 class SpaceShip : public IComponent {
 public:
     int health;
+    int remainingShootFrames;
     int shootCooldown; // frames until can shoot again
     int deathCooldown;
     bool isAlive;
@@ -25,6 +26,12 @@ public:
 
     ECSBullet() : id(-1), velX(0), velY(0), ownerId(-1), lifetime(0) {}
     ECSBullet(int i, float vx, float vy, int oid, int lt) : id(i), velX(vx), velY(vy), ownerId(oid), lifetime(lt) {}
+};
+
+class ChargingShootEffect : public IComponent {
+public:
+    int entity;
+    ChargingShootEffect() : entity(0) {}
 };
 
 #endif // COMPONENTS_ASTEROIDS

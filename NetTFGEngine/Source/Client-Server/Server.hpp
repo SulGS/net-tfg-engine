@@ -550,8 +550,11 @@ private:
         auto nextTick = std::chrono::high_resolution_clock::now();
         activePlayerCount_ = CountActivePlayers();
 
+        StateUpdate initialUpdate = server_.Tick();
+
         for (auto [conn, info] : peerInfo_) {
             server_.OnPlayerConnected(info.playerId);
+            net_.SendStateUpdate(conn, initialUpdate);
         }
 
         // Start network thread
@@ -591,15 +594,22 @@ private:
                 }
             }
 
-            // Send state updates to all connected players
-            for (auto& [conn, info] : peerInfo_) {
-                if (!info.isConnected) {
-                    continue;
-                }
-                if (pendingReconnections_.find(info.playerId) == pendingReconnections_.end()) {
-                    net_.SendStateUpdate(conn, update);
+            std::vector<DeltaStateBlob> generatedDeltas;
+            server_.GetGameLogic()->GetGeneratedDeltas(generatedDeltas);
+
+            if (generatedDeltas.size() > 0) 
+            {
+                // Send state updates to all connected players
+                for (auto& [conn, info] : peerInfo_) {
+                    if (!info.isConnected) {
+                        continue;
+                    }
+                    if (pendingReconnections_.find(info.playerId) == pendingReconnections_.end()) {
+                        net_.SendDeltasUpdate(conn, generatedDeltas);
+                    }
                 }
             }
+            
 
             // Performance monitoring every 30 frames
             if (server_.GetCurrentFrame() % 30 == 0) {

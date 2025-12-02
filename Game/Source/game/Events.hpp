@@ -3,9 +3,19 @@
 #include "netcode/netcode_common.hpp"
 
 enum AsteroidEventMask : uint8_t {
-	BULLET_COLLIDES = 0,
-	DEATH = 1,
-	RESPAWN = 2
+	SPAWN_BULLET = 0,
+	BULLET_COLLIDES = 1,
+	DEATH = 2,
+	RESPAWN = 3
+};
+
+struct SpawnBulletEventData {
+	int bulletId;
+	int ownerId;
+	float posX;
+	float posY;
+	float velX;
+	float velY;
 };
 
 

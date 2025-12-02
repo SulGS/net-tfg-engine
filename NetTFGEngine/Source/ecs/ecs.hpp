@@ -330,6 +330,8 @@ public:
     // Create a query for entities with specific components
     template<typename... Components>
     Query<Components...> CreateQuery() {
+        static_assert((std::is_base_of_v<IComponent, Components> && ...),
+            "All types must derive from Component");
         return Query<Components...>(this);
     }
 

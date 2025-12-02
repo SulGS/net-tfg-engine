@@ -330,6 +330,107 @@ public:
         return update;
     }
 
+    // type(1) + frame(4) + num of deltas(4) + N * delta
+    void SendDeltasUpdate(HSteamNetConnection conn, const std::vector<DeltaStateBlob>& deltas) {
+        if (!sockets || conn == k_HSteamNetConnection_Invalid) return;
+
+        size_t bufSize = 1 + 4 + 4;
+
+        for (const DeltaStateBlob& delta : deltas) {
+            bufSize += 4;         // delta_type
+            bufSize += 4;         // delta.len
+            bufSize += delta.len; // delta payload
+        }
+
+        std::vector<uint8_t> buf(bufSize);
+
+        size_t offset = 0;
+
+        buf[offset++] = PACKET_DELTA_STATE_UPDATE;
+
+        uint32_t f = hostToBigEndian32(deltas[0].frame);
+        std::memcpy(&buf[offset], &f, 4);
+        offset += 4;
+
+        uint32_t numDeltas = hostToBigEndian32(deltas.size());
+        std::memcpy(&buf[offset], &numDeltas, 4);
+        offset += 4;
+
+        for (DeltaStateBlob delta : deltas) 
+        {
+            uint32_t type = hostToBigEndian32(delta.delta_type);
+            std::memcpy(&buf[offset], &type, 4);
+            offset += 4;
+
+            uint32_t deltaLen = hostToBigEndian32(delta.len);
+            std::memcpy(&buf[offset], &deltaLen, 4);
+            offset += 4;
+
+            std::memcpy(&buf[offset], delta.data, delta.len);
+            offset += delta.len;
+        }
+
+        sockets->SendMessageToConnection(conn, buf.data(), buf.size(), k_nSteamNetworkingSend_Reliable, nullptr);
+    }
+
+    void ParseDeltasUpdate(const uint8_t* buf, size_t len, std::vector<DeltaStateBlob>& deltas)
+    {
+        deltas.clear();
+        size_t offset = 0;
+
+        // 1) Read packet type
+        if (offset + 1 > len) return;
+        uint8_t packetType = buf[offset++];
+        if (packetType != PACKET_DELTA_STATE_UPDATE)
+            return;
+
+        // 2) Read first frame
+        if (offset + 4 > len) return;
+        uint32_t frameBE;
+        std::memcpy(&frameBE, &buf[offset], 4);
+        offset += 4;
+        uint32_t frame = bigEndianToHost32(frameBE);
+
+        // 3) Read number of deltas
+        if (offset + 4 > len) return;
+        uint32_t numDeltasBE;
+        std::memcpy(&numDeltasBE, &buf[offset], 4);
+        offset += 4;
+        uint32_t numDeltas = bigEndianToHost32(numDeltasBE);
+
+        deltas.reserve(numDeltas);
+
+        // 4) Read each delta
+        for (uint32_t i = 0; i < numDeltas; i++)
+        {
+            DeltaStateBlob d{};
+
+            d.frame = frame;
+
+            // delta_type
+            if (offset + 4 > len) return;
+            uint32_t typeBE;
+            std::memcpy(&typeBE, &buf[offset], 4);
+            offset += 4;
+            d.delta_type = bigEndianToHost32(typeBE);
+
+            // delta_len
+            if (offset + 4 > len) return;
+            uint32_t deltaLenBE;
+            std::memcpy(&deltaLenBE, &buf[offset], 4);
+            offset += 4;
+            d.len = bigEndianToHost32(deltaLenBE);
+
+            // data pointer allocation
+            if (offset + d.len > len) return;
+            std::memcpy(d.data, &buf[offset], d.len);
+            offset += d.len;
+
+            deltas.push_back(d);
+        }
+    }
+
+
     void BroadcastGameStart(HSteamNetConnection conn, int playerId) {
         if (!sockets || conn == k_HSteamNetConnection_Invalid) return;
 

@@ -18,16 +18,19 @@ class ClientWindow {
 
     int tickCount = 0;
 
+    // Singleton window instance shared by all ClientWindow instances
+    static OpenGLWindow* window;
+    static std::mutex windowMutex;
+    static int instanceCount;
 
 public:
 
     std::mutex gStateMutex;
-    GameStateBlob PreviousServerState;     // previous server state for interpolation
-    GameStateBlob CurrentServerState;      // current server state for interpolation
-    GameStateBlob RenderState;       // final state to render (combines local + interpolated remote)
+    GameStateBlob PreviousServerState;
+    GameStateBlob CurrentServerState;
+    GameStateBlob RenderState;
     GameStateBlob PreviousLocalState;
-    GameStateBlob CurrentLocalState;  // latest client-side predicted state (local player)
-    OpenGLWindow* window{ nullptr };
+    GameStateBlob CurrentLocalState;
     std::chrono::steady_clock::time_point lastStateUpdate;
     std::chrono::steady_clock::time_point lastLocalUpdate;
     std::function<void(GameStateBlob&, OpenGLWindow*)> renderInitCallback;
@@ -40,6 +43,17 @@ public:
         : renderInitCallback(initCb), renderCallback(renderCb), interpolationCallback(interpolationCb)
     {
         lastStateUpdate = std::chrono::steady_clock::now();
+        std::lock_guard<std::mutex> lock(windowMutex);
+        instanceCount++;
+    }
+
+    ~ClientWindow() {
+        std::lock_guard<std::mutex> lock(windowMutex);
+        instanceCount--;
+        if (instanceCount == 0 && window) {
+            delete window;
+            window = nullptr;
+        }
     }
 
     void close() {
@@ -76,8 +90,15 @@ public:
     }
 
     bool run() {
-        window = new OpenGLWindow(800, 600, "Client");
-        Input::Init(window->getWindow());
+        // Initialize singleton window if not already created
+        {
+            std::lock_guard<std::mutex> lock(windowMutex);
+            if (!window) {
+                window = new OpenGLWindow(800, 600, "Client");
+                Input::Init(window->getWindow());
+            }
+        }
+
         if (renderInitCallback) {
             renderInitCallback(RenderState, window);
         }
@@ -112,8 +133,9 @@ public:
             }
 
             // Interpolate remote players from server states
-            // The callback should preserve local player and only interpolate remote players
-            interpolationCallback(PreviousServerState, CurrentServerState, PreviousLocalState, CurrentLocalState, RenderState, serverInterpolationFactor, localInterpolationFactor);
+            if (interpolationCallback) {
+                interpolationCallback(PreviousServerState, CurrentServerState, PreviousLocalState, CurrentLocalState, RenderState, serverInterpolationFactor, localInterpolationFactor);
+            }
 
             GameStateBlob stateCopy = RenderState;
             gStateMutex.unlock();
@@ -150,12 +172,13 @@ public:
             std::this_thread::sleep_until(nextTick);
         }
         gRunning = false;
-        // Clean up window owned by this thread
-        if (window) {
-            delete window;
-            window = nullptr;
-        }
         return true;
     }
 };
+
+// Static member definitions
+OpenGLWindow* ClientWindow::window = nullptr;
+std::mutex ClientWindow::windowMutex;
+int ClientWindow::instanceCount = 0;
+
 #endif //NETCODE_CLIENT_WINDOW_H

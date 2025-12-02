@@ -45,6 +45,46 @@ public:
 		framesAheadOfServer = framesAboveServer;
 	}
 
+	void OnServerDeltasUpdate(std::vector<DeltaStateBlob>& deltas)
+	{
+		Snapshot& snapshot = GetSnapshot(deltas[0].frame);
+		lastConfirmedFrame = deltas[0].frame;
+		snapshot.stateConfirmed = true;
+
+		bool needsCorrection = false;
+
+		for (DeltaStateBlob& delta : deltas) 
+		{
+			if (!(gameLogic->CompareStateWithDelta(snapshot.state, delta))) 
+			{
+				needsCorrection = true;
+				gameLogic->ApplyDeltaToGameState(snapshot.state, delta);
+			}
+		}
+
+		if (needsCorrection) 
+		{
+			currentFrame = lastConfirmedFrame + framesAheadOfServer;
+
+			gameLogic->Synchronize(snapshot.state);
+
+			// Re-simulate all frames after the server frame
+			for (int frame = deltas[0].frame; frame < currentFrame; ++frame) {
+				SimulateFrame(frame, true);
+			}
+
+			// Update current client state from the last predicted snapshotQ
+			Snapshot& lastSnapshot = GetSnapshot(currentFrame);
+			currentState.len = lastSnapshot.state.len;
+			memcpy(currentState.data, lastSnapshot.state.data, currentState.len);
+
+			Debug::Info("ClientNetcode") << "[CLIENT] Reconciled to server state at frame " << deltas[0].frame
+				<< ". Current frame: " << currentFrame << "\n";
+
+			RemoveYetConfirmedSnapshots();
+		}
+	}
+
 	void OnServerStateUpdate(const StateUpdate& update)
 	{
 		std::lock_guard<std::mutex>lock(mtx);

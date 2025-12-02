@@ -90,8 +90,15 @@ enum PacketType : uint8_t {
     PACKET_GAME_START = 0x04,
     PACKET_INPUT_ACK = 0x05,
     PACKET_INPUT_DELAY = 0x06,
-	PACKET_FRAME_UPDATE = 0x07,
+	PACKET_DELTA_STATE_UPDATE = 0x07,
 	PACKET_EVENT_UPDATE = 0x08
+};
+
+struct DeltaStateBlob {
+    int frame = 0;
+    int delta_type = 0;
+    uint8_t data[1024];
+    int len = 0;
 };
 
 struct InputBlob {
@@ -149,6 +156,7 @@ public:
     int frame = 0;
     int playerId = -1;
 	std::vector<EventEntry> generatedEvents;
+    std::vector<DeltaStateBlob> generatedDeltas;
 
     virtual ~IGameLogic() = default;
     virtual std::unique_ptr<IGameLogic> Clone() const = 0;
@@ -156,7 +164,11 @@ public:
     virtual void SimulateFrame(GameStateBlob& state, std::vector<EventEntry> events, std::map<int, InputEntry> inputs) = 0;
 	virtual void Synchronize(GameStateBlob& state) = 0;
     virtual void GetGeneratedEvents(std::vector<EventEntry>& events) { events = generatedEvents; }
+    virtual void GetGeneratedDeltas(std::vector<DeltaStateBlob>& deltas) { deltas = generatedDeltas; }
     virtual bool CompareStates(const GameStateBlob& a, const GameStateBlob& b) const = 0;
+    virtual bool CompareStateWithDelta(const GameStateBlob& state, const DeltaStateBlob& delta) const = 0;
+    virtual void GenerateDeltas(const GameStateBlob& previousState, const GameStateBlob& newState) = 0;
+    virtual void ApplyDeltaToGameState(GameStateBlob& state, const DeltaStateBlob& delta) = 0;
     virtual void Init(GameStateBlob& state) = 0;
     virtual void PrintState(const GameStateBlob& state) const = 0;
 };

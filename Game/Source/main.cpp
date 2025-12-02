@@ -5,7 +5,7 @@
 #include <chrono>
 
 #include "Client-Server/Server.hpp"  // Include for RunServer
-#include "Client-Server/Client.hpp"  // Include for RunClient
+#include "Client-Server/OnlineClient.hpp"  // Include for RunClient
 #include "game/asteroids.hpp"        // Include for game logic
 
 #include "Utils/Debug/Debug.hpp"
@@ -77,7 +77,7 @@ int main(int argc, char** argv) {
 
 		Debug::Initialize("AsteroidsClient");
 
-        Client client(std::move(gameLogic), std::move(gameRenderer), customClientId);
+        OnlineClient client(std::move(gameLogic), std::move(gameRenderer), customClientId);
         return client.RunClient(hoststr, p);
     }
 }

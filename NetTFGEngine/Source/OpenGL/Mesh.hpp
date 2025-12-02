@@ -4,7 +4,7 @@
 #include "OpenGLIncludes.hpp"
 #include "ecs/ecs.hpp"
 
-class Mesh : public IComponent {
+class Mesh {
 public:
     // Constructor: provide vertices (x, y, z), indices, and RGB color
     Mesh(const std::vector<float>& verts,

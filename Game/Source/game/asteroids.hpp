@@ -7,6 +7,7 @@
 #include <cstring>
 #include "Utils/Input.hpp"
 #include "OpenGL/IGameRenderer.hpp"
+#include <math.h>
 #include <cmath>
 #include "ecs/ecs.hpp"
 #include "ecs/ecs_gamelogic.hpp"
@@ -19,6 +20,7 @@
 #include "ecs/UI/UIElement.hpp"
 
 #include "GameState.hpp"
+#include "GameDelta.hpp"
 #include "Components.hpp"
 #include "LogicSystems.hpp"
 #include "RenderSystems.hpp"
@@ -43,6 +45,7 @@ public:
             printf("    Position: (%.2f, %.2f)\n", state.posX[i], state.posY[i]);
             printf("    Rotation: %f degrees\n", state.rot[i]);
             printf("    Health: %d\n", state.health[i]);
+            printf("    Remaining shoot frames: %d\n", state.remaingShootFrames[i]);
             printf("    Shoot Cooldown: %d\n", state.shootCooldown[i]);
             printf("    Death Cooldown: %d\n", state.deathCooldown[i]);
         }
@@ -99,6 +102,7 @@ public:
             transform->setRotation(glm::vec3(0.0f, 0.0f, static_cast<float>(s.rot[p])));
             ship->shootCooldown = s.shootCooldown[p];
             ship->health = s.health[p];
+            ship->remainingShootFrames = s.remaingShootFrames[p];
             ship->deathCooldown = s.deathCooldown[p];
 			ship->isAlive = s.alive[p];
         }
@@ -167,6 +171,7 @@ public:
             s.posY[p] = transform->getPosition().y;
             s.rot[p] = transform->getRotation().z;
             s.shootCooldown[p] = ship->shootCooldown;
+            s.remaingShootFrames[p] = ship->remainingShootFrames;
             s.health[p] = ship->health;
             s.deathCooldown[p] = ship->deathCooldown;
 			s.alive[p] = ship->isAlive;
@@ -198,6 +203,55 @@ public:
         return std::memcmp(a.data, b.data, sizeof(AsteroidShooterGameState)) == 0;
     }
 
+    bool CompareStateWithDelta(const GameStateBlob& state, const DeltaStateBlob& delta) const override {
+        if (delta.delta_type == DELTA_GAME_POSITIONS) 
+        {
+            return CheckGamePositionsDelta(state, delta);
+        }
+
+        return true;
+    }
+
+    void GenerateDeltas(const GameStateBlob& previousState, const GameStateBlob& newState) override 
+    {
+        generatedDeltas.clear();
+        AsteroidShooterGameState prevGs = *reinterpret_cast<const AsteroidShooterGameState*>(previousState.data);
+        AsteroidShooterGameState newGs = *reinterpret_cast<const AsteroidShooterGameState*>(newState.data);
+
+        if (prevGs.posX[0] != newGs.posX[0] ||
+            prevGs.posX[1] != newGs.posX[1] ||
+            prevGs.posY[0] != newGs.posY[0] ||
+            prevGs.posY[1] != newGs.posY[1]) 
+        {
+            DeltaStateBlob delta;
+            delta.frame = newState.frame;
+            delta.delta_type = DELTA_GAME_POSITIONS;
+            GamePositionsDelta gpd = *reinterpret_cast<const GamePositionsDelta*>(delta.data);
+            gpd.posX[0] = newGs.posX[0];
+            gpd.posX[1] = newGs.posX[1];
+            gpd.posY[0] = newGs.posY[0];
+            gpd.posY[1] = newGs.posY[1];
+            delta.len = sizeof(GamePositionsDelta);
+
+            generatedDeltas.push_back(delta);
+        }
+    }
+
+    void ApplyDeltaToGameState(GameStateBlob& state, const DeltaStateBlob& delta) override 
+    {
+        AsteroidShooterGameState gs = *reinterpret_cast<const AsteroidShooterGameState*>(state.data);
+
+        if (delta.delta_type == DELTA_GAME_POSITIONS) 
+        {
+            GamePositionsDelta gpd = *reinterpret_cast<const GamePositionsDelta*>(delta.data);
+
+            gs.posX[0] = gpd.posX[0];
+            gs.posX[1] = gpd.posX[1];
+            gs.posY[0] = gpd.posY[0];
+            gs.posY[1] = gpd.posY[1];
+        }
+    }
+
     void InitECSLogic(GameStateBlob& state) override {
         AsteroidShooterGameState s;
         std::memset(&s, 0, sizeof(AsteroidShooterGameState));
@@ -213,6 +267,9 @@ public:
             s.bullets[i].active = false;
         }
         s.bulletCount = 0;
+
+        s.remaingShootFrames[0] = -1;
+        s.remaingShootFrames[1] = -1;
         
         // Initialize cooldowns
         s.shootCooldown[0] = 0;
@@ -264,10 +321,15 @@ public:
         
         
         world.AddSystem(std::make_unique<InputSystem>());
-        world.AddSystem(std::make_unique<InputServerSystem>());
+        if (isServer) 
+        {
+            world.AddSystem(std::make_unique<InputServerSystem>());
+        }
+        
         world.AddSystem(std::make_unique<BulletSystem>());
         world.AddSystem(std::make_unique<OnDeathLogicSystem>());
 
+        eventProcessor->RegisterHandler(AsteroidEventMask::SPAWN_BULLET, std::make_unique<SpawnBulletHandler>());
         eventProcessor->RegisterHandler(AsteroidEventMask::BULLET_COLLIDES,std::make_unique<BulletCollidesHandler>());
 		eventProcessor->RegisterHandler(AsteroidEventMask::DEATH, std::make_unique<DeathHandler>());
 		eventProcessor->RegisterHandler(AsteroidEventMask::RESPAWN, std::make_unique<RespawnHandler>());
@@ -312,6 +374,8 @@ std::vector<float> BulletVerts() {
     };
 }
 
+
+
     void GameState_To_ECSWorld(const GameStateBlob& state) {
         AsteroidShooterGameState s = *reinterpret_cast<const AsteroidShooterGameState*>(state.data);
 
@@ -323,6 +387,7 @@ std::vector<float> BulletVerts() {
 
             ship->shootCooldown = s.shootCooldown[p];
             ship->health = s.health[p];
+            ship->remainingShootFrames = s.remaingShootFrames[p];
             ship->deathCooldown = s.deathCooldown[p];
 			ship->isAlive = s.alive[p];
         }
@@ -400,6 +465,7 @@ std::vector<float> BulletVerts() {
 
         world.GetEntityManager().RegisterComponentType<SpaceShip>();
         world.GetEntityManager().RegisterComponentType<ECSBullet>();
+        world.GetEntityManager().RegisterComponentType<ChargingShootEffect>();
         
 
         Entity player1 = world.GetEntityManager().CreateEntity();
@@ -449,6 +515,7 @@ std::vector<float> BulletVerts() {
         // Add camera follow system so camera follows local player
         world.AddSystem(std::make_unique<CameraFollowSystem>());
         world.AddSystem(std::make_unique<OnDeathRenderSystem>());
+        world.AddSystem(std::make_unique<ChargingBulletRenderSystem>());
     }
 
     void Interpolate(const GameStateBlob& previousServerState, const GameStateBlob& currentServerState, const GameStateBlob& previousLocalState, const GameStateBlob& currentLocalState, GameStateBlob& renderState, float serverInterpolation, float localInterpolation) override {
@@ -474,6 +541,8 @@ std::vector<float> BulletVerts() {
                 while (delta < -180.0f) delta += 360.0f;
 
                 rend.rot[i] = prevLocal.rot[i] + delta * localInterpolation;
+
+                rend.remaingShootFrames[i] = currLocal.remaingShootFrames[i];
             }
             else 
             {
@@ -487,11 +556,12 @@ std::vector<float> BulletVerts() {
                 while (delta < -180.0f) delta += 360.0f;
 
                 rend.rot[i] = prevServer.rot[i] + delta * serverInterpolation;
-
+                rend.remaingShootFrames[i] = currServer.remaingShootFrames[i];
             }
             
             // No interpolamos salud ni cooldowns, solo copiamos el actual
             rend.health[i] = currServer.health[i];
+            
             rend.shootCooldown[i] = currServer.shootCooldown[i];
             rend.deathCooldown[i] = currServer.deathCooldown[i];
 			rend.alive[i] = currServer.alive[i];
@@ -507,46 +577,24 @@ std::vector<float> BulletVerts() {
 
             Bullet& rendBullet = rend.bullets[i];
 
-            if (currLocalBullet.active && currLocalBullet.ownerId == playerId) 
+            if (currServerBullet.active) 
             {
-                if (prevLocalBullet.active) 
+                if (prevServerBullet.active)
                 {
-					rendBullet.id = currLocalBullet.id;
-					rendBullet.active = true;
-					rendBullet.posX = prevLocalBullet.posX + (currLocalBullet.posX - prevLocalBullet.posX) * localInterpolation;
-					rendBullet.posY = prevLocalBullet.posY + (currLocalBullet.posY - prevLocalBullet.posY) * localInterpolation;
-					rendBullet.velX = prevLocalBullet.velX + (currLocalBullet.velX - prevLocalBullet.velX) * localInterpolation;
-					rendBullet.velY = prevLocalBullet.velY + (currLocalBullet.velY - prevLocalBullet.velY) * localInterpolation;
-					rendBullet.ownerId = currLocalBullet.ownerId;
-					rendBullet.lifetime = currLocalBullet.lifetime;
+                    rendBullet.id = currServerBullet.id;
+                    rendBullet.active = true;
+                    rendBullet.posX = prevServerBullet.posX + (currServerBullet.posX - prevServerBullet.posX) * serverInterpolation;
+                    rendBullet.posY = prevServerBullet.posY + (currServerBullet.posY - prevServerBullet.posY) * serverInterpolation;
+                    rendBullet.velX = prevServerBullet.velX + (currServerBullet.velX - prevServerBullet.velX) * serverInterpolation;
+                    rendBullet.velY = prevServerBullet.velY + (currServerBullet.velY - prevServerBullet.velY) * serverInterpolation;
+                    rendBullet.ownerId = currServerBullet.ownerId;
+                    rendBullet.lifetime = currServerBullet.lifetime;
                 }
-                else 
+                else
                 {
-					// Si solo está activa en el estado actual local, copia el actual local
-					rendBullet = currLocalBullet;
+                    // Si solo está activa en el estado actual del servidor, copia el actual del servidor
+                    rendBullet = currServerBullet;
                 }
-
-				continue; // Ya hemos procesado esta bala
-            }
-
-            if (currServerBullet.active && currServerBullet.ownerId != playerId) 
-            {
-				if (prevServerBullet.active)
-				{
-					rendBullet.id = currServerBullet.id;
-					rendBullet.active = true;
-					rendBullet.posX = prevServerBullet.posX + (currServerBullet.posX - prevServerBullet.posX) * serverInterpolation;
-					rendBullet.posY = prevServerBullet.posY + (currServerBullet.posY - prevServerBullet.posY) * serverInterpolation;
-					rendBullet.velX = prevServerBullet.velX + (currServerBullet.velX - prevServerBullet.velX) * serverInterpolation;
-					rendBullet.velY = prevServerBullet.velY + (currServerBullet.velY - prevServerBullet.velY) * serverInterpolation;
-					rendBullet.ownerId = currServerBullet.ownerId;
-					rendBullet.lifetime = currServerBullet.lifetime;
-				}
-				else
-				{
-					// Si solo está activa en el estado actual del servidor, copia el actual del servidor
-					rendBullet = currServerBullet;
-				}
 			}
 			else
 			{

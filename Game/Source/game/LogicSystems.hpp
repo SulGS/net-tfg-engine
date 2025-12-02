@@ -5,7 +5,8 @@
 #include "Components.hpp"
 #include "GameState.hpp"
 #include "ecs/Collisions/BoxCollider2D.hpp"
-
+#include <math.h>
+#include <cmath>
 #include "Events.hpp"
 
 
@@ -55,9 +56,12 @@ public:
 
             const float MOVE_SPEED = 1.0f;
             const float ROT_SPEED = 5.0f;
-            const float BULLET_SPEED = 2.0f;
-            const int SHOOT_COOLDOWN = 3;  // In ticks
+            const float BULLET_SPEED = 5.0f;
+            const int CHARGE_SHOOT_FRAMES = 5;
+            const int SHOOT_COOLDOWN = 10;  // Different cooldowns
             const int BULLET_LIFETIME = 30;  // In ticks
+
+            float radians = transform->getRotation().z * 3.14159f / 180.0f;
 
             // Decrease shoot cooldown
             if (ship->shootCooldown > 0) {
@@ -65,6 +69,7 @@ public:
             }
 
             if (!ship->isAlive) continue;
+            if (ship->remainingShootFrames != -1) continue;
 
             // Rotation
             if (m & INPUT_LEFT) {
@@ -78,8 +83,6 @@ public:
 
             // Movement
             float velX = 0, velY = 0;
-            float radians = transform->getRotation().z * 3.14159f / 180.0f;
-
             if (m & INPUT_TOP) {
                 velX += cos(radians) * MOVE_SPEED;
                 velY += sin(radians) * MOVE_SPEED;
@@ -91,6 +94,13 @@ public:
 
             // Update position
             transform->setPosition(transform->getPosition() + glm::vec3(velX, velY, 0.0f));
+
+            if ((m & INPUT_SHOOT) && ship->shootCooldown <= 0 && ship->isAlive) {
+                
+                ship->remainingShootFrames = CHARGE_SHOOT_FRAMES;
+                ship->shootCooldown = SHOOT_COOLDOWN;
+
+            }
         }
     }
 };
@@ -110,77 +120,69 @@ public:
 
             const float MOVE_SPEED = 1.0f;
             const float ROT_SPEED = 5.0f;
-            const float BULLET_SPEED = 2.0f;
-            const int SHOOT_COOLDOWN = 3;  // In ticks
+            const float BULLET_SPEED = 5.0f;
+            const int CHARGE_SHOOT_FRAMES = 5;
+            const int SHOOT_COOLDOWN = 10;  // In ticks
             const int BULLET_LIFETIME = 30;  // In ticks
 
             float radians = transform->getRotation().z * 3.14159f / 180.0f;
 
+            if (ship->remainingShootFrames > 0) ship->remainingShootFrames--;
+
             // Shooting
-            if ((m & INPUT_SHOOT) && ship->shootCooldown <= 0 && ship->isAlive) {
-                // Find first available bullet ID
-                bool usedIds[MAX_BULLETS] = { false };
+            if (ship->remainingShootFrames==0) {
 
-                auto query2 = entityManager.CreateQuery<ECSBullet>();
-                for (auto [entity, ecsb] : query2) {
-                    if (ecsb->id >= 0 && ecsb->id < MAX_BULLETS) {
-                        usedIds[ecsb->id] = true;
+                ship->remainingShootFrames = -1;
+
+                if (ship->isAlive) 
+                {
+                    // Find first available bullet ID
+                    bool usedIds[MAX_BULLETS] = { false };
+
+                    auto query2 = entityManager.CreateQuery<ECSBullet>();
+                    for (auto [entity, ecsb] : query2) {
+                        if (ecsb->id >= 0 && ecsb->id < MAX_BULLETS) {
+                            usedIds[ecsb->id] = true;
+                        }
+                    }
+
+                    int id = -1;
+                    for (int i = 0; i < MAX_BULLETS; i++) {
+                        if (!usedIds[i]) {
+                            id = i;
+                            break;
+                        }
+                    }
+
+                    if (id != -1) {
+
+                        float bVelX = cos(radians) * BULLET_SPEED;
+                        float bVelY = sin(radians) * BULLET_SPEED;
+
+                        EventEntry spawnEvent;
+                        spawnEvent.event.type = AsteroidEventMask::SPAWN_BULLET;
+                        SpawnBulletEventData spawnData;
+                        spawnData.bulletId = id;
+                        spawnData.ownerId = p;
+                        spawnData.posX = transform->getPosition().x;
+                        spawnData.posY = transform->getPosition().y;
+                        spawnData.velX = bVelX;
+                        spawnData.velY = bVelY;
+
+                        std::memcpy(spawnEvent.event.data, &spawnData, sizeof(SpawnBulletEventData));
+                        spawnEvent.event.len = sizeof(SpawnBulletEventData);
+
+                        events.push_back(spawnEvent);
+
+
+
+                        // Set cooldown
+                        ship->shootCooldown = SHOOT_COOLDOWN;
+
                     }
                 }
 
-                int id = -1;
-                for (int i = 0; i < MAX_BULLETS; i++) {
-                    if (!usedIds[i]) {
-                        id = i;
-                        break;
-                    }
-                }
-
-                if (id != -1) {
-
-                    float bVelX = cos(radians) * BULLET_SPEED;
-                    float bVelY = sin(radians) * BULLET_SPEED;
-                    float posX = transform->getPosition().x;
-                    float posY = transform->getPosition().y;
-
-                    Entity bulletEntity = entityManager.CreateEntity();
-                    Transform* t = entityManager.AddComponent<Transform>(bulletEntity, Transform{});
-                    t->setPosition(glm::vec3(posX, posY, 0.0f));
-                    entityManager.AddComponent<ECSBullet>(bulletEntity,
-                        ECSBullet{ id, bVelX, bVelY, p, BULLET_LIFETIME });
-
-                    if (isServer) {
-                        BoxCollider2D* collider = entityManager.AddComponent<BoxCollider2D>(
-                            bulletEntity, BoxCollider2D{ glm::vec2(1.0f, 1.0f) });
-                        collider->layer = CollisionLayer::BULLET;
-                        collider->collidesWith = CollisionLayer::PLAYER;
-                        collider->SetOnCollisionEnter([&entityManager, &events](Entity self, Entity other, const CollisionInfo& info) {
-                                Playable* p = entityManager.GetComponent<Playable>(other);
-
-                                if (!p || p->playerId == entityManager.GetComponent<ECSBullet>(self)->ownerId) {
-                                    return;
-                                }
-
-                                EntityManager& em = entityManager;
-                                EventEntry eventEntry;
-                                eventEntry.event.type = AsteroidEventMask::BULLET_COLLIDES;
-                                BulletCollidesEventData data;
-                                ECSBullet* ecsb = em.GetComponent<ECSBullet>(self);
-                                Playable* play = em.GetComponent<Playable>(other);
-                                data.bulletId = ecsb->id;
-                                data.playerId = play->playerId;
-                                std::memcpy(eventEntry.event.data, &data, sizeof(BulletCollidesEventData));
-                                eventEntry.event.len = sizeof(BulletCollidesEventData);
-
-                                events.push_back(eventEntry);
-                            });
-                    }
-
-                  
-
-                    // Set cooldown
-                    ship->shootCooldown = SHOOT_COOLDOWN;
-                }
+                
             }
         }
     }

@@ -25,6 +25,8 @@ struct AsteroidShooterGameState {
     Bullet bullets[MAX_BULLETS];
     int bulletCount;  // Number of active bullets (for quick iteration)
 
+    int remaingShootFrames[2];
+
     // Shooting cooldown per player
     int shootCooldown[2];
     int deathCooldown[2];

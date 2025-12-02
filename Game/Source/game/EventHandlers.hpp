@@ -10,8 +10,43 @@ class SpawnBulletHandler : public IEventHandler {
 public:
     void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
     {
+        //std::cout << "Processing SPAWN_BULLET event\n";
 
-        
+        const int BULLET_LIFETIME = 30;
+        auto spawn_ev = *reinterpret_cast<const SpawnBulletEventData*>(event.data);
+
+        Entity bulletEntity = world.GetEntityManager().CreateEntity();
+        Transform* t = world.GetEntityManager().AddComponent<Transform>(bulletEntity, Transform{});
+        t->setPosition(glm::vec3(spawn_ev.posX, spawn_ev.posY, 0.0f));
+        world.GetEntityManager().AddComponent<ECSBullet>(bulletEntity,
+            ECSBullet{ spawn_ev.bulletId, spawn_ev.velX, spawn_ev.velY, spawn_ev.ownerId, BULLET_LIFETIME });
+
+        if (isServer) {
+            BoxCollider2D* collider = world.GetEntityManager().AddComponent<BoxCollider2D>(
+                bulletEntity, BoxCollider2D{ glm::vec2(1.0f, 1.0f) });
+            collider->layer = CollisionLayer::BULLET;
+            collider->collidesWith = CollisionLayer::PLAYER;
+            collider->SetOnCollisionEnter([&world](Entity self, Entity other, const CollisionInfo& info) {
+                Playable* p = world.GetEntityManager().GetComponent<Playable>(other);
+
+                if (!p || p->playerId == world.GetEntityManager().GetComponent<ECSBullet>(self)->ownerId) {
+                    return;
+                }
+
+                EntityManager& em = world.GetEntityManager();
+                EventEntry eventEntry;
+                eventEntry.event.type = AsteroidEventMask::BULLET_COLLIDES;
+                BulletCollidesEventData data;
+                ECSBullet* ecsb = em.GetComponent<ECSBullet>(self);
+                Playable* play = em.GetComponent<Playable>(other);
+                data.bulletId = ecsb->id;
+                data.playerId = play->playerId;
+                std::memcpy(eventEntry.event.data, &data, sizeof(BulletCollidesEventData));
+                eventEntry.event.len = sizeof(BulletCollidesEventData);
+
+                world.GetEvents().push_back(eventEntry);
+                });
+        }
     }
 };
 
