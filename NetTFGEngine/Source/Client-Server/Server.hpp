@@ -176,6 +176,7 @@ private:
         PeerInfo info;
         info.connection = conn;
         info.clientId = clientId;
+        info.pendingReceiveFullState = true;
         info.isConnected = true;
         info.playerId = static_cast<int>(allPlayers_.size());
         allPlayers_.push_back(info);
@@ -550,11 +551,8 @@ private:
         auto nextTick = std::chrono::high_resolution_clock::now();
         activePlayerCount_ = CountActivePlayers();
 
-        StateUpdate initialUpdate = server_.Tick();
-
         for (auto [conn, info] : peerInfo_) {
             server_.OnPlayerConnected(info.playerId);
-            net_.SendStateUpdate(conn, initialUpdate);
         }
 
         // Start network thread
@@ -597,22 +595,36 @@ private:
             std::vector<DeltaStateBlob> generatedDeltas;
             server_.GetGameLogic()->GetGeneratedDeltas(generatedDeltas);
 
-            if (generatedDeltas.size() > 0) 
-            {
-                // Send state updates to all connected players
-                for (auto& [conn, info] : peerInfo_) {
-                    if (!info.isConnected) {
-                        continue;
+
+            for (auto& [conn, info] : peerInfo_) {
+                if (!info.isConnected) {
+                    continue;
+                }
+                if (pendingReconnections_.find(info.playerId) == pendingReconnections_.end()) {
+                    if (info.pendingReceiveFullState)
+                    {
+						info.pendingReceiveFullState = false;
+                        net_.SendStateUpdate(conn, update);
                     }
-                    if (pendingReconnections_.find(info.playerId) == pendingReconnections_.end()) {
-                        net_.SendDeltasUpdate(conn, generatedDeltas);
+                    else 
+                    {
+                        if (generatedDeltas.size() > 0)
+                        {
+                            net_.SendDeltasUpdate(conn, generatedDeltas);
+                        }
                     }
+
+                    //net_.SendStateUpdate(conn, update);
+                    
                 }
             }
             
 
             // Performance monitoring every 30 frames
             if (server_.GetCurrentFrame() % 30 == 0) {
+
+                
+
                 auto now = std::chrono::high_resolution_clock::now();
                 auto duration = std::chrono::duration_cast<std::chrono::microseconds>(now - nextTick);
                 long long durationUs = duration.count();

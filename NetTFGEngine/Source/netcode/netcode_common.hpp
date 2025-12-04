@@ -197,6 +197,7 @@ struct PeerInfo {
     int lastAckedFrame = -1;
     std::string clientId;
     bool isConnected;
+	bool pendingReceiveFullState = true;
     std::chrono::steady_clock::time_point disconnectTime;
 };
 

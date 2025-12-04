@@ -13,7 +13,7 @@ public:
     bool isAlive;
 
     SpaceShip() : health(100), shootCooldown(0), deathCooldown(0), isAlive(true) {}
-    SpaceShip(int h, int cd, int dc, bool al) : health(h), shootCooldown(cd), deathCooldown(dc) , isAlive(al) {}
+    SpaceShip(int h, int rsf, int cd, int dc, bool al) : health(h), remainingShootFrames(rsf), shootCooldown(cd), deathCooldown(dc), isAlive(al) {}
 };
 
 class ECSBullet : public IComponent {

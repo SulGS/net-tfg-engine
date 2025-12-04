@@ -253,39 +253,35 @@ public:
     }
 
     void InitECSLogic(GameStateBlob& state) override {
-        AsteroidShooterGameState s;
-        std::memset(&s, 0, sizeof(AsteroidShooterGameState));
+        AsteroidShooterGameState* s = reinterpret_cast<AsteroidShooterGameState*>(state.data);
         
         // Initialize players
-        s.posX[0] = -50; s.posY[0] = -50;
-        s.posX[1] =  50; s.posY[1] =  50;
-        s.rot[0] = 0; s.rot[1] = 180;
+        s->posX[0] = -50; s->posY[0] = -50;
+        s->posX[1] =  50; s->posY[1] =  50;
+        s->rot[0] = 0; s->rot[1] = 180;
         
         // Initialize bullets (all inactive)
         for (int i = 0; i < MAX_BULLETS; i++) {
-            s.bullets[i].id = -1;
-            s.bullets[i].active = false;
+            s->bullets[i].id = -1;
+            s->bullets[i].active = false;
         }
-        s.bulletCount = 0;
+        s->bulletCount = 0;
 
-        s.remaingShootFrames[0] = -1;
-        s.remaingShootFrames[1] = -1;
+        s->remaingShootFrames[0] = -1;
+        s->remaingShootFrames[1] = -1;
         
         // Initialize cooldowns
-        s.shootCooldown[0] = 0;
-        s.shootCooldown[1] = 0;
+        s->shootCooldown[0] = 0;
+        s->shootCooldown[1] = 0;
 
-        s.health[0] = 100;
-        s.health[1] = 100;
+        s->health[0] = 100;
+        s->health[1] = 100;
 
-		s.alive[0] = true;
-		s.alive[1] = true;
+		s->alive[0] = true;
+		s->alive[1] = true;
 
-        s.deathCooldown[0] = 0;
-        s.deathCooldown[1] = 0;
-        
-        std::memset(state.data, 0, sizeof(state.data));
-        std::memcpy(state.data, &s, sizeof(AsteroidShooterGameState));
+        s->deathCooldown[0] = 0;
+        s->deathCooldown[1] = 0;
 
         state.len = sizeof(AsteroidShooterGameState);
 
@@ -294,19 +290,19 @@ public:
 
         Entity player1 = world.GetEntityManager().CreateEntity();
         Transform* t1 = world.GetEntityManager().AddComponent<Transform>(player1, Transform{});
-        t1->setPosition(glm::vec3(s.posX[0], s.posY[0], 0.0f));
+        t1->setPosition(glm::vec3(s->posX[0], s->posY[0], 0.0f));
         t1->setRotation(glm::vec3(0.0f, 0.0f, 0.0f));
 
         world.GetEntityManager().AddComponent<Playable>(player1, Playable{0, MakeZeroInputBlob(), (0 == playerId ? true : false)});
-        world.GetEntityManager().AddComponent<SpaceShip>(player1, SpaceShip{100,0,0,true});
+        world.GetEntityManager().AddComponent<SpaceShip>(player1, SpaceShip{100,-1,0,0,true});
 
         Entity player2 = world.GetEntityManager().CreateEntity();
         Transform* t2 = world.GetEntityManager().AddComponent<Transform>(player2, Transform{});
-        t2->setPosition(glm::vec3(s.posX[1], s.posY[1], 0.0f));
+        t2->setPosition(glm::vec3(s->posX[1], s->posY[1], 0.0f));
         t2->setRotation(glm::vec3(0.0f, 0.0f, 180.0f));
         
         world.GetEntityManager().AddComponent<Playable>(player2, Playable{1, MakeZeroInputBlob(), (1 == playerId ? true : false)});
-        world.GetEntityManager().AddComponent<SpaceShip>(player2, SpaceShip{100,0,0,true});
+        world.GetEntityManager().AddComponent<SpaceShip>(player2, SpaceShip{100,-1,0,0,true});
 
         if (isServer) 
         {
@@ -474,7 +470,7 @@ std::vector<float> BulletVerts() {
         t1->setRotation(glm::vec3(0.0f, 0.0f, 0.0f));
         
         world.GetEntityManager().AddComponent<Playable>(player1, Playable{0, MakeZeroInputBlob(), (0 == playerId ? true : false)});
-        world.GetEntityManager().AddComponent<SpaceShip>(player1, SpaceShip{100,0,0,true});
+        world.GetEntityManager().AddComponent<SpaceShip>(player1, SpaceShip{100,-1,0,0,true});
         world.GetEntityManager().AddComponent<MeshComponent>(player1, MeshComponent(new Mesh(TriangleVerts(), triangleInds, red)));
 
         Entity player2 = world.GetEntityManager().CreateEntity();
@@ -483,7 +479,7 @@ std::vector<float> BulletVerts() {
         t2->setRotation(glm::vec3(0.0f, 0.0f, 180.0f));
         
         world.GetEntityManager().AddComponent<Playable>(player2, Playable{1, MakeZeroInputBlob(), (1 == playerId ? true : false)});
-        world.GetEntityManager().AddComponent<SpaceShip>(player2, SpaceShip{100,0,0,true});
+        world.GetEntityManager().AddComponent<SpaceShip>(player2, SpaceShip{100,-1,0,0,true});
         world.GetEntityManager().AddComponent<MeshComponent>(player2, MeshComponent(new Mesh(TriangleVerts(), triangleInds, blue)));
 
         Entity camera = world.GetEntityManager().CreateEntity();

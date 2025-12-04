@@ -26,6 +26,8 @@ public:
         gameRenderer_->playerId = assignedPlayerId_;
         gameLogic_->playerId = assignedPlayerId_;
 
+        ClientWindow::startRenderThread(800, 600, "Asteroids");
+
         ClientWindow cWindow(
             [this](GameStateBlob& state, OpenGLWindow* win) {
                 gameRenderer_->Init(state, win);
@@ -60,8 +62,7 @@ private:
     void RunClientLoop(ClientWindow& cWindow, GameStateBlob& gameState) {
         auto nextTick = std::chrono::high_resolution_clock::now();
 
-        // Start render thread
-        std::thread renderThread(&ClientWindow::run, &cWindow);
+        cWindow.activate();
 
         int currentFrame = 0;
 
@@ -94,8 +95,7 @@ private:
             std::this_thread::sleep_until(nextTick);
         }
 
-        // Clean shutdown
-        renderThread.join();
+        cWindow.deactivate();
         Debug::Info("OfflineClient") << "[OFFLINE] Window closed, shutting down\n";
     }
 };

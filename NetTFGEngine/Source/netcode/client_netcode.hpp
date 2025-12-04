@@ -47,6 +47,9 @@ public:
 
 	void OnServerDeltasUpdate(std::vector<DeltaStateBlob>& deltas)
 	{
+		Debug::Info("Client Netcode") << "Received delta state\n";
+		
+		std::lock_guard<std::mutex>lock(mtx);
 		Snapshot& snapshot = GetSnapshot(deltas[0].frame);
 		lastConfirmedFrame = deltas[0].frame;
 		snapshot.stateConfirmed = true;
@@ -89,15 +92,24 @@ public:
 	{
 		std::lock_guard<std::mutex>lock(mtx);
 
+		Debug::Info("Client Netcode") << "Received server state\n";
+
 		Snapshot& snapshot = GetSnapshot(update.frame);
 		lastConfirmedFrame = update.frame;
 		snapshot.stateConfirmed = true;
 		latestServerState = update.state;
 
+		
+
+
 		if (gameLogic->CompareStates(snapshot.state, update.state) )
 		{
 			return; // No reconciliation needed
 		}
+
+		//std::cout << "aaaa\n";
+		//gameLogic->PrintState(latestServerState);
+		//gameLogic->PrintState(snapshot.state);
 
 		currentFrame = lastConfirmedFrame + framesAheadOfServer;
 
@@ -133,11 +145,16 @@ public:
 		Snapshot& currentSnapshot = GetSnapshot(currentFrame);
 		currentSnapshot.frame = currentFrame;
 
+		std::cout << "Frame " << currentFrame << "\n";
+		gameLogic->PrintState(currentSnapshot.state);
+
 		SimulateFrame(currentFrame, false);
 		currentFrame++;
 
 		Snapshot& predictedSnapshot = GetSnapshot(currentFrame);
 		currentState = predictedSnapshot.state;
+
+		
 	}
 
 	void SetGameLogic(std::unique_ptr<IGameLogic> logic) {

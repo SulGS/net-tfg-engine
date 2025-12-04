@@ -52,6 +52,11 @@ void OpenGLWindow::makeContextCurrent() {
     glfwMakeContextCurrent(window); 
 }
 
+// Add to OpenGLWindow.hpp
+void OpenGLWindow::releaseContext() {
+    glfwMakeContextCurrent(nullptr);
+}
+
 void OpenGLWindow::close() { 
     glfwSetWindowShouldClose(window, GLFW_TRUE); 
 }

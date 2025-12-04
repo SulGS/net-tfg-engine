@@ -39,6 +39,20 @@ public:
             return 1;
         }
 
+        ClientWindow::startRenderThread(800, 600, "Asteroids");
+
+        ClientWindow* cWindow = new ClientWindow(
+            [this](GameStateBlob& state, OpenGLWindow* win) {
+                gameRenderer_->Init(state, win);
+            },
+            [this](GameStateBlob& state, OpenGLWindow* win) {
+                gameRenderer_->Render(state, win);
+            },
+            [this](const GameStateBlob& previousServerState, const GameStateBlob& currentServerState, const GameStateBlob& previousLocalState, const GameStateBlob& currentLocalState, GameStateBlob& renderState, float serverInterpolation, float localInterpolation) {
+                gameRenderer_->Interpolate(previousServerState, currentServerState, previousLocalState, currentLocalState, renderState, serverInterpolation, localInterpolation);
+            }
+        );
+
         if (!net_.ConnectTo(hostStr, port)) {
             return 1;
         }
@@ -66,17 +80,6 @@ public:
         gameRenderer_->playerId = assignedPlayerId_;
 
         ClientPredictionNetcode* prediction = new ClientPredictionNetcode(assignedPlayerId_, std::move(gameLogic_));
-        ClientWindow* cWindow = new ClientWindow(
-            [this](GameStateBlob& state, OpenGLWindow* win) {
-                gameRenderer_->Init(state, win);
-            },
-            [this](GameStateBlob& state, OpenGLWindow* win) {
-                gameRenderer_->Render(state, win);
-            },
-			[this](const GameStateBlob& previousServerState, const GameStateBlob& currentServerState, const GameStateBlob& previousLocalState, const GameStateBlob& currentLocalState, GameStateBlob& renderState, float serverInterpolation, float localInterpolation) {
-				gameRenderer_->Interpolate(previousServerState,currentServerState,previousLocalState,currentLocalState,renderState,serverInterpolation,localInterpolation);
-			}
-        );
 
         if (isReconnection_) 
         {
@@ -434,8 +437,7 @@ private:
     void RunClientLoop(ClientPredictionNetcode& prediction, ClientWindow& cWindow) {
         auto nextTick = std::chrono::high_resolution_clock::now();
 
-        // Start render thread
-        std::thread renderThread(&ClientWindow::run, &cWindow);
+        cWindow.activate();
 
         // Start network thread - processes packets directly
         std::atomic<bool> networkRunning(true);
@@ -479,7 +481,8 @@ private:
         // Clean shutdown
         networkRunning.store(false);
         networkThread.join();
-        renderThread.join();
+
+        cWindow.deactivate();
 
         if (serverConnection_ != k_HSteamNetConnection_Invalid) {
             Debug::Info("Client") << "[CLIENT] Window closed, sending disconnect..." << "\n";

@@ -14,6 +14,7 @@ public:
     void pollEvents();
     bool shouldClose() const;
     void makeContextCurrent();
+    void releaseContext();
     void close();
 
     // Window info

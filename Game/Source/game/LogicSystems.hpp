@@ -9,7 +9,6 @@
 #include <cmath>
 #include "Events.hpp"
 
-
 enum InputMask : uint8_t {
     INPUT_NONE = 0,
     INPUT_LEFT = 1 << 0,
@@ -24,11 +23,9 @@ public:
     void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
         const float WORLD_SIZE = 400.0f;
 
-
         auto query = entityManager.CreateQuery<Transform, ECSBullet>();
         for (auto [entity, transform, ecsb] : query) {
             // Move bullet
-
             transform->translate(glm::vec3(ecsb->velX, ecsb->velY, 0.0f));
 
             // Decrease lifetime
@@ -58,17 +55,30 @@ public:
             const float ROT_SPEED = 5.0f;
             const float BULLET_SPEED = 5.0f;
             const int CHARGE_SHOOT_FRAMES = 5;
-            const int SHOOT_COOLDOWN = 10;  // Different cooldowns
-            const int BULLET_LIFETIME = 30;  // In ticks
+            const int SHOOT_COOLDOWN = 10;
+            const int BULLET_LIFETIME = 30;
 
             float radians = transform->getRotation().z * 3.14159f / 180.0f;
 
-            // Decrease shoot cooldown
-            if (ship->shootCooldown > 0) {
-                ship->shootCooldown--;
+            if (!ship->isAlive) continue;
+
+            // CLIENT ONLY: Manage visual countdown
+            if (!isServer) {
+                // Decrease shoot cooldown for visual feedback
+                if (ship->shootCooldown > 0) {
+                    ship->shootCooldown--;
+                }
+
+                // Decrease remaining shoot frames
+                if (ship->remainingShootFrames > 0) {
+                    ship->remainingShootFrames--;
+                }
+                if (ship->remainingShootFrames == 0) {
+                    ship->remainingShootFrames = -1;
+                }
             }
 
-            if (!ship->isAlive) continue;
+            // Skip input processing if charging shot
             if (ship->remainingShootFrames != -1) continue;
 
             // Rotation
@@ -95,10 +105,9 @@ public:
             // Update position
             transform->setPosition(transform->getPosition() + glm::vec3(velX, velY, 0.0f));
 
+            // Shooting - only set the charge frames, server handles cooldown
             if ((m & INPUT_SHOOT) && ship->shootCooldown <= 0 && ship->isAlive) {
-                
                 ship->remainingShootFrames = CHARGE_SHOOT_FRAMES;
-                ship->shootCooldown = SHOOT_COOLDOWN;
 
             }
         }
@@ -110,32 +119,32 @@ public:
     void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
         auto query = entityManager.CreateQuery<Transform, Playable, SpaceShip>();
 
-        auto colliders = entityManager.CreateQuery<Playable, BoxCollider2D>();
-
-
         for (auto [entity, transform, play, ship] : query) {
             int p = play->playerId;
             InputBlob input = play->input;
             uint8_t m = input.data[0];
 
-            const float MOVE_SPEED = 1.0f;
-            const float ROT_SPEED = 5.0f;
             const float BULLET_SPEED = 5.0f;
-            const int CHARGE_SHOOT_FRAMES = 5;
-            const int SHOOT_COOLDOWN = 10;  // In ticks
-            const int BULLET_LIFETIME = 30;  // In ticks
+            const int SHOOT_COOLDOWN = 10;
+            const int BULLET_LIFETIME = 30;
 
             float radians = transform->getRotation().z * 3.14159f / 180.0f;
 
-            if (ship->remainingShootFrames > 0) ship->remainingShootFrames--;
+            // SERVER ONLY: Decrease cooldown
+            if (ship->shootCooldown > 0) {
+                ship->shootCooldown--;
+            }
+
+            // Decrease remaining shoot frames
+            if (ship->remainingShootFrames > 0) {
+                ship->remainingShootFrames--;
+            }
 
             // Shooting
-            if (ship->remainingShootFrames==0) {
-
+            if (ship->remainingShootFrames == 0) {
                 ship->remainingShootFrames = -1;
 
-                if (ship->isAlive) 
-                {
+                if (ship->isAlive) {
                     // Find first available bullet ID
                     bool usedIds[MAX_BULLETS] = { false };
 
@@ -155,7 +164,6 @@ public:
                     }
 
                     if (id != -1) {
-
                         float bVelX = cos(radians) * BULLET_SPEED;
                         float bVelY = sin(radians) * BULLET_SPEED;
 
@@ -174,15 +182,10 @@ public:
 
                         events.push_back(spawnEvent);
 
-
-
-                        // Set cooldown
+                        // SERVER: Set cooldown after successful spawn
                         ship->shootCooldown = SHOOT_COOLDOWN;
-
                     }
                 }
-
-                
             }
         }
     }
@@ -191,27 +194,22 @@ public:
 class OnDeathLogicSystem : public ISystem {
 public:
     void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
-        bool foundLocal = false;
         auto playerQuery = entityManager.CreateQuery<Transform, Playable, SpaceShip>();
 
         for (auto [entity, playerTransform, play, ship] : playerQuery) {
-            if (!(ship->isAlive))
-            {
+            if (!(ship->isAlive)) {
                 ship->deathCooldown--;
 
-                if (ship->deathCooldown <= 0)
-                {
-					EventEntry respawnEvent;
-					respawnEvent.event.type = AsteroidEventMask::RESPAWN;
-					RespawnEventData respawnData;
-					respawnData.playerId = play->playerId;
-					std::memcpy(respawnEvent.event.data, &respawnData, sizeof(RespawnEventData));
-					respawnEvent.event.len = sizeof(RespawnEventData);
-					events.push_back(respawnEvent);
-
+                if (ship->deathCooldown <= 0) {
+                    EventEntry respawnEvent;
+                    respawnEvent.event.type = AsteroidEventMask::RESPAWN;
+                    RespawnEventData respawnData;
+                    respawnData.playerId = play->playerId;
+                    std::memcpy(respawnEvent.event.data, &respawnData, sizeof(RespawnEventData));
+                    respawnEvent.event.len = sizeof(RespawnEventData);
+                    events.push_back(respawnEvent);
                 }
             }
-
         }
     }
 };

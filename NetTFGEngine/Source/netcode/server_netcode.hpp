@@ -60,12 +60,14 @@ public:
 
         SimulateFrame(currentFrame);
 
+        currentFrame++;
+
         // Create state update
         StateUpdate update;
         update.frame = currentFrame;
         update.state = gameState;
 
-        currentFrame++;
+        
 
         // Cleanup old frames every 60 frames
         if (currentFrame % 60 == 0) {
@@ -90,6 +92,7 @@ public:
         gameLogic = std::move(logic);
         gameLogic->isServer = true;
         gameLogic->Init(gameState);
+        gameState.frame = 0;
     }
 
     // ✅ FIXED: Now thread-safe with mutex lock
@@ -119,6 +122,18 @@ private:
             inputs = frameInIt->second;
         }
 
+        /*for (auto& entry : inputs) {
+			// Print inputs for debugging
+			std::cout << "Frame " << frame << " - Player " << entry.first << " Input: ";
+
+            for (int i = 0; i < 4; i++) 
+            {
+                std::cout << static_cast<int>(entry.second.input.data[i]);
+            }
+
+            std::cout << "\n";
+		}*/
+
         std::vector<EventEntry> events;
         auto frameEvIt = appliedEvents.find(frame);
         if (frameEvIt != appliedEvents.end()) {
@@ -127,11 +142,13 @@ private:
 
         gameLogic->SimulateFrame(gameState, events, inputs);
 
+		//gameLogic->PrintState(gameState);
+
         for (auto& event : gameLogic->generatedEvents) {
             event.frame = frame + 1;
         }
         appliedEvents[frame + 1] = gameLogic->generatedEvents;
-        gameState.frame = frame;
+        gameState.frame = frame+1;
     }
 
     // ✅ NEW: Cleanup old frames to prevent unbounded memory growth

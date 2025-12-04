@@ -18,10 +18,13 @@ class ClientWindow {
 
     int tickCount = 0;
 
-    // Singleton window instance shared by all ClientWindow instances
+    // Singleton window instance
     static OpenGLWindow* window;
     static std::mutex windowMutex;
-    static int instanceCount;
+    static std::thread renderThread;
+    static ClientWindow* activeInstance;
+    static bool threadRunning;
+    static std::atomic<bool> callbacksChanged;
 
 public:
 
@@ -43,17 +46,61 @@ public:
         : renderInitCallback(initCb), renderCallback(renderCb), interpolationCallback(interpolationCb)
     {
         lastStateUpdate = std::chrono::steady_clock::now();
-        std::lock_guard<std::mutex> lock(windowMutex);
-        instanceCount++;
+        lastLocalUpdate = std::chrono::steady_clock::now();
     }
 
     ~ClientWindow() {
+        // Don't destroy anything - window persists
+    }
+
+    // Initialize the window and start the persistent render thread
+    static void startRenderThread(int width = 800, int height = 600, const std::string& title = "Client") {
         std::lock_guard<std::mutex> lock(windowMutex);
-        instanceCount--;
-        if (instanceCount == 0 && window) {
-            delete window;
-            window = nullptr;
+        if (!threadRunning) {
+            threadRunning = true;
+            renderThread = std::thread([]() {
+                window = new OpenGLWindow(800, 600, "Client");
+                Input::Init(window->getWindow());
+
+                renderLoop();
+
+                delete window;
+                window = nullptr;
+                });
         }
+    }
+
+    // Stop the render thread and destroy window
+    static void stopRenderThread() {
+        {
+            std::lock_guard<std::mutex> lock(windowMutex);
+            threadRunning = false;
+            if (window) window->close();
+        }
+        if (renderThread.joinable()) {
+            renderThread.join();
+        }
+    }
+
+    // Activate this ClientWindow instance (swap callbacks)
+    void activate() {
+        std::lock_guard<std::mutex> lock(windowMutex);
+
+        // If switching instances, mark for re-initialization
+        if (activeInstance != this) {
+            callbacksChanged = true;
+        }
+
+        activeInstance = this;
+        gRunning = true;
+    }
+
+    void deactivate() {
+        std::lock_guard<std::mutex> lock(windowMutex);
+        if (activeInstance == this) {
+            activeInstance = nullptr;
+        }
+        gRunning = false;
     }
 
     void close() {
@@ -64,19 +111,17 @@ public:
     bool isRunning() const { return gRunning; }
 
     void setServerState(GameStateBlob state) {
-        gStateMutex.lock();
+        std::lock_guard<std::mutex> lock(gStateMutex);
         PreviousServerState = CurrentServerState;
         CurrentServerState = state;
         lastStateUpdate = std::chrono::steady_clock::now();
-        gStateMutex.unlock();
     }
 
     void setLocalState(GameStateBlob state) {
-        gStateMutex.lock();
+        std::lock_guard<std::mutex> lock(gStateMutex);
         PreviousLocalState = CurrentLocalState;
         CurrentLocalState = state;
         lastLocalUpdate = std::chrono::steady_clock::now();
-        gStateMutex.unlock();
     }
 
     GameStateBlob getLocalState() {
@@ -89,76 +134,113 @@ public:
         return CurrentServerState;
     }
 
-    bool run() {
-        // Initialize singleton window if not already created
-        {
-            std::lock_guard<std::mutex> lock(windowMutex);
-            if (!window) {
-                window = new OpenGLWindow(800, 600, "Client");
-                Input::Init(window->getWindow());
-            }
-        }
-
-        if (renderInitCallback) {
-            renderInitCallback(RenderState, window);
-        }
-
+private:
+    // The persistent render loop running on the dedicated thread
+    static void renderLoop() {
         auto nextTick = std::chrono::high_resolution_clock::now();
         auto sampleStart = std::chrono::high_resolution_clock::now();
 
-        while (!window->shouldClose()) {
+        bool needsInit = false;
+        int tickCount = 0;
+        std::vector<long long> tickDurations;
+        const size_t MAX_SAMPLES = 30;
+
+        while (threadRunning && !(window->shouldClose())) {
             sampleStart = std::chrono::high_resolution_clock::now();
 
             window->pollEvents();
             Input::Update();
 
-            gStateMutex.lock();
+            ClientWindow* instance = nullptr;
+            {
+                std::lock_guard<std::mutex> lock(windowMutex);
+                instance = activeInstance;
 
-            // Calculate interpolation factor for remote players
-            auto now = std::chrono::high_resolution_clock::now();
-            float serverInterpolationFactor = 0.0f;
-            if (CurrentServerState.frame != PreviousServerState.frame) {
-                auto frameDelta = std::chrono::milliseconds(MS_PER_TICK);
-                auto elapsed = now - lastLocalUpdate;
-                serverInterpolationFactor = std::chrono::duration<float, std::milli>(elapsed).count() / frameDelta.count();
-                if (serverInterpolationFactor > 1.0f) serverInterpolationFactor = 1.0f;
+                // Check if we need to reinitialize for new instance
+                if (instance && callbacksChanged) {
+                    needsInit = true;
+                    callbacksChanged = false;
+                }
             }
 
-            float localInterpolationFactor = 0.0f;
-            if (CurrentServerState.frame != PreviousServerState.frame) {
-                auto frameDelta = std::chrono::milliseconds(MS_PER_TICK);
-                auto elapsed = now - lastStateUpdate;
-                localInterpolationFactor = std::chrono::duration<float, std::milli>(elapsed).count() / frameDelta.count();
-                if (localInterpolationFactor > 1.0f) localInterpolationFactor = 1.0f;
+            if (instance) {
+                // Call init callback if needed
+                if (needsInit && instance->renderInitCallback) {
+                    instance->renderInitCallback(instance->RenderState, window);
+                    needsInit = false;
+                }
+
+                instance->gStateMutex.lock();
+
+                // Calculate interpolation factors
+                auto now = std::chrono::high_resolution_clock::now();
+                float serverInterpolationFactor = 0.0f;
+                if (instance->CurrentServerState.frame != instance->PreviousServerState.frame) {
+                    auto frameDelta = std::chrono::milliseconds(MS_PER_TICK);
+                    auto elapsed = now - instance->lastLocalUpdate;
+                    serverInterpolationFactor = std::chrono::duration<float, std::milli>(elapsed).count() / frameDelta.count();
+                    if (serverInterpolationFactor > 1.0f) serverInterpolationFactor = 1.0f;
+                }
+
+                float localInterpolationFactor = 0.0f;
+                if (instance->CurrentServerState.frame != instance->PreviousServerState.frame) {
+                    auto frameDelta = std::chrono::milliseconds(MS_PER_TICK);
+                    auto elapsed = now - instance->lastStateUpdate;
+                    localInterpolationFactor = std::chrono::duration<float, std::milli>(elapsed).count() / frameDelta.count();
+                    if (localInterpolationFactor > 1.0f) localInterpolationFactor = 1.0f;
+                }
+
+                // Interpolate
+                if (instance->interpolationCallback) {
+                    instance->interpolationCallback(
+                        instance->PreviousServerState,
+                        instance->CurrentServerState,
+                        instance->PreviousLocalState,
+                        instance->CurrentLocalState,
+                        instance->RenderState,
+                        serverInterpolationFactor,
+                        localInterpolationFactor
+                    );
+                }
+
+                GameStateBlob stateCopy = instance->RenderState;
+                instance->gStateMutex.unlock();
+
+                // Render
+                if (instance->renderCallback) {
+                    instance->renderCallback(stateCopy, window);
+                }
+            }
+            else {
+                // No active instance, just clear screen
+                glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             }
 
-            // Interpolate remote players from server states
-            if (interpolationCallback) {
-                interpolationCallback(PreviousServerState, CurrentServerState, PreviousLocalState, CurrentLocalState, RenderState, serverInterpolationFactor, localInterpolationFactor);
-            }
-
-            GameStateBlob stateCopy = RenderState;
-            gStateMutex.unlock();
-
-            if (renderCallback) {
-                renderCallback(stateCopy, window);
-            }
             window->swapBuffers();
 
-            tickCount++;
+            if (window->shouldClose()) {
+                std::lock_guard<std::mutex> lock(windowMutex);
+                threadRunning = false;
+                if (activeInstance) {
+                    activeInstance->gRunning = false;
+                }
+                break;  // Exit render loop
+            }
 
+            tickCount++;
             if (tickCount == RENDER_TICKS_PER_SECOND) {
                 auto now = std::chrono::high_resolution_clock::now();
                 auto duration = now - sampleStart;
                 sampleStart = now;
 
                 auto durationUs = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
-                tickDurations_.push_back(durationUs);
-                if (tickDurations_.size() > MAX_SAMPLES) tickDurations_.erase(tickDurations_.begin());
+                tickDurations.push_back(durationUs);
+                if (tickDurations.size() > MAX_SAMPLES) tickDurations.erase(tickDurations.begin());
 
                 long long sum = 0;
-                for (auto d : tickDurations_) sum += d;
-                double mean = static_cast<double>(sum) / tickDurations_.size();
+                for (auto d : tickDurations) sum += d;
+                double mean = static_cast<double>(sum) / tickDurations.size();
 
                 double currentMs = (durationUs / 1000.0) / RENDER_TICKS_PER_SECOND;
                 double meanMs = (mean / 1000.0) / RENDER_TICKS_PER_SECOND;
@@ -171,14 +253,15 @@ public:
             nextTick += std::chrono::milliseconds(RENDER_MS_PER_TICK);
             std::this_thread::sleep_until(nextTick);
         }
-        gRunning = false;
-        return true;
     }
 };
 
 // Static member definitions
 OpenGLWindow* ClientWindow::window = nullptr;
 std::mutex ClientWindow::windowMutex;
-int ClientWindow::instanceCount = 0;
+std::thread ClientWindow::renderThread;
+ClientWindow* ClientWindow::activeInstance = nullptr;
+bool ClientWindow::threadRunning = false;
+std::atomic<bool> ClientWindow::callbacksChanged{ false };
 
 #endif //NETCODE_CLIENT_WINDOW_H

@@ -37,6 +37,9 @@ public:
             if (it != inputs.end()) {
                 play->input = it->second.input;
             }
+            else {
+				play->input = MakeZeroInputBlob();
+            }
         }
     }
 
