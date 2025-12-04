@@ -45,25 +45,23 @@ public:
 		framesAheadOfServer = framesAboveServer;
 	}
 
-	void OnServerDeltasUpdate(std::vector<DeltaStateBlob>& deltas)
+	void OnServerDeltasUpdate(std::vector<DeltaStateBlob>& deltas, int& deltaFrame)
 	{
-		Debug::Info("Client Netcode") << "Received delta state\n";
-		
 		std::lock_guard<std::mutex>lock(mtx);
-		Snapshot& snapshot = GetSnapshot(deltas[0].frame);
-		lastConfirmedFrame = deltas[0].frame;
+		Snapshot& snapshot = GetSnapshot(deltaFrame);
+		lastConfirmedFrame = deltaFrame;
 		snapshot.stateConfirmed = true;
+		
 
 		bool needsCorrection = false;
 
-		for (DeltaStateBlob& delta : deltas) 
+		if (!(gameLogic->CompareStateWithDeltas(snapshot.state, deltas)))
 		{
-			if (!(gameLogic->CompareStateWithDelta(snapshot.state, delta))) 
-			{
-				needsCorrection = true;
-				gameLogic->ApplyDeltaToGameState(snapshot.state, delta);
-			}
+			needsCorrection = true;
+			gameLogic->ApplyDeltasToGameState(snapshot.state, deltas);
 		}
+
+		latestServerState = snapshot.state;
 
 		if (needsCorrection) 
 		{
@@ -72,7 +70,7 @@ public:
 			gameLogic->Synchronize(snapshot.state);
 
 			// Re-simulate all frames after the server frame
-			for (int frame = deltas[0].frame; frame < currentFrame; ++frame) {
+			for (int frame = deltaFrame; frame < currentFrame; ++frame) {
 				SimulateFrame(frame, true);
 			}
 
@@ -81,7 +79,7 @@ public:
 			currentState.len = lastSnapshot.state.len;
 			memcpy(currentState.data, lastSnapshot.state.data, currentState.len);
 
-			Debug::Info("ClientNetcode") << "[CLIENT] Reconciled to server state at frame " << deltas[0].frame
+			Debug::Info("ClientNetcode") << "[CLIENT] Reconciled to server state at frame " << deltaFrame
 				<< ". Current frame: " << currentFrame << "\n";
 
 			RemoveYetConfirmedSnapshots();
@@ -92,7 +90,7 @@ public:
 	{
 		std::lock_guard<std::mutex>lock(mtx);
 
-		Debug::Info("Client Netcode") << "Received server state\n";
+		//Debug::Info("Client Netcode") << "Received server state\n";
 
 		Snapshot& snapshot = GetSnapshot(update.frame);
 		lastConfirmedFrame = update.frame;
@@ -145,8 +143,8 @@ public:
 		Snapshot& currentSnapshot = GetSnapshot(currentFrame);
 		currentSnapshot.frame = currentFrame;
 
-		std::cout << "Frame " << currentFrame << "\n";
-		gameLogic->PrintState(currentSnapshot.state);
+		//std::cout << "Frame " << currentFrame << "\n";
+		//gameLogic->PrintState(currentSnapshot.state);
 
 		SimulateFrame(currentFrame, false);
 		currentFrame++;

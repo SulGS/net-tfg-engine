@@ -4,6 +4,7 @@
 #include "ecs.hpp"
 #include "ecs_common.hpp"
 #include "Events/ecs_event_processor.hpp"
+#include "Deltas/ecs_delta_processor.hpp"
 #include "netcode/netcode_common.hpp"
 #include "Collisions/CollisionSystem.hpp"
 #include "Collisions/BoxCollider2D.hpp"
@@ -15,6 +16,7 @@ class IECSGameLogic : public IGameLogic {
 protected:
     ECSWorld world;
 	EventProcessor* eventProcessor;
+	DeltaProcessor* deltaProcessor;
 public:
     virtual ~IECSGameLogic() 
 	{
@@ -43,10 +45,26 @@ public:
         }
     }
 
+	void GenerateDeltas(const GameStateBlob& previousState, const GameStateBlob& newState) override
+	{
+		deltaProcessor->GenerateDeltas(previousState, newState, this->generatedDeltas);
+	}
+
+    bool CompareStateWithDeltas(const GameStateBlob& state, const std::vector<DeltaStateBlob>& deltas) const override {
+        return deltaProcessor->CompareDeltas(deltas,state);
+    }
+
+	void ApplyDeltasToGameState(GameStateBlob& state, const std::vector<DeltaStateBlob>& deltas) override {
+		deltaProcessor->ProcessDeltas(deltas, state);
+	}
+
+
     virtual void InitECSLogic(GameStateBlob& state) = 0;
 
     void Init(GameStateBlob& state) override {
 		eventProcessor = new EventProcessor(world, isServer);
+		deltaProcessor = new DeltaProcessor(isServer);
+
         world.GetEntityManager().RegisterComponentType<Transform>();
         world.GetEntityManager().RegisterComponentType<Playable>();
 
@@ -71,17 +89,19 @@ public:
         GameStateBlob prevState = state;
 		//GameState_To_ECSWorld(state);
         this->generatedEvents.clear();
+		this->generatedDeltas.clear();
         ProcessEvents(events);
 		ProcessInputs(inputs);
         world.Update(isServer, 1 / TICKS_PER_SECOND);
+        
+        ECSWorld_To_GameState(state);
+
         if (isServer)
         {
             this->generatedEvents = world.GetEvents();
-			world.ClearEvents();
+            world.ClearEvents();
             GenerateDeltas(prevState, state);
         }
-        
-        ECSWorld_To_GameState(state);
     }
 };
 

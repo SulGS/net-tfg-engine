@@ -166,9 +166,9 @@ public:
     virtual void GetGeneratedEvents(std::vector<EventEntry>& events) { events = generatedEvents; }
     virtual void GetGeneratedDeltas(std::vector<DeltaStateBlob>& deltas) { deltas = generatedDeltas; }
     virtual bool CompareStates(const GameStateBlob& a, const GameStateBlob& b) const = 0;
-    virtual bool CompareStateWithDelta(const GameStateBlob& state, const DeltaStateBlob& delta) const = 0;
+    virtual bool CompareStateWithDeltas(const GameStateBlob& state, const std::vector<DeltaStateBlob>& deltas)  const = 0;
     virtual void GenerateDeltas(const GameStateBlob& previousState, const GameStateBlob& newState) = 0;
-    virtual void ApplyDeltaToGameState(GameStateBlob& state, const DeltaStateBlob& delta) = 0;
+    virtual void ApplyDeltasToGameState(GameStateBlob& state, const std::vector<DeltaStateBlob>& deltas) = 0;
     virtual void Init(GameStateBlob& state) = 0;
     virtual void PrintState(const GameStateBlob& state) const = 0;
 };

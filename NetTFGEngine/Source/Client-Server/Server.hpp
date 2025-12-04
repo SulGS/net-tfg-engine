@@ -608,10 +608,7 @@ private:
                     }
                     else 
                     {
-                        if (generatedDeltas.size() > 0)
-                        {
-                            net_.SendDeltasUpdate(conn, generatedDeltas);
-                        }
+                        net_.SendDeltasUpdate(conn, generatedDeltas, server_.GetCurrentFrame()-1);
                     }
 
                     //net_.SendStateUpdate(conn, update);

@@ -20,14 +20,13 @@
 #include "ecs/UI/UIElement.hpp"
 
 #include "GameState.hpp"
-#include "GameDelta.hpp"
 #include "Components.hpp"
 #include "LogicSystems.hpp"
 #include "RenderSystems.hpp"
 #include "Events.hpp"
 #include "EventHandlers.hpp"
-
-
+#include "Deltas.hpp"
+#include "DeltaHandler.hpp"
 
 
 class AsteroidShooterGame : public IECSGameLogic {
@@ -203,55 +202,6 @@ public:
         return std::memcmp(a.data, b.data, sizeof(AsteroidShooterGameState)) == 0;
     }
 
-    bool CompareStateWithDelta(const GameStateBlob& state, const DeltaStateBlob& delta) const override {
-        if (delta.delta_type == DELTA_GAME_POSITIONS) 
-        {
-            return CheckGamePositionsDelta(state, delta);
-        }
-
-        return true;
-    }
-
-    void GenerateDeltas(const GameStateBlob& previousState, const GameStateBlob& newState) override 
-    {
-        generatedDeltas.clear();
-        AsteroidShooterGameState prevGs = *reinterpret_cast<const AsteroidShooterGameState*>(previousState.data);
-        AsteroidShooterGameState newGs = *reinterpret_cast<const AsteroidShooterGameState*>(newState.data);
-
-        if (prevGs.posX[0] != newGs.posX[0] ||
-            prevGs.posX[1] != newGs.posX[1] ||
-            prevGs.posY[0] != newGs.posY[0] ||
-            prevGs.posY[1] != newGs.posY[1]) 
-        {
-            DeltaStateBlob delta;
-            delta.frame = newState.frame;
-            delta.delta_type = DELTA_GAME_POSITIONS;
-            GamePositionsDelta gpd = *reinterpret_cast<const GamePositionsDelta*>(delta.data);
-            gpd.posX[0] = newGs.posX[0];
-            gpd.posX[1] = newGs.posX[1];
-            gpd.posY[0] = newGs.posY[0];
-            gpd.posY[1] = newGs.posY[1];
-            delta.len = sizeof(GamePositionsDelta);
-
-            generatedDeltas.push_back(delta);
-        }
-    }
-
-    void ApplyDeltaToGameState(GameStateBlob& state, const DeltaStateBlob& delta) override 
-    {
-        AsteroidShooterGameState gs = *reinterpret_cast<const AsteroidShooterGameState*>(state.data);
-
-        if (delta.delta_type == DELTA_GAME_POSITIONS) 
-        {
-            GamePositionsDelta gpd = *reinterpret_cast<const GamePositionsDelta*>(delta.data);
-
-            gs.posX[0] = gpd.posX[0];
-            gs.posX[1] = gpd.posX[1];
-            gs.posY[0] = gpd.posY[0];
-            gs.posY[1] = gpd.posY[1];
-        }
-    }
-
     void InitECSLogic(GameStateBlob& state) override {
         AsteroidShooterGameState* s = reinterpret_cast<AsteroidShooterGameState*>(state.data);
         
@@ -329,6 +279,8 @@ public:
         eventProcessor->RegisterHandler(AsteroidEventMask::BULLET_COLLIDES,std::make_unique<BulletCollidesHandler>());
 		eventProcessor->RegisterHandler(AsteroidEventMask::DEATH, std::make_unique<DeathHandler>());
 		eventProcessor->RegisterHandler(AsteroidEventMask::RESPAWN, std::make_unique<RespawnHandler>());
+
+		deltaProcessor->RegisterHandler(DELTA_GAME_POSITIONS, std::make_unique<GamePositionsDeltaHandler>());
     }
 
     void PrintState(const GameStateBlob& state) const override {

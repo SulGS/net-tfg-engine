@@ -381,9 +381,11 @@ private:
         }
         else if (type == PACKET_DELTA_STATE_UPDATE) {
             std::vector<DeltaStateBlob> deltas;
-            net_.ParseDeltasUpdate(data, len, deltas);
+            int frame;
 
-            prediction.OnServerDeltasUpdate(deltas);
+            net_.ParseDeltasUpdate(data, len, deltas, frame);
+
+            prediction.OnServerDeltasUpdate(deltas,frame);
             cWin.setServerState(prediction.GetLatestServerState());
         }
         else if (type == PACKET_INPUT_UPDATE) {

@@ -331,7 +331,7 @@ public:
     }
 
     // type(1) + frame(4) + num of deltas(4) + N * delta
-    void SendDeltasUpdate(HSteamNetConnection conn, const std::vector<DeltaStateBlob>& deltas) {
+    void SendDeltasUpdate(HSteamNetConnection conn, const std::vector<DeltaStateBlob>& deltas, const int frame) {
         if (!sockets || conn == k_HSteamNetConnection_Invalid) return;
 
         size_t bufSize = 1 + 4 + 4;
@@ -348,7 +348,7 @@ public:
 
         buf[offset++] = PACKET_DELTA_STATE_UPDATE;
 
-        uint32_t f = hostToBigEndian32(deltas[0].frame);
+        uint32_t f = hostToBigEndian32(frame);
         std::memcpy(&buf[offset], &f, 4);
         offset += 4;
 
@@ -373,7 +373,7 @@ public:
         sockets->SendMessageToConnection(conn, buf.data(), buf.size(), k_nSteamNetworkingSend_Reliable, nullptr);
     }
 
-    void ParseDeltasUpdate(const uint8_t* buf, size_t len, std::vector<DeltaStateBlob>& deltas)
+    void ParseDeltasUpdate(const uint8_t* buf, size_t len, std::vector<DeltaStateBlob>& deltas, int& frame)
     {
         deltas.clear();
         size_t offset = 0;
@@ -389,7 +389,7 @@ public:
         uint32_t frameBE;
         std::memcpy(&frameBE, &buf[offset], 4);
         offset += 4;
-        uint32_t frame = bigEndianToHost32(frameBE);
+        frame = bigEndianToHost32(frameBE);
 
         // 3) Read number of deltas
         if (offset + 4 > len) return;
