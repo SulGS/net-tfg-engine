@@ -2,7 +2,7 @@
 workspace "TFG Project"
    architecture "x64"
    configurations { "Debug", "Release", "Dist" }
-   startproject "Game"
+   startproject "GameClient"   -- default startup project
 
    -- Workspace-wide build options for MSVC
    filter "system:windows"
@@ -10,8 +10,13 @@ workspace "TFG Project"
 
 OutputDir = "%{cfg.system}-%{cfg.architecture}/%{cfg.buildcfg}"
 
+-- Include Engine project
 group "NetTFGEngine"
 	include "NetTFGEngine/Build-NetTFGEngine.lua"
 group ""
 
-include "Game/Build-Game.lua"
+-- Include Game projects
+group "Game"
+	include "Game/Build-GameClient.lua"
+	include "Game/Build-GameServer.lua"
+group ""
