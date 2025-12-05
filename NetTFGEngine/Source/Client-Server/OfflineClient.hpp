@@ -23,24 +23,20 @@ public:
     int RunClient(const std::string& hostStr = "0.0.0.0", uint16_t port = 0) override {
         Debug::Info("OfflineClient") << "Starting offline game (ignoring host and port parameters)\n";
 
+		isOfflineClient = true;
+
         gameRenderer_->playerId = assignedPlayerId_;
         gameLogic_->playerId = assignedPlayerId_;
 
-        ClientWindow::startRenderThread(800, 600, "Asteroids");
-
-        ClientWindow cWindow(
+        ClientWindow* cWindow = new ClientWindow(
             [this](GameStateBlob& state, OpenGLWindow* win) {
                 gameRenderer_->Init(state, win);
             },
             [this](GameStateBlob& state, OpenGLWindow* win) {
                 gameRenderer_->Render(state, win);
             },
-            [this](const GameStateBlob& previousServerState, const GameStateBlob& currentServerState,
-                const GameStateBlob& previousLocalState, const GameStateBlob& currentLocalState,
-                GameStateBlob& renderState, float serverInterpolation, float localInterpolation) {
-                    gameRenderer_->Interpolate(previousServerState, currentServerState,
-                        previousLocalState, currentLocalState,
-                        renderState, serverInterpolation, localInterpolation);
+            [this](const GameStateBlob& previousServerState, const GameStateBlob& currentServerState, const GameStateBlob& previousLocalState, const GameStateBlob& currentLocalState, GameStateBlob& renderState, float serverInterpolation, float localInterpolation) {
+                gameRenderer_->Interpolate(previousServerState, currentServerState, previousLocalState, currentLocalState, renderState, serverInterpolation, localInterpolation);
             }
         );
 
@@ -49,7 +45,7 @@ public:
         gameLogic_->Init(currentState);
 
         Debug::Info("OfflineClient") << "Running offline game loop\n";
-        RunClientLoop(cWindow, currentState);
+        RunClientLoop(*cWindow, currentState);
 
         return 0;
     }
@@ -66,7 +62,7 @@ private:
 
         int currentFrame = 0;
 
-        while (cWindow.isRunning()) {
+        while (cWindow.isRunning() && !NetTFG_Engine::Get().HasPendingSwitch()) {
             // Generate local input
             InputBlob localInput = gameLogic_->GenerateLocalInput();
 
@@ -96,6 +92,6 @@ private:
         }
 
         cWindow.deactivate();
-        Debug::Info("OfflineClient") << "[OFFLINE] Window closed, shutting down\n";
+        Debug::Info("OfflineClient") << "[OFFLINE] Offline client finalished\n";
     }
 };

@@ -18,6 +18,8 @@
 #include "Client-Server/Client.hpp"
 #include "Client-Server/InputDelayCalculator.hpp"
 
+#include "NetTFG_Engine.hpp"
+
 
 
 class OnlineClient : public Client {
@@ -38,8 +40,6 @@ public:
         if (!net_.InitGNS()) {
             return 1;
         }
-
-        ClientWindow::startRenderThread(800, 600, "Asteroids");
 
         ClientWindow* cWindow = new ClientWindow(
             [this](GameStateBlob& state, OpenGLWindow* win) {
@@ -449,7 +449,7 @@ private:
 
         prediction.UpdateCurrentFrame(1);
 
-        while (cWindow.isRunning()) {
+        while (cWindow.isRunning() && !NetTFG_Engine::Get().HasPendingSwitch()) {
             // Network thread handles all packet processing
             // No polling needed here!
 
@@ -487,10 +487,11 @@ private:
         cWindow.deactivate();
 
         if (serverConnection_ != k_HSteamNetConnection_Invalid) {
-            Debug::Info("Client") << "[CLIENT] Window closed, sending disconnect..." << "\n";
             net_.GetSockets()->CloseConnection(serverConnection_,
                 k_ESteamNetConnectionEnd_App_Generic, nullptr, false);
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
+
+        Debug::Info("OnlineClient") << "[ONLINE] Online client finalished\n";
     }
 };

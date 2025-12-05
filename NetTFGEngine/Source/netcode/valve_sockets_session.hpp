@@ -34,16 +34,24 @@ public:
     }
 
     bool InitGNS() {
+        if (socketsInitialized) {
+            Debug::Info("Sockets") << "GameNetworkingSockets already initialized\n";
+            return true;
+        }
+
         SteamNetworkingErrMsg errMsg;
         if (!GameNetworkingSockets_Init(nullptr, errMsg)) {
-            Debug::Info("Client") << "GameNetworkingSockets initialization failed: " << errMsg << "\n";
+            Debug::Error("Sockets") << "GameNetworkingSockets initialization failed: " << errMsg << "\n";
             return false;
         }
+
+        socketsInitialized = true;  // mark static flag
         sockets = SteamNetworkingSockets();
         if (!sockets) {
             Debug::Error("Sockets") << "Failed to get SteamNetworkingSockets interface\n";
             return false;
         }
+
         return true;
     }
 
@@ -542,8 +550,13 @@ private:
                 connectedConnection = k_HSteamNetConnection_Invalid;
             }
         }
-        GameNetworkingSockets_Kill();
+
+        if (socketsInitialized) {
+            GameNetworkingSockets_Kill();
+            socketsInitialized = false;  // reset static flag
+        }
     }
+
 
     ISteamNetworkingSockets* sockets;
     HSteamListenSocket listenSocket;
@@ -553,8 +566,11 @@ private:
     ConnectionCallback onConnectionStateChanged;
 
     static GNSSession* s_pInstance;
+
+    static inline bool socketsInitialized = false;
 };
 
 GNSSession* GNSSession::s_pInstance = nullptr;
+
 
 #endif // GNS_SESSION_H

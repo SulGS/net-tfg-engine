@@ -6,7 +6,10 @@
 
 #include "Client-Server/Server.hpp"  // Include for RunServer
 #include "Client-Server/OnlineClient.hpp"  // Include for RunClient
+#include "Client-Server/OfflineClient.hpp"  // Include for RunClient
 #include "game/asteroids.hpp"        // Include for game logic
+#include "game/menu.hpp"
+#include "NetTFG_Engine.hpp"
 
 #include "Utils/Debug/Debug.hpp"
 
@@ -75,9 +78,26 @@ int main(int argc, char** argv) {
             p = static_cast<uint16_t>(std::atoi(connectTo.substr(colon + 1).c_str()));
         }
 
-		Debug::Initialize("AsteroidsClient");
+        auto& engine = NetTFG_Engine::Get();
 
-        OnlineClient client(std::move(gameLogic), std::move(gameRenderer), customClientId);
-        return client.RunClient(hoststr, p);
+        Debug::Initialize("AsteroidsClient");
+		engine.RegisterClient(1, new OnlineClient(std::move(gameLogic), std::move(gameRenderer), customClientId));
+
+		std::unique_ptr<IGameLogic> menuLogic = std::make_unique<StartScreenGame>();
+		std::unique_ptr<IGameRenderer> menuRenderer = std::make_unique<StartScreenGameRenderer>();
+
+		engine.RegisterClient(0, new OfflineClient(std::move(menuLogic), std::move(menuRenderer)));
+
+
+
+
+        ClientWindow::startRenderThread(800, 600, "Asteroids");
+        
+
+
+		engine.RequestClientSwitch(0, hoststr, p);
+        engine.Start();
+
+        return 0;
     }
 }
