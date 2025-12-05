@@ -209,6 +209,21 @@ enum class ConnectionState {
     DISCONNECTING = 3
 };
 
+constexpr uint8_t PACKET_CLIENT_HELLO = 10;
+constexpr uint8_t PACKET_SERVER_ACCEPT = 11;
+constexpr uint8_t PACKET_SERVER_REJECT = 12;
+
+struct ClientHelloPacket {
+    uint8_t type;
+    char clientId[64];
+};
+
+struct ServerAcceptPacket {
+    uint8_t type;
+    int playerId;
+    bool isReconnection;
+};
+
 // Helper to convert between host and network byte order (unchanged, still needed)
 inline uint32_t hostToBigEndian32(uint32_t x) {
     return htonl(x);

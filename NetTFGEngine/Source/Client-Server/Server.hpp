@@ -38,21 +38,6 @@ struct ServerConfig {
     }
 };
 
-constexpr uint8_t PACKET_CLIENT_HELLO = 10;
-constexpr uint8_t PACKET_SERVER_ACCEPT = 11;
-constexpr uint8_t PACKET_SERVER_REJECT = 12;
-
-struct ClientHelloPacket {
-    uint8_t type;
-    char clientId[64];
-};
-
-struct ServerAcceptPacket {
-    uint8_t type;
-    int playerId;
-    bool isReconnection;
-};
-
 class Server {
 public:
     Server(std::unique_ptr<IGameLogic> gameLogic,
