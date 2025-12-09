@@ -28,6 +28,9 @@
 #include "Deltas.hpp"
 #include "DeltaHandler.hpp"
 
+#include "OpenAL/AudioManager.hpp"
+#include "OpenAL/AudioComponents.hpp"
+
 
 class AsteroidShooterGame : public IECSGameLogic {
 private:
@@ -254,6 +257,8 @@ public:
         world.GetEntityManager().AddComponent<Playable>(player2, Playable{1, MakeZeroInputBlob(), (1 == playerId ? true : false)});
         world.GetEntityManager().AddComponent<SpaceShip>(player2, SpaceShip{100,-1,0,0,true});
 
+        
+
         if (isServer) 
         {
             BoxCollider2D* collider1 = world.GetEntityManager().AddComponent<BoxCollider2D>(player1, BoxCollider2D{ glm::vec2(1.5f, 3.0f) });
@@ -263,6 +268,17 @@ public:
             BoxCollider2D* collider2 = world.GetEntityManager().AddComponent<BoxCollider2D>(player2, BoxCollider2D{ glm::vec2(1.5f, 3.0f) });
             collider2->layer = CollisionLayer::PLAYER;
             collider2->collidesWith = CollisionLayer::BULLET;
+        }
+        else 
+        {
+            if (playerId == 0)
+            {
+                AudioListenerComponent* listener = world.GetEntityManager().AddComponent<AudioListenerComponent>(player1, AudioListenerComponent{});
+            }
+            else
+            {
+                AudioListenerComponent* listener = world.GetEntityManager().AddComponent<AudioListenerComponent>(player2, AudioListenerComponent{});
+            }
         }
         
         
@@ -281,6 +297,14 @@ public:
 		eventProcessor->RegisterHandler(AsteroidEventMask::RESPAWN, std::make_unique<RespawnHandler>());
 
 		deltaProcessor->RegisterHandler(DELTA_GAME_POSITIONS, std::make_unique<GamePositionsDeltaHandler>());
+        
+        if (!isServer)
+        {
+            AudioManager::SetEntityManager(&world.GetEntityManager());
+            AudioManager::PlayMusic("song.wav", true);
+			AudioManager::SetMusicVolume(0.25f);
+        }
+		
     }
 
     void PrintState(const GameStateBlob& state) const override {

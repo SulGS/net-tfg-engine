@@ -6,6 +6,9 @@
 #include "Events.hpp"
 #include "Components.hpp"
 
+#include "OpenAL/AudioManager.hpp"
+#include "OpenAL/AudioComponents.hpp"
+
 class SpawnBulletHandler : public IEventHandler {
 public:
     void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
@@ -46,6 +49,14 @@ public:
 
                 world.GetEvents().push_back(eventEntry);
                 });
+        }
+        else 
+        {
+			// Audio for client when bullet is spawned
+			AudioSourceComponent* audio = world.GetEntityManager().AddComponent<AudioSourceComponent>(
+				bulletEntity, AudioSourceComponent("shoot.wav", AudioChannel::SFX, false));
+
+			audio->play = true;
         }
     }
 };

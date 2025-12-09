@@ -16,6 +16,7 @@ constexpr Entity NULL_ENTITY = 0;
 class IComponent {
 public:
     virtual ~IComponent() = default;
+    virtual void Destroy() {};
 };
 
 class IComponentArray {
@@ -46,6 +47,9 @@ public:
     }
 
     void RemoveComponent(Entity entity) override {
+		if (components.find(entity) != components.end()) {
+			components.at(entity).get()->Destroy();
+		}
         components.erase(entity);
     }
 

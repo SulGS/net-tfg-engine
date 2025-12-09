@@ -6,8 +6,11 @@
 
 #include "Client-Server/OnlineClient.hpp"  // Include for RunClient
 #include "Client-Server/OfflineClient.hpp"  // Include for RunClient
+
 #include "game/asteroids.hpp"        // Include for game logic
 #include "game/menu.hpp"
+
+#include "OpenAL/AudioManager.hpp"
 #include "NetTFG_Engine.hpp"
 
 #include "Utils/Debug/Debug.hpp"
@@ -39,6 +42,7 @@ int main(int argc, char** argv) {
 
 
     ClientWindow::startRenderThread(800, 600, "Asteroids");
+    AudioManager::Start();
         
 
 

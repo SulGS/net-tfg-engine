@@ -89,7 +89,6 @@ public:
 			}
         }
 
-        prediction->GetGameLogic()->playerId = assignedPlayerId_;
 
         Debug::Info("Client") << "Before running client loop\n";
         RunClientLoop(*prediction, *cWindow);

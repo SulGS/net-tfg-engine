@@ -12,6 +12,8 @@
 #include "Collisions/BoxCollider3D.hpp"
 #include "Collisions/SphereCollider3D.hpp"
 
+#include "OpenAL/AudioComponents.hpp"
+
 class IECSGameLogic : public IGameLogic {
 protected:
     ECSWorld world;
@@ -74,6 +76,11 @@ public:
             world.GetEntityManager().RegisterComponentType<BoxCollider3D>();
             world.GetEntityManager().RegisterComponentType<SphereCollider3D>();
             world.AddSystem(std::make_unique<CollisionSystem>());
+        }
+        else 
+        {
+			world.GetEntityManager().RegisterComponentType<AudioSourceComponent>();
+			world.GetEntityManager().RegisterComponentType<AudioListenerComponent>();
         }
 
         world.AddSystem(std::make_unique<DestroyingSystem>());
