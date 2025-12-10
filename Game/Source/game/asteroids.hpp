@@ -269,17 +269,6 @@ public:
             collider2->layer = CollisionLayer::PLAYER;
             collider2->collidesWith = CollisionLayer::BULLET;
         }
-        else 
-        {
-            if (playerId == 0)
-            {
-                AudioListenerComponent* listener = world.GetEntityManager().AddComponent<AudioListenerComponent>(player1, AudioListenerComponent{});
-            }
-            else
-            {
-                AudioListenerComponent* listener = world.GetEntityManager().AddComponent<AudioListenerComponent>(player2, AudioListenerComponent{});
-            }
-        }
         
         
         world.AddSystem(std::make_unique<InputSystem>());
@@ -298,12 +287,7 @@ public:
 
 		deltaProcessor->RegisterHandler(DELTA_GAME_POSITIONS, std::make_unique<GamePositionsDeltaHandler>());
         
-        if (!isServer)
-        {
-            AudioManager::SetEntityManager(&world.GetEntityManager());
-            AudioManager::PlayMusic("song.wav", true);
-			AudioManager::SetMusicVolume(0.25f);
-        }
+        
 		
     }
 
@@ -417,6 +401,11 @@ std::vector<float> BulletVerts() {
                     world.GetEntityManager().AddComponent<ECSBullet>(newBullet, ECSBullet{b.id, b.velX, b.velY, b.ownerId, b.lifetime});
                     Mesh* m = new Mesh(BulletVerts(), bulletInds, yellow);
                     world.GetEntityManager().AddComponent<MeshComponent>(newBullet, MeshComponent(m));
+
+                    AudioSourceComponent* audio = world.GetEntityManager().AddComponent<AudioSourceComponent>(
+                        newBullet, AudioSourceComponent("shoot.wav", AudioChannel::SFX, false));
+
+                    audio->play = true;
                 }
             }
         }
@@ -488,6 +477,13 @@ std::vector<float> BulletVerts() {
         world.AddSystem(std::make_unique<CameraFollowSystem>());
         world.AddSystem(std::make_unique<OnDeathRenderSystem>());
         world.AddSystem(std::make_unique<ChargingBulletRenderSystem>());
+
+
+        AudioListenerComponent* listener = world.GetEntityManager().AddComponent<AudioListenerComponent>(camera, AudioListenerComponent{});
+
+        AudioManager::SetEntityManager(&world.GetEntityManager());
+        AudioManager::PlayMusic("song.wav", true);
+        AudioManager::SetMusicVolume(0.25f);
     }
 
     void Interpolate(const GameStateBlob& previousServerState, const GameStateBlob& currentServerState, const GameStateBlob& previousLocalState, const GameStateBlob& currentLocalState, GameStateBlob& renderState, float serverInterpolation, float localInterpolation) override {

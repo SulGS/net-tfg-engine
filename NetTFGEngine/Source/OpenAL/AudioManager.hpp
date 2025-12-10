@@ -10,7 +10,7 @@
 #include <atomic>
 #include <chrono>
 
-const int AUDIO_TICKS_PER_SECOND = 60;
+const int AUDIO_TICKS_PER_SECOND = 30;
 const int AUDIO_MS_PER_TICK = 1000 / AUDIO_TICKS_PER_SECOND;
 
 class AudioManager {
@@ -152,7 +152,7 @@ private:
                 double currentMs = (durationUs / 1000.0) / AUDIO_TICKS_PER_SECOND;
                 double meanMs = (mean / 1000.0) / AUDIO_TICKS_PER_SECOND;
 
-                Debug::Info("AudioManager") << "Current: " << currentMs << " ms | Mean: " << meanMs << " ms\n";
+                //Debug::Info("AudioManager") << "Current: " << currentMs << " ms | Mean: " << meanMs << " ms\n";
 
                 tickCount = 0;
             }

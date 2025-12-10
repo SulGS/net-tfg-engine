@@ -33,6 +33,9 @@ public:
         world.GetEntityManager().RegisterComponentType<UIButton>();
         world.GetEntityManager().RegisterComponentType<UIImage>();
         world.GetEntityManager().RegisterComponentType<UIText>();
+
+        world.GetEntityManager().RegisterComponentType<AudioSourceComponent>();
+        world.GetEntityManager().RegisterComponentType<AudioListenerComponent>();
         
         world.AddSystem(std::make_unique<DestroyingSystem>());
 

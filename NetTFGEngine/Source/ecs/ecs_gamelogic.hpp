@@ -77,11 +77,6 @@ public:
             world.GetEntityManager().RegisterComponentType<SphereCollider3D>();
             world.AddSystem(std::make_unique<CollisionSystem>());
         }
-        else 
-        {
-			world.GetEntityManager().RegisterComponentType<AudioSourceComponent>();
-			world.GetEntityManager().RegisterComponentType<AudioListenerComponent>();
-        }
 
         world.AddSystem(std::make_unique<DestroyingSystem>());
 

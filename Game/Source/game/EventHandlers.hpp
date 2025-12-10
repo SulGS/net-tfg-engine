@@ -50,14 +50,6 @@ public:
                 world.GetEvents().push_back(eventEntry);
                 });
         }
-        else 
-        {
-			// Audio for client when bullet is spawned
-			AudioSourceComponent* audio = world.GetEntityManager().AddComponent<AudioSourceComponent>(
-				bulletEntity, AudioSourceComponent("shoot.wav", AudioChannel::SFX, false));
-
-			audio->play = true;
-        }
     }
 };
 
