@@ -6,6 +6,7 @@
 #include "UIText.hpp"
 #include "UIImage.hpp"
 #include "UIButton.hpp"
+#include "UITextField.hpp"
 #include "Utils/FontManager.hpp"
 #include "OpenGL/OpenGLIncludes.hpp"
 #include <map>
@@ -57,6 +58,7 @@ private:
     void RenderUIImage(const UIElement* element, const UIImage* image);
     void RenderUIText(const UIElement* element, const UIText* text);
     void RenderUIButton(Entity entity, const UIElement* element, const UIButton* button);
+    void RenderUITextField(const UIElement* element, const UITextField* textField);
     void RenderQuad(const glm::vec2& position, const glm::vec2& size, 
                    const glm::vec4& color, GLuint textureID = 0,
                    const glm::vec4& uvRect = glm::vec4(0, 0, 1, 1));

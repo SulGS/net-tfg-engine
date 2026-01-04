@@ -25,21 +25,21 @@
 class OnlineClient : public Client {
 public:
     OnlineClient(std::unique_ptr<IGameLogic> gameLogic,
-        std::unique_ptr<IGameRenderer> gameRenderer,
-        const std::string& customClientId = "")
+        std::unique_ptr<IGameRenderer> gameRenderer)
         : gameLogic_(std::move(gameLogic))
         , gameRenderer_(std::move(gameRenderer))
-        , clientId_(customClientId.empty() ? GenerateClientId() : customClientId)
         , assignedPlayerId_(-1)
         , isReconnection_(false)
         , serverConnection_(k_HSteamNetConnection_Invalid)
     {
     }
 
-    int RunClient(const std::string& hostStr = "0.0.0.0", uint16_t port = 0) override {
+    int RunClient(const std::string& hostStr = "0.0.0.0", uint16_t port = 0, const std::string & customClientId = "") override {
         if (!net_.InitGNS()) {
             return 1;
         }
+
+		clientId_ = customClientId.empty() ? GenerateClientId() : customClientId;
 
         ClientWindow* cWindow = new ClientWindow(
             [this](GameStateBlob& state, OpenGLWindow* win) {

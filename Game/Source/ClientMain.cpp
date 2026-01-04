@@ -17,24 +17,21 @@
 
 int main(int argc, char** argv) {
 
-    std::string customClientId = "";
-
-    // Parse arguments
-    for (int i = 1; i < argc; ++i) {
-        std::string a = argv[i];
-        if (a == "--id" && i + 1 < argc) customClientId = argv[++i];
-    }
 
     std::unique_ptr<IGameLogic> gameLogic = std::make_unique<AsteroidShooterGame>();
     std::unique_ptr<IGameRenderer> gameRenderer = std::make_unique<AsteroidShooterGameRenderer>();
 
+	gameRenderer->LinkGameLogic(gameLogic.get());
+
     auto& engine = NetTFG_Engine::Get();
 
     Debug::Initialize("AsteroidsClient");
-	engine.RegisterClient(1, new OnlineClient(std::move(gameLogic), std::move(gameRenderer), customClientId));
+	engine.RegisterClient(1, new OnlineClient(std::move(gameLogic), std::move(gameRenderer)));
 
 	std::unique_ptr<IGameLogic> menuLogic = std::make_unique<StartScreenGame>();
 	std::unique_ptr<IGameRenderer> menuRenderer = std::make_unique<StartScreenGameRenderer>();
+
+	menuRenderer->LinkGameLogic(menuLogic.get());
 
 	engine.RegisterClient(0, new OfflineClient(std::move(menuLogic), std::move(menuRenderer)));
 

@@ -32,13 +32,14 @@ public:
     // ---- Request a client switch WITH host/port ----
     void RequestClientSwitch(int id,
         const std::string& host,
-        uint16_t port)
+        uint16_t port, const std::string& customClientId = "")
     {
         auto it = clientIndexMap.find(id);
         if (it == clientIndexMap.end()) return;
 
         pendingHost = host;
         pendingPort = port;
+		pendingName = customClientId;
         hostAssigned = true;
 
         ClientManager::Get().RequestClientSwitch(it->second);
@@ -65,6 +66,7 @@ public:
             if (!hostAssigned) {
                 pendingHost = "0.0.0.0";
                 pendingPort = 0;
+				pendingName = "";
             }
 
             Client* client = ClientManager::Get().GetActiveClient();
@@ -75,7 +77,7 @@ public:
             }
 
             // Run active client with stored host/port
-            int exitCode = client->RunClient(pendingHost, pendingPort);
+            int exitCode = client->RunClient(pendingHost, pendingPort, pendingName);
 
 			Debug::Info("NetTFG_Engine") << "Client exited with code " << exitCode << "\n";
 
@@ -103,5 +105,6 @@ private:
     // Host/port used for next active client
     std::string pendingHost = "0.0.0.0";
     uint16_t    pendingPort = 0;
+    std::string pendingName = "";
     bool        hostAssigned = false;
 };

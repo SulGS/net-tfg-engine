@@ -149,7 +149,6 @@ private:
             sampleStart = std::chrono::high_resolution_clock::now();
 
             window->pollEvents();
-            Input::Update();
 
             ClientWindow* instance = nullptr;
             {
@@ -244,6 +243,8 @@ private:
 
                 tickCount = 0;
             }
+
+            Input::Update();
 
             nextTick += std::chrono::milliseconds(RENDER_MS_PER_TICK);
             std::this_thread::sleep_until(nextTick);

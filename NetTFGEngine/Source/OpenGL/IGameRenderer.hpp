@@ -6,11 +6,23 @@
 #include "OpenGL/Mesh.hpp"
 
 class IGameRenderer {
+private:
+
+	IGameLogic* gameLogic;
+
 public:
 
     int playerId = -1;
 
     virtual void Init(const GameStateBlob& state, OpenGLWindow* window) = 0;
+
+    void LinkGameLogic(IGameLogic* logic) {
+        gameLogic = logic;
+    }
+
+    IGameLogic* GetGameLogic() {
+		return gameLogic;
+	}
 
     virtual void Render(const GameStateBlob& state, OpenGLWindow* window) = 0;
 

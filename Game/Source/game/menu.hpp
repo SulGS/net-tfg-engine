@@ -30,23 +30,37 @@ enum StartScreenInputMask : uint8_t {
     INPUT_SPACE = 1 << 0
 };
 
+class ConnectionData : public IComponent {
+public:
+    std::string ip;
+    std::string port;
+    std::string clientName;
+
+	ConnectionData() : ip(""), port(""), clientName("") {}
+	ConnectionData(const std::string& ip, const std::string& port, const std::string& clientName)
+		: ip(ip), port(port), clientName(clientName) {
+	}
+};
+
 // System to detect space key press
 class StartScreenInputSystem : public ISystem {
 public:
     void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
-        auto query = entityManager.CreateQuery<Playable>();
+        auto query = entityManager.CreateQuery<Playable, ConnectionData>();
 
-        for (auto [entity, play] : query) {
+        for (auto [entity, play, conn] : query) {
             InputBlob input = play->input;
             uint8_t m = input.data[0];
 
             if (m & INPUT_SPACE) {
-                printf("[StartScreen] SPACE KEY PRESSED! Frame detected.\n");
-                NetTFG_Engine::Get().RequestClientSwitch(1,"127.0.0.1",12345);
+				Debug::Info("StartScreen") << "Space key pressed! Connecting to server at " << conn->ip << ":" << conn->port << "\n";
+                NetTFG_Engine::Get().RequestClientSwitch(1,conn->ip,stoi(conn->port),conn->clientName);
             }
         }
     }
 };
+
+
 
 class StartScreenGame : public IECSGameLogic {
 public:
@@ -56,11 +70,15 @@ public:
 
     InputBlob GenerateLocalInput() override {
         uint8_t m = INPUT_NULL;
+        InputBlob buf = MakeZeroInputBlob();
+
+        if (Input::IsInputBlockedForUI()) return buf;
+
         if (Input::KeyPressed(Input::CharToKeycode(' '))) {
             m |= INPUT_SPACE;
         }
 
-        InputBlob buf = MakeZeroInputBlob();
+        
         buf.data[0] = m;
         return buf;
     }
@@ -105,9 +123,12 @@ public:
         s->frameCount = 0;
         state.len = sizeof(StartScreenGameState);
 
+		world.GetEntityManager().RegisterComponentType<ConnectionData>();
+
         // Create a player entity to receive input
         Entity player = world.GetEntityManager().CreateEntity();
         world.GetEntityManager().AddComponent<Playable>(player, Playable{ 0, MakeZeroInputBlob(), true });
+        world.GetEntityManager().AddComponent<ConnectionData>(player, ConnectionData{ "", "", "" });
 
         // Add input detection system
         world.AddSystem(std::make_unique<StartScreenInputSystem>());
@@ -139,9 +160,9 @@ public:
         }
     }
 
+
     void InitECSRenderer(const GameStateBlob& state, OpenGLWindow* window) override {
         this->window = window;
-
         StartScreenGameState s;
         std::memcpy(&s, state.data, sizeof(StartScreenGameState));
 
@@ -149,21 +170,65 @@ public:
         Entity camera = world.GetEntityManager().CreateEntity();
         Transform* camTrans = world.GetEntityManager().AddComponent<Transform>(camera, Transform{});
         camTrans->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
-
         Camera* camSettings = world.GetEntityManager().AddComponent<Camera>(camera, Camera{});
         camSettings->setOrthographic(-100.0f, 100.0f, -100.0f, 100.0f, 0.1f, 100.0f);
         camSettings->setTarget(glm::vec3(0.0f, 0.0f, 0.0f));
         camSettings->setUp(glm::vec3(0.0f, 1.0f, 0.0f));
 
-        // Create UI text entity
-        Entity startText = world.GetEntityManager().CreateEntity();
+        // Create text field (LOWER layer = rendered first, behind other elements)
+        Entity ipField = world.GetEntityManager().CreateEntity();
+        UIElement* element = world.GetEntityManager().AddComponent<UIElement>(ipField);
+        element->anchor = UIAnchor::TOP_LEFT;
+        element->position = glm::vec2(100.0f, 10.0f);
+        element->size = glm::vec2(300.0f, 40.0f);
+        element->isVisible = true;
+        element->layer = 1;  // Lower layer number
 
-        UIElement* element = world.GetEntityManager().AddComponent<UIElement>(startText, UIElement{});
+        UITextField* field = world.GetEntityManager().AddComponent<UITextField>(ipField);
+		field->id = "ip_input";
+        field->placeholderText = "Enter IP here...";
+        field->fontSize = 16.0f;
+        field->padding = 10.0f;
+        field->maxLength = 100;
+
+        Entity portField = world.GetEntityManager().CreateEntity();
+        element = world.GetEntityManager().AddComponent<UIElement>(portField);
+        element->anchor = UIAnchor::TOP_LEFT;
+        element->position = glm::vec2(100.0f, 55.0f);
+        element->size = glm::vec2(300.0f, 40.0f);
+        element->isVisible = true;
+        element->layer = 1;  // Lower layer number
+
+        field = world.GetEntityManager().AddComponent<UITextField>(portField);
+		field->id = "port_input";
+        field->placeholderText = "Enter port here...";
+        field->fontSize = 16.0f;
+        field->padding = 10.0f;
+        field->maxLength = 100;
+
+        Entity nameField = world.GetEntityManager().CreateEntity();
+        element = world.GetEntityManager().AddComponent<UIElement>(nameField);
+        element->anchor = UIAnchor::TOP_LEFT;
+        element->position = glm::vec2(100.0f, 100.0f);
+        element->size = glm::vec2(300.0f, 40.0f);
+        element->isVisible = true;
+        element->layer = 1;  // Lower layer number
+
+        field = world.GetEntityManager().AddComponent<UITextField>(nameField);
+		field->id = "name_input";
+        field->placeholderText = "Enter name here...";
+        field->fontSize = 16.0f;
+        field->padding = 10.0f;
+        field->maxLength = 100;
+
+        // Create UI text entity (HIGHER layer = rendered last, on top of everything)
+        Entity startText = world.GetEntityManager().CreateEntity();
+        element = world.GetEntityManager().AddComponent<UIElement>(startText, UIElement{});
         element->anchor = UIAnchor::CENTER;
         element->position = glm::vec2(0.0f, 0.0f);
         element->size = glm::vec2(400.0f, 80.0f);
         element->pivot = glm::vec2(0.5f, 0.5f);
-        element->layer = 1;
+        element->layer = 10;  // HIGHER layer number - renders on top!
 
         UIText* text = world.GetEntityManager().AddComponent<UIText>(startText, UIText{});
         text->text = "Press Space to Start";
@@ -174,6 +239,39 @@ public:
         // Create player entity for input
         Entity player = world.GetEntityManager().CreateEntity();
         world.GetEntityManager().AddComponent<Playable>(player, Playable{ 0, MakeZeroInputBlob(), true });
+
+        renderDataTransferToLogicCallback = [](IECSGameLogic* logic, IECSGameRenderer* renderer) {
+            if (!logic) {
+                return;
+            }
+
+			StartScreenGame* gameLogic = dynamic_cast<StartScreenGame*>(logic);
+			StartScreenGameRenderer* gameRenderer = dynamic_cast<StartScreenGameRenderer*>(renderer);
+			if (!gameLogic || !gameRenderer) {
+				return;
+			}
+			// Transfer input field data to game logic
+			auto& em = gameRenderer->world.GetEntityManager();
+			auto query = em.CreateQuery<UIElement, UITextField>();
+			for (auto [entity, element, textField] : query) {
+				auto& em2 = gameLogic->world.GetEntityManager();
+				auto connQuery = em2.CreateQuery<ConnectionData>();
+				for (auto [connEntity, connData] : connQuery) {
+					if (textField->id == "ip_input") {
+						connData->ip = textField->text;
+					}
+					else if (textField->id == "port_input") {
+						connData->port = textField->text;
+					}
+					else if (textField->id == "name_input") {
+						connData->clientName = textField->text;
+					}
+				}
+			}
+        };
+
+
+
 
         printf("[StartScreen] Renderer initialized!\n");
     }

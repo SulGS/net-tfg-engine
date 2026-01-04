@@ -20,7 +20,7 @@ public:
     {
     }
 
-    int RunClient(const std::string& hostStr = "0.0.0.0", uint16_t port = 0) override {
+    int RunClient(const std::string& hostStr = "0.0.0.0", uint16_t port = 0, const std::string& customClientId = "") override {
         Debug::Info("OfflineClient") << "Starting offline game (ignoring host and port parameters)\n";
 
 		isOfflineClient = true;

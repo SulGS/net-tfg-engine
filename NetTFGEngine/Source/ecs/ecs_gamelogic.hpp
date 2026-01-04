@@ -16,10 +16,12 @@
 
 class IECSGameLogic : public IGameLogic {
 protected:
-    ECSWorld world;
 	EventProcessor* eventProcessor;
 	DeltaProcessor* deltaProcessor;
+
 public:
+    ECSWorld world;
+
     virtual ~IECSGameLogic() 
 	{
 		delete eventProcessor;

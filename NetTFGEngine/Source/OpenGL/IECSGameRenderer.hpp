@@ -11,11 +11,18 @@
 #include "ecs/UI/UIElement.hpp"
 #include "ecs/UI/UIImage.hpp"
 #include "ecs/UI/UIText.hpp"
+#include "ecs/UI/UITextField.hpp"
 #include "ecs/UI/UIRenderSystem.hpp"
+#include "ecs/UI/UIUpdateSystem.hpp"
+
+#include <functional>
+
 
 class IECSGameRenderer : public IGameRenderer {
 protected:
     ECSWorld world;
+
+    std::function<void(IECSGameLogic* logic,IECSGameRenderer* renderer)> renderDataTransferToLogicCallback;
 
 public:
 
@@ -33,6 +40,7 @@ public:
         world.GetEntityManager().RegisterComponentType<UIButton>();
         world.GetEntityManager().RegisterComponentType<UIImage>();
         world.GetEntityManager().RegisterComponentType<UIText>();
+		world.GetEntityManager().RegisterComponentType<UITextField>();
 
         world.GetEntityManager().RegisterComponentType<AudioSourceComponent>();
         world.GetEntityManager().RegisterComponentType<AudioListenerComponent>();
@@ -43,9 +51,13 @@ public:
         
         world.AddSystem(std::make_unique<CameraSystem>());
         world.AddSystem(std::make_unique<RenderSystem>());
-        world.AddSystem(std::make_unique<UIRenderSystem>(window->getWidth(),window->getHeight()));
+        world.AddSystem(std::make_unique<UIRenderSystem>(window->getWidth(), window->getHeight()));
+		
+        
 
         UIRenderSystem* uir = world.GetSystem<UIRenderSystem>();
+
+        world.AddSystem(std::make_unique<UIUpdateSystem>(window->getWidth(), window->getHeight(), window->getWindow(),uir->GetFontManager()));
 
         uir->LoadFont("default", "C:/Windows/Fonts/arial.ttf", 32);
     }
@@ -57,6 +69,11 @@ public:
         ui_system->UpdateScreenSize(window->getWidth(),window->getHeight());
         
         world.Update(false, 1.0f / RENDER_TICKS_PER_SECOND); // Assume 60 FPS for now
+
+		if (renderDataTransferToLogicCallback) {
+			IECSGameLogic* logic = static_cast<IECSGameLogic*>(GetGameLogic());
+			renderDataTransferToLogicCallback(logic, this);
+		}
     }
 
 };
