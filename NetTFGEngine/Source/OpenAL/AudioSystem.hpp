@@ -506,40 +506,35 @@ private:
     bool loadWav(const char* file, ALuint& buffer,
         ALenum& formatOut, ALsizei& freqOut)
     {
+        // Construct path to Content folder
+        std::string contentPath = std::string("Content/") + file;
+
         unsigned int channels;
         unsigned int sampleRate;
         drwav_uint64 totalPCMFrames;
-
         float* pcmData = drwav_open_file_and_read_pcm_frames_f32(
-            file, &channels, &sampleRate, &totalPCMFrames, nullptr);
-
+            contentPath.c_str(), &channels, &sampleRate, &totalPCMFrames, nullptr);
         if (!pcmData) {
-            Debug::Error("AudioSystem") << "Failed to load WAV: " << file << "\n";
+            Debug::Error("AudioSystem") << "Failed to load WAV: " << contentPath << "\n";
             return false;
         }
-
         ALenum format =
             (channels == 1) ? AL_FORMAT_MONO_FLOAT32 :
             (channels == 2) ? AL_FORMAT_STEREO_FLOAT32 :
             AL_NONE;
-
         if (format == AL_NONE) {
             Debug::Error("AudioSystem") << "Unsupported WAV channel count: " << channels << "\n";
             drwav_free(pcmData, nullptr);
             return false;
         }
-
         alGenBuffers(1, &buffer);
         alBufferData(buffer, format,
             pcmData,
             static_cast<ALsizei>(totalPCMFrames * channels * sizeof(float)),
             sampleRate);
-
         drwav_free(pcmData, nullptr);
-
         formatOut = format;
         freqOut = sampleRate;
-
         return true;
     }
 };

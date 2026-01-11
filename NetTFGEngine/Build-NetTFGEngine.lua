@@ -2,7 +2,6 @@ project "NetTFGEngine"
    kind "StaticLib"
    language "C++"
    cppdialect "C++20"
-   targetdir "Binaries/%{cfg.buildcfg}"
    staticruntime "off"
 
    files { "Source/**.hpp", "Source/**.cpp" }
@@ -12,8 +11,9 @@ project "NetTFGEngine"
       "Source"
    }
 
-   targetdir ("../Binaries/" .. OutputDir .. "/%{prj.name}")
-   objdir ("../Binaries/Intermediates/" .. OutputDir .. "/%{prj.name}")
+   -- Engine outputs to Engine subfolder
+   targetdir (Directories.EngineDir)
+   objdir (Directories.IntermediateDir)
 
    filter "system:windows"
        systemversion "latest"

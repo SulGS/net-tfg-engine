@@ -112,49 +112,89 @@ void UIUpdateSystem::Update(EntityManager& entityManager, std::vector<EventEntry
     bool isServer, float deltaTime) {
     cachedEntityManager = &entityManager;
 
-    // Get current mouse position
     double mouseX, mouseY;
     Input::GetMousePosition(mouseX, mouseY);
 
-    // Debug: Check mouse click
-    if (Input::MousePressed(GLFW_MOUSE_BUTTON_LEFT)) { // Use the updated mouse button API
-
+    if (Input::MousePressed(GLFW_MOUSE_BUTTON_LEFT)) {
         bool clickedAnyField = false;
         Entity clickedField = 0;
+        bool clickedButton = false;
 
-        auto query = entityManager.CreateQuery<UIElement, UITextField>();
-        for (auto [entity, element, textField] : query) {
-            if (!element->isVisible || !textField->isInteractable) continue;
-
-            bool isInside = element->Contains({ mouseX, mouseY }, screenWidth, screenHeight);
-
-            if (isInside) {
-                clickedAnyField = true;
-                clickedField = entity;
+        // Check buttons first
+        auto buttonQuery = entityManager.CreateQuery<UIElement, UIButton>();
+        for (auto [entity, element, button] : buttonQuery) {
+            if (!element->isVisible || !button->isInteractable) continue;
+            if (element->Contains({ mouseX, mouseY }, screenWidth, screenHeight)) {
+                if (button->onClick) button->onClick();
+                clickedButton = true;
                 break;
             }
         }
 
-        if (clickedAnyField) {
-            if (focusedTextField != clickedField) {
-                SetFocus(entityManager, clickedField);
+        // Check text fields only if no button was clicked
+        if (!clickedButton) {
+            auto query = entityManager.CreateQuery<UIElement, UITextField>();
+            for (auto [entity, element, textField] : query) {
+                if (!element->isVisible || !textField->isInteractable) continue;
+                if (element->Contains({ mouseX, mouseY }, screenWidth, screenHeight)) {
+                    clickedAnyField = true;
+                    clickedField = entity;
+                    break;
+                }
             }
 
-            auto element = entityManager.GetComponent<UIElement>(clickedField);
-            auto textField = entityManager.GetComponent<UITextField>(clickedField);
-            if (element && textField) {
-                HandleTextFieldClick(entityManager, clickedField, element, textField,
-                    glm::vec2(mouseX, mouseY));
-
+            if (clickedAnyField) {
+                if (focusedTextField != clickedField) {
+                    SetFocus(entityManager, clickedField);
+                }
+                auto element = entityManager.GetComponent<UIElement>(clickedField);
+                auto textField = entityManager.GetComponent<UITextField>(clickedField);
+                if (element && textField) {
+                    HandleTextFieldClick(entityManager, clickedField, element, textField,
+                        glm::vec2(mouseX, mouseY));
+                }
+            }
+            else {
+                if (focusedTextField != 0) {
+                    ClearFocus(entityManager);
+                }
             }
         }
         else {
+            // Button was clicked, clear text field focus
             if (focusedTextField != 0) {
                 ClearFocus(entityManager);
             }
         }
     }
 
+    // Update button hover states every frame
+    auto buttonQuery = entityManager.CreateQuery<UIElement, UIButton>();
+    for (auto [entity, element, button] : buttonQuery) {
+        if (!element->isVisible || !button->isInteractable) {
+            button->state = ButtonState::DISABLED;
+            continue;
+        }
+
+        bool isInside = element->Contains({ mouseX, mouseY }, screenWidth, screenHeight);
+        ButtonState previousState = button->state;
+
+        if (Input::KeyPressed(GLFW_MOUSE_BUTTON_LEFT) && isInside) {
+            button->state = ButtonState::PRESSED;
+        }
+        else if (isInside) {
+            if (previousState != ButtonState::HOVERED) {
+                if (button->onHoverEnter) button->onHoverEnter();
+            }
+            button->state = ButtonState::HOVERED;
+        }
+        else {
+            if (previousState == ButtonState::HOVERED) {
+                if (button->onHoverExit) button->onHoverExit();
+            }
+            button->state = ButtonState::NORMAL;
+        }
+    }
 
     // Handle keyboard input for focused text field
     if (focusedTextField != 0) {
@@ -164,7 +204,6 @@ void UIUpdateSystem::Update(EntityManager& entityManager, std::vector<EventEntry
             bool ctrl = Input::KeyPressed(GLFW_KEY_LEFT_CONTROL) || Input::KeyPressed(GLFW_KEY_RIGHT_CONTROL);
             bool alt = Input::KeyPressed(GLFW_KEY_LEFT_ALT) || Input::KeyPressed(GLFW_KEY_RIGHT_ALT);
 
-            // Handle special keys
             if (Input::KeyTapped(GLFW_KEY_BACKSPACE)) {
                 textField->Backspace();
                 textField->cursorBlinkTime = 0.0f;
@@ -201,14 +240,12 @@ void UIUpdateSystem::Update(EntityManager& entityManager, std::vector<EventEntry
                 textField->cursorVisible = true;
             }
 
-            // Ctrl+A - Select All
             if (ctrl && Input::KeyTapped(GLFW_KEY_A)) {
                 textField->SelectAll();
                 textField->cursorBlinkTime = 0.0f;
                 textField->cursorVisible = true;
             }
 
-            // Ctrl+C - Copy
             if (ctrl && Input::KeyTapped(GLFW_KEY_C)) {
                 if (textField->HasSelection()) {
                     size_t start = textField->GetSelectionMin();
@@ -218,7 +255,6 @@ void UIUpdateSystem::Update(EntityManager& entityManager, std::vector<EventEntry
                 }
             }
 
-            // Ctrl+X - Cut
             if (ctrl && Input::KeyTapped(GLFW_KEY_X)) {
                 if (textField->HasSelection()) {
                     size_t start = textField->GetSelectionMin();
@@ -231,13 +267,11 @@ void UIUpdateSystem::Update(EntityManager& entityManager, std::vector<EventEntry
                 }
             }
 
-            // Ctrl+V - Paste
             if (ctrl && Input::KeyTapped(GLFW_KEY_V)) {
                 const char* clipboardText = glfwGetClipboardString(window);
                 if (clipboardText) {
                     std::string pasteText(clipboardText);
 
-                    // Validate before pasting
                     if (textField->validator) {
                         std::string testText = textField->text;
                         if (textField->HasSelection()) {
@@ -251,7 +285,7 @@ void UIUpdateSystem::Update(EntityManager& entityManager, std::vector<EventEntry
                         }
 
                         if (!textField->validator(testText)) {
-                            pasteText.clear();  // Invalid paste
+                            pasteText.clear();
                         }
                     }
 
@@ -263,29 +297,25 @@ void UIUpdateSystem::Update(EntityManager& entityManager, std::vector<EventEntry
                 }
             }
 
-            // Enter - Submit
             if (Input::KeyTapped(GLFW_KEY_ENTER) || Input::KeyTapped(GLFW_KEY_KP_ENTER)) {
                 if (textField->onSubmit) {
                     textField->onSubmit(textField->text);
                 }
             }
 
-            // Escape - Clear focus
             if (Input::KeyTapped(GLFW_KEY_ESCAPE)) {
                 ClearFocus(entityManager);
             }
         }
     }
 
-    // Update all text fields (just for cursor blinking)
+    // Update all text fields (cursor blinking)
     auto query = entityManager.CreateQuery<UIElement, UITextField>();
     for (auto [entity, element, textField] : query) {
         if (!element->isVisible) continue;
-
         UpdateTextField(entityManager, entity, element, textField, deltaTime);
     }
 
-    // Block game input when a text field is focused
     Input::BlockInputForUI(focusedTextField != 0);
 }
 

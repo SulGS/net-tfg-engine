@@ -4,6 +4,7 @@
 #include "ecs/ecs_common.hpp"
 #include "UIElement.hpp"
 #include "UITextField.hpp"
+#include "UIButton.hpp"
 #include "Utils/FontManager.hpp"
 #include "OpenGL/OpenGLIncludes.hpp"
 

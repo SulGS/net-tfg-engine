@@ -372,9 +372,122 @@ void UIRenderSystem::RenderUIText(const UIElement* element, const UIText* text) 
 
 void UIRenderSystem::RenderUIButton(Entity entity, const UIElement* element, const UIButton* button) {
     glm::vec2 pos = element->GetScreenPosition(screenWidth, screenHeight);
-    glm::vec4 color = button->GetCurrentColor() * glm::vec4(1.0f, 1.0f, 1.0f, element->opacity);
-    
-    RenderQuad(pos, element->size, color);
+
+    // Render background
+    glm::vec4 bgColor = button->GetCurrentColor() * glm::vec4(1.0f, 1.0f, 1.0f, element->opacity);
+    RenderQuad(pos, element->size, bgColor);
+
+    // Render border (as a slightly larger quad behind)
+    glm::vec4 borderColor = button->GetCurrentBorderColor() * glm::vec4(1.0f, 1.0f, 1.0f, element->opacity);
+    float borderWidth = 2.0f;
+
+    // Top border
+    RenderQuad(glm::vec2(pos.x, pos.y - borderWidth),
+        glm::vec2(element->size.x, borderWidth), borderColor);
+    // Bottom border
+    RenderQuad(glm::vec2(pos.x, pos.y + element->size.y),
+        glm::vec2(element->size.x, borderWidth), borderColor);
+    // Left border
+    RenderQuad(glm::vec2(pos.x - borderWidth, pos.y),
+        glm::vec2(borderWidth, element->size.y), borderColor);
+    // Right border
+    RenderQuad(glm::vec2(pos.x + element->size.x, pos.y),
+        glm::vec2(borderWidth, element->size.y), borderColor);
+
+    // Calculate text rendering area (with padding)
+    glm::vec2 textPos = pos + glm::vec2(button->padding, button->padding);
+    glm::vec2 textAreaSize = element->size - glm::vec2(button->padding * 2.0f);
+
+    // Get text to render
+    std::string displayText = button->text;
+
+    if (displayText.empty()) {
+        return;
+    }
+
+    // Get font info
+    const std::string fontName = button->fontName;
+    if (!fontManager || !fontManager->HasFont(fontName)) {
+        return;
+    }
+
+    // Calculate scale
+    const Character* refChar = fontManager->GetCharacter(fontName, 'H');
+    if (!refChar) refChar = fontManager->GetCharacter(fontName, 'A');
+    float loadedFontSize = refChar ? static_cast<float>(refChar->size.y) : 48.0f;
+    float scale = button->fontSize / loadedFontSize;
+
+    // Setup text rendering
+    glUseProgram(textShaderProgram);
+    glUniformMatrix4fv(glGetUniformLocation(textShaderProgram, "uProjection"),
+        1, GL_FALSE, glm::value_ptr(projection));
+
+    glm::vec4 renderColor = button->textColor * glm::vec4(1.0f, 1.0f, 1.0f, element->opacity);
+
+    glUniform4fv(glGetUniformLocation(textShaderProgram, "textColor"),
+        1, glm::value_ptr(renderColor));
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindVertexArray(textVAO);
+
+    // Calculate baseline
+    float maxBearingY = 0.0f;
+    for (char c : displayText) {
+        const Character* ch = fontManager->GetCharacter(fontName, c);
+        if (ch && ch->bearing.y > maxBearingY) {
+            maxBearingY = static_cast<float>(ch->bearing.y);
+        }
+    }
+
+    // Calculate total text width for centering
+    float textWidth = 0.0f;
+    for (char c : displayText) {
+        const Character* ch = fontManager->GetCharacter(fontName, c);
+        if (ch) {
+            textWidth += (ch->advance >> 6) * scale;
+        }
+    }
+
+    // Center text horizontally and vertically in the text area
+    float baselineY = textPos.y + (textAreaSize.y + maxBearingY * scale) * 0.5f;
+    float cursorX = textPos.x + (textAreaSize.x - textWidth) * 0.5f;
+
+    // Render text
+    for (size_t i = 0; i < displayText.length(); i++) {
+        char c = displayText[i];
+        const Character* ch = fontManager->GetCharacter(fontName, c);
+        if (!ch) continue;
+
+        float xpos = cursorX + ch->bearing.x * scale;
+        float ypos = baselineY - ch->bearing.y * scale;
+        float w = ch->size.x * scale;
+        float h = ch->size.y * scale;
+
+        // Build vertices
+        float vertices[6][4] = {
+            { xpos,     ypos + h,   0.0f, 1.0f },
+            { xpos + w, ypos,       1.0f, 0.0f },
+            { xpos,     ypos,       0.0f, 0.0f },
+            { xpos,     ypos + h,   0.0f, 1.0f },
+            { xpos + w, ypos + h,   1.0f, 1.0f },
+            { xpos + w, ypos,       1.0f, 0.0f }
+        };
+
+        glBindTexture(GL_TEXTURE_2D, ch->textureID);
+        glUniform1i(glGetUniformLocation(textShaderProgram, "text"), 0);
+
+        glBindBuffer(GL_ARRAY_BUFFER, textVBO);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        cursorX += (ch->advance >> 6) * scale;
+    }
+
+    // Cleanup
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glUseProgram(0);
 }
 
 void UIRenderSystem::RenderQuad(const glm::vec2& position, const glm::vec2& size,
@@ -594,46 +707,7 @@ void UIRenderSystem::RenderUITextField(const UIElement* element, const UITextFie
 }
 
 void UIRenderSystem::UpdateButton(Entity entity, UIElement* element, UIButton* button) {
-    if (!button->isInteractable) {
-        button->state = ButtonState::DISABLED;
-        return;
-    }
     
-    bool isInside = element->Contains(mousePosition, screenWidth, screenHeight);
-    ButtonState previousState = button->state;
-    
-    if (mouseDown && pressedButton == entity) {
-        // Button is being pressed
-        button->state = isInside ? ButtonState::PRESSED : ButtonState::NORMAL;
-    } else if (isInside) {
-        // Mouse is over button
-        if (previousState != ButtonState::HOVERED) {
-            if (button->onHoverEnter) button->onHoverEnter();
-        }
-        button->state = ButtonState::HOVERED;
-        hoveredButton = entity;
-        
-        // Check for click
-        if (!mouseDown && pressedButton == entity) {
-            if (button->onClick) button->onClick();
-            pressedButton = 0;
-        }
-    } else {
-        // Mouse is not over button
-        if (previousState == ButtonState::HOVERED) {
-            if (button->onHoverExit) button->onHoverExit();
-        }
-        button->state = ButtonState::NORMAL;
-        
-        if (hoveredButton == entity) {
-            hoveredButton = 0;
-        }
-    }
-    
-    // Track pressed button
-    if (mouseDown && isInside && previousState == ButtonState::HOVERED) {
-        pressedButton = entity;
-    }
 }
 
 GLuint UIRenderSystem::CompileShader(const char* source, GLenum type) {

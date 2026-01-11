@@ -4,14 +4,14 @@ project "GameClient"
    cppdialect "C++20"
    staticruntime "off"
 
-   targetdir ("../Binaries/" .. OutputDir .. "/%{prj.name}")
-   objdir ("../Binaries/Intermediates/" .. OutputDir .. "/%{prj.name}")
+   targetdir (Directories.OutputDir)
+   objdir (Directories.IntermediateDir)
 
    files 
    {
       "Source/game/**.hpp",
       "Source/game/**.cpp",
-      "Source/ClientMain.cpp"  -- only client main
+      "Source/ClientMain.cpp"
    }
 
    includedirs
@@ -20,11 +20,18 @@ project "GameClient"
       "../NetTFGEngine/Source"
    }
 
+   libdirs { Directories.EngineDir }
    links { "NetTFGEngine" }
 
    filter "system:windows"
       systemversion "latest"
       defines { "WINDOWS" }
+      
+      postbuildcommands 
+      {
+         -- Copy game content only
+         'if exist "%{prj.location}\\Content" (xcopy /Y /E /I /Q "%{prj.location}\\Content\\*" "%{Directories.ContentDir}\\")',
+      }
 
    filter "configurations:Debug"
       defines { "DEBUG" }
@@ -36,9 +43,11 @@ project "GameClient"
       runtime "Release"
       optimize "On"
       symbols "On"
+	  linkoptions { "/SUBSYSTEM:WINDOWS", "/ENTRY:mainCRTStartup" }
 
    filter "configurations:Dist"
       defines { "DIST" }
       runtime "Release"
       optimize "On"
       symbols "Off"
+	  linkoptions { "/SUBSYSTEM:WINDOWS", "/ENTRY:mainCRTStartup" }

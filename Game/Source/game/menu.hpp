@@ -25,20 +25,17 @@ struct StartScreenGameState {
     int frameCount;
 };
 
-enum StartScreenInputMask : uint8_t {
-    INPUT_NULL = 0,
-    INPUT_SPACE = 1 << 0
-};
-
 class ConnectionData : public IComponent {
 public:
     std::string ip;
     std::string port;
     std::string clientName;
+	bool goingToConnect = false;
+	bool connecting = false;
 
-	ConnectionData() : ip(""), port(""), clientName("") {}
+	ConnectionData() : ip(""), port(""), clientName(""), goingToConnect(false), connecting(false) {}
 	ConnectionData(const std::string& ip, const std::string& port, const std::string& clientName)
-		: ip(ip), port(port), clientName(clientName) {
+		: ip(ip), port(port), clientName(clientName), goingToConnect(false), connecting(false) {
 	}
 };
 
@@ -46,16 +43,16 @@ public:
 class StartScreenInputSystem : public ISystem {
 public:
     void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
-        auto query = entityManager.CreateQuery<Playable, ConnectionData>();
+        auto query = entityManager.CreateQuery<ConnectionData>();
 
-        for (auto [entity, play, conn] : query) {
-            InputBlob input = play->input;
-            uint8_t m = input.data[0];
+        for (auto [entity, conn] : query) {
 
-            if (m & INPUT_SPACE) {
+            if (conn->goingToConnect && !conn->connecting) {
 				Debug::Info("StartScreen") << "Space key pressed! Connecting to server at " << conn->ip << ":" << conn->port << "\n";
                 NetTFG_Engine::Get().RequestClientSwitch(1,conn->ip,stoi(conn->port),conn->clientName);
+				conn->connecting = true;
             }
+
         }
     }
 };
@@ -69,17 +66,17 @@ public:
     }
 
     InputBlob GenerateLocalInput() override {
-        uint8_t m = INPUT_NULL;
+        //uint8_t m = INPUT_NULL;
         InputBlob buf = MakeZeroInputBlob();
 
-        if (Input::IsInputBlockedForUI()) return buf;
+        /*if (Input::IsInputBlockedForUI()) return buf;
 
         if (Input::KeyPressed(Input::CharToKeycode(' '))) {
             m |= INPUT_SPACE;
         }
 
         
-        buf.data[0] = m;
+        buf.data[0] = m;*/
         return buf;
     }
 
@@ -97,14 +94,11 @@ public:
         s.frameCount++;
 
         // Check if space was pressed
-        auto query = world.GetEntityManager().CreateQuery<Playable>();
-        for (auto [entity, play] : query) {
-            InputBlob input = play->input;
-            uint8_t m = input.data[0];
+        auto query = world.GetEntityManager().CreateQuery<ConnectionData>();
+        for (auto [entity, connData] : query) {
 
-            if (m & INPUT_SPACE) {
+            if (connData->goingToConnect) {
                 s.spacePressed = true;
-                printf("[StartScreen] Space pressed in frame %d\n", s.frameCount);
             }
         }
 
@@ -155,7 +149,7 @@ public:
         auto textQuery = world.GetEntityManager().CreateQuery<UIElement, UIText>();
         for (auto [entity, element, text] : textQuery) {
             if (s.spacePressed) {
-                text->text = "Space Detected! Starting...";
+                text->text = "Starting...";
             }
         }
     }
@@ -221,6 +215,20 @@ public:
         field->padding = 10.0f;
         field->maxLength = 100;
 
+        Entity buttonElement = world.GetEntityManager().CreateEntity();
+        element = world.GetEntityManager().AddComponent<UIElement>(buttonElement, UIElement{});
+        element->anchor = UIAnchor::TOP_LEFT;
+        element->position = glm::vec2(100.0f, 160.0f);
+        element->size = glm::vec2(300.0f, 40.0f);
+        element->layer = 10;  // HIGHER layer number - renders on top!
+
+        UIButton* button = world.GetEntityManager().AddComponent<UIButton>(buttonElement);
+		button->text = "Connect";
+
+		button->onClick = [this, button]() {
+			button->isInteractable = false; // Disable button after click
+		};
+
         // Create UI text entity (HIGHER layer = rendered last, on top of everything)
         Entity startText = world.GetEntityManager().CreateEntity();
         element = world.GetEntityManager().AddComponent<UIElement>(startText, UIElement{});
@@ -231,7 +239,7 @@ public:
         element->layer = 10;  // HIGHER layer number - renders on top!
 
         UIText* text = world.GetEntityManager().AddComponent<UIText>(startText, UIText{});
-        text->text = "Press Space to Start";
+        text->text = "";
         text->fontSize = 48.0f;
         text->SetColor(1.0f, 1.0f, 1.0f, 1.0f);  // White
         text->SetFont("default");
@@ -250,24 +258,38 @@ public:
 			if (!gameLogic || !gameRenderer) {
 				return;
 			}
-			// Transfer input field data to game logic
-			auto& em = gameRenderer->world.GetEntityManager();
-			auto query = em.CreateQuery<UIElement, UITextField>();
-			for (auto [entity, element, textField] : query) {
-				auto& em2 = gameLogic->world.GetEntityManager();
-				auto connQuery = em2.CreateQuery<ConnectionData>();
-				for (auto [connEntity, connData] : connQuery) {
-					if (textField->id == "ip_input") {
-						connData->ip = textField->text;
-					}
-					else if (textField->id == "port_input") {
-						connData->port = textField->text;
-					}
-					else if (textField->id == "name_input") {
-						connData->clientName = textField->text;
-					}
-				}
-			}
+
+            auto& em2 = gameLogic->world.GetEntityManager();
+            auto connQuery = em2.CreateQuery<ConnectionData>();
+
+            for (auto [connEntity, connData] : connQuery) {
+
+                auto& em = gameRenderer->world.GetEntityManager();
+                auto query = em.CreateQuery<UIElement, UITextField>();
+
+                for (auto [entity, element, textField] : query) {
+                    if (textField->id == "ip_input") {
+                        connData->ip = textField->text;
+                    }
+                    else if (textField->id == "port_input") {
+                        connData->port = textField->text;
+                    }
+                    else if (textField->id == "name_input") {
+                        connData->clientName = textField->text;
+                    }
+                }
+
+				auto buttonQuery = em.CreateQuery<UIButton>();
+
+                for (auto [buttonEntity, button] : buttonQuery) {
+                    if (!button->isInteractable) {
+                        connData->goingToConnect = true;
+                    }
+                }
+            }
+
+			
+			
         };
 
 

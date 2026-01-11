@@ -4,14 +4,14 @@ project "GameServer"
    cppdialect "C++20"
    staticruntime "off"
 
-   targetdir ("../Binaries/" .. OutputDir .. "/%{prj.name}")
-   objdir ("../Binaries/Intermediates/" .. OutputDir .. "/%{prj.name}")
+   targetdir (Directories.OutputDir)
+   objdir (Directories.IntermediateDir)
 
    files 
    {
       "Source/game/**.hpp",
       "Source/game/**.cpp",
-      "Source/ServerMain.cpp"  -- only server main
+      "Source/ServerMain.cpp"
    }
 
    includedirs
@@ -20,11 +20,19 @@ project "GameServer"
       "../NetTFGEngine/Source"
    }
 
+   libdirs { Directories.EngineDir }
    links { "NetTFGEngine" }
 
    filter "system:windows"
       systemversion "latest"
       defines { "WINDOWS" }
+      
+      postbuildcommands 
+      {
+         -- Copy server-specific content only
+         'if exist "%{prj.location}\\Content\\Server" (xcopy /Y /E /I /Q "%{prj.location}\\Content\\Server\\*" "%{Directories.ContentDir}\\Server\\")',
+         'if exist "%{prj.location}\\Content\\Config" (xcopy /Y /E /I /Q "%{prj.location}\\Content\\Config\\*" "%{Directories.ContentDir}\\Config\\")',
+      }
 
    filter "configurations:Debug"
       defines { "DEBUG" }
