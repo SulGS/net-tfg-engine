@@ -10,7 +10,7 @@
 #include "game/asteroids.hpp"        // Include for game logic
 #include "game/menu.hpp"
 
-#include "OpenAL/AudioManager.hpp"
+
 #include "NetTFG_Engine.hpp"
 
 #include "Utils/Debug/Debug.hpp"
@@ -25,7 +25,7 @@ int main(int argc, char** argv) {
 
     auto& engine = NetTFG_Engine::Get();
 
-    Debug::Initialize("AsteroidsClient");
+    Debug::Initialize("AsteroidsClient", false);
 	engine.RegisterClient(1, new OnlineClient(std::move(gameLogic), std::move(gameRenderer)));
 
 	std::unique_ptr<IGameLogic> menuLogic = std::make_unique<StartScreenGame>();
@@ -35,16 +35,10 @@ int main(int argc, char** argv) {
 
 	engine.RegisterClient(0, new OfflineClient(std::move(menuLogic), std::move(menuRenderer)));
 
+	engine.ActivateClient(0);
+    engine.Start(800, 600, "Asteroids");
 
-
-
-    ClientWindow::startRenderThread(800, 600, "Asteroids");
-    AudioManager::Start();
-        
-
-
-	engine.RequestClientSwitch(0);
-    engine.Start();
+	Debug::Shutdown();
 
     return 0;
     

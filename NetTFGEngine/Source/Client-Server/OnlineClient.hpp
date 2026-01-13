@@ -34,14 +34,14 @@ public:
     {
     }
 
-    int RunClient(const std::string& hostStr = "0.0.0.0", uint16_t port = 0, const std::string & customClientId = "") override {
+    ConnectionCode SetupClient(const std::string& hostStr = "0.0.0.0", uint16_t port = 0, const std::string& customClientId = "") override {
         if (!net_.InitGNS()) {
-            return 1;
+            return CONN_SOCKETS_FAILED;
         }
 
-		clientId_ = customClientId.empty() ? GenerateClientId() : customClientId;
+        clientId_ = customClientId.empty() ? GenerateClientId() : customClientId;
 
-        ClientWindow* cWindow = new ClientWindow(
+        cWindow_ = new ClientWindow(
             [this](GameStateBlob& state, OpenGLWindow* win) {
                 gameRenderer_->Init(state, win);
             },
@@ -53,48 +53,105 @@ public:
             }
         );
 
-        if (!net_.ConnectTo(hostStr, port)) {
-            return 1;
+        ConnectionCode connCode = net_.ConnectTo(hostStr, port);
+
+        if (connCode != CONN_SUCCESS) {
+            return connCode;
         }
 
-        Debug::Info("Client") << "Using client ID: " << clientId_ << "\n";
-        Debug::Info("Client") << "Waiting for connection to server...\n";
+        Debug::Info("OnlineClient") << "Using client ID: " << clientId_ << "\n";
+        Debug::Info("OnlineClient") << "Waiting for connection to server...\n";
 
         if (!WaitForConnectionAndAuth()) {
-            return 1;
+            return CONN_DENIED;
         }
 
         if (isReconnection_) {
-            Debug::Info("Client") << "Successfully reconnected!\n";
+            Debug::Info("OnlineClient") << "Successfully reconnected!\n";
         }
         else {
-            Debug::Info("Client") << "Successfully authenticated!\n";
+            Debug::Info("OnlineClient") << "Successfully authenticated!\n";
 
             if (!WaitForGameStart()) {
-                return 1;
+                return CONN_TIMEOUT;
             }
         }
 
-        Debug::Info("Client") << "Before creating prediction netcode\n";
+        Debug::Info("OnlineClient") << "Before creating prediction netcode\n";
 
         gameRenderer_->playerId = assignedPlayerId_;
 
-        ClientPredictionNetcode* prediction = new ClientPredictionNetcode(assignedPlayerId_, std::move(gameLogic_));
+        prediction_ = new ClientPredictionNetcode(assignedPlayerId_, std::move(gameLogic_));
 
-        if (isReconnection_) 
+        if (isReconnection_)
         {
-			Debug::Info("Client") << "Waiting for state update after reconnection...\n";
-			if (!WaitForStateUpdateAfterReconnection(*prediction)) {
-				return 1;
-			}
+            Debug::Info("OnlineClient") << "Waiting for state update after reconnection...\n";
+            if (!WaitForStateUpdateAfterReconnection(*prediction_)) {
+                return CONN_TIMEOUT;
+            }
         }
 
+        cWindow_->activate();
 
-        Debug::Info("Client") << "Before running client loop\n";
-        RunClientLoop(*prediction, *cWindow);
+		networkRunning_.store(true);
+        networkThread_ = std::thread([this]() {
+            NetworkThread(*prediction_, *cWindow_, networkRunning_);
+            });
 
-        return 0;
+        prediction_->UpdateCurrentFrame(1);
+
+        Debug::Info("OnlineClient") << "Online Client setup OK\n";
+
+        return CONN_SUCCESS;
     }
+    
+
+    void TickClient() override {
+        
+
+        InputBlob localInput = prediction_->GetGameLogic()->GenerateLocalInput();
+        int frameToSubmit = prediction_->SubmitLocalInput(localInput);
+        net_.SendInput(serverConnection_, assignedPlayerId_, frameToSubmit, localInput);
+
+        // Predict to current frame (mutex-protected)
+        prediction_->Tick();
+        cWindow_->setLocalState(prediction_->GetCurrentState());
+
+        // ===== Debug output every 30 frames =====
+        if (frameToSubmit % 30 == 0) {
+            GameStateBlob s = prediction_->GetCurrentState();
+            Debug::Info("OnlineClient") << "[CLIENT] Frame: " << frameToSubmit
+                << " | Latency: " << inputDelayCalc.GetLastLatencyMs()
+                << "ms | InputDelayFrames: " << inputDelayCalc.GetInputDelayFrames() << "\n";
+
+            // Send RTT sync
+            InputDelayPacket packet;
+            packet.playerId = assignedPlayerId_;
+            packet.timestamp = inputDelayCalc.GetTimestampMs();
+            net_.SendInputDelaySync(serverConnection_, packet);
+        }
+
+        
+    }
+
+	void CloseClient() override {
+        // Clean shutdown
+        networkRunning_.store(false);
+        networkThread_.join();
+
+        cWindow_->deactivate();
+
+		delete cWindow_;
+		delete prediction_;
+
+        if (serverConnection_ != k_HSteamNetConnection_Invalid) {
+            net_.GetSockets()->CloseConnection(serverConnection_,
+                k_ESteamNetConnectionEnd_App_Generic, nullptr, false);
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+
+        Debug::Info("OnlineClient") << "[ONLINE] Online client finalished\n";
+	}
 
     const std::string& GetClientId() const { return clientId_; }
 
@@ -107,6 +164,12 @@ private:
     int assignedPlayerId_;
     bool isReconnection_;
     HSteamNetConnection serverConnection_;
+
+	ClientPredictionNetcode* prediction_ = nullptr;
+	ClientWindow* cWindow_ = nullptr;
+
+    std::atomic<bool> networkRunning_;
+    std::thread networkThread_;
 
     std::string GenerateClientId() {
         auto now = std::chrono::system_clock::now();
@@ -125,24 +188,24 @@ private:
 
         ISteamNetworkingSockets* sockets = net_.GetSockets();
         if (!sockets || serverConnection_ == k_HSteamNetConnection_Invalid) {
-            Debug::Info("Client") << "Failed to send client hello: invalid connection\n";
+            Debug::Info("OnlineClient") << "Failed to send client hello: invalid connection\n";
             return false;
         }
 
         sockets->SendMessageToConnection(serverConnection_, &hello,
             sizeof(hello), k_nSteamNetworkingSend_Reliable, nullptr);
 
-        Debug::Info("Client") << "Sent CLIENT_HELLO with ID: " << clientId_ << "\n";
+        Debug::Info("OnlineClient") << "Sent CLIENT_HELLO with ID: " << clientId_ << "\n";
         return true;
     }
 
 	bool WaitForStateUpdateAfterReconnection(ClientPredictionNetcode& prediction) {
 		bool stateReceived = false;
 		bool running = true;
-		auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+		auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10);
 		while (!stateReceived && running) {
 			if (std::chrono::steady_clock::now() > timeout) {
-				Debug::Info("Client") << "Timeout waiting for state update after reconnection\n";
+				Debug::Info("OnlineClient") << "Timeout waiting for state update after reconnection\n";
 				return false;
 			}
 			net_.PumpCallbacks();
@@ -155,7 +218,7 @@ private:
 					StateUpdate update = net_.ParseStateUpdate(data, len);
 					prediction.OnServerStateUpdate(update);
 					stateReceived = true;
-					Debug::Info("Client") << "Received state update after reconnection\n";
+					Debug::Info("OnlineClient") << "Received state update after reconnection\n";
 				}
 				}, true);
 			std::this_thread::sleep_for(std::chrono::milliseconds(50));
@@ -165,7 +228,7 @@ private:
 
     bool HandleServerAccept(const uint8_t* data, int len) {
         if (len < sizeof(ServerAcceptPacket)) {
-            Debug::Info("Client") << "Malformed SERVER_ACCEPT packet\n";
+            Debug::Info("OnlineClient") << "Malformed SERVER_ACCEPT packet\n";
             return false;
         }
 
@@ -174,23 +237,23 @@ private:
         isReconnection_ = accept->isReconnection;
 
         if (isReconnection_) {
-            Debug::Info("Client") << "Reconnected as Player ID: " << assignedPlayerId_ << "\n";
+            Debug::Info("OnlineClient") << "Reconnected as Player ID: " << assignedPlayerId_ << "\n";
         }
         else {
-            Debug::Info("Client") << "Assigned Player ID: " << assignedPlayerId_ << "\n";
+            Debug::Info("OnlineClient") << "Assigned Player ID: " << assignedPlayerId_ << "\n";
         }
 
         return true;
     }
 
     bool HandleServerReject(const uint8_t* data, int len) {
-        Debug::Info("Client") << "Server rejected connection\n";
+        Debug::Info("OnlineClient") << "Server rejected connection\n";
         return false;
     }
 
     bool HandleGameStart(const uint8_t* data, int len, bool& gameStarted) {
         if (len < 1 + 4) {
-            Debug::Info("Client") << "Malformed GAME_START packet\n";
+            Debug::Info("OnlineClient") << "Malformed GAME_START packet\n";
             return false;
         }
 
@@ -203,14 +266,14 @@ private:
         int playerIdFromStart = bigEndianToHost32(playerIdNet);
 
         if (assignedPlayerId_ != -1 && assignedPlayerId_ != playerIdFromStart) {
-            Debug::Info("Client") << "WARNING: GAME_START player ID mismatch ("
+            Debug::Info("OnlineClient") << "WARNING: GAME_START player ID mismatch ("
                 << playerIdFromStart << " vs " << assignedPlayerId_ << ")\n";
         }
 
         assignedPlayerId_ = playerIdFromStart;
         gameStarted = true;
 
-        Debug::Info("Client") << "Game starting with Player ID: " << assignedPlayerId_ << "\n";
+        Debug::Info("OnlineClient") << "Game starting with Player ID: " << assignedPlayerId_ << "\n";
         return true;
     }
 
@@ -240,7 +303,7 @@ private:
             return true;
         }
 
-        Debug::Info("Client") << "Received unknown packet type: " << (int)type << "\n";
+        Debug::Info("OnlineClient") << "Received unknown packet type: " << (int)type << "\n";
         return true;
     }
 
@@ -250,7 +313,7 @@ private:
         bool running = true;
 
         // Wait for connection to establish
-        while (!connected && running) {
+        while (!connected && running && ClientWindow::isWindowThreadRunning()) {
             ISteamNetworkingSockets* sockets = net_.GetSockets();
             if (!sockets) {
                 running = false;
@@ -264,7 +327,7 @@ private:
                 if (sockets->GetConnectionInfo(serverConnection_, &connInfo)) {
                     if (connInfo.m_eState == k_ESteamNetworkingConnectionState_Connected) {
                         connected = true;
-                        Debug::Info("Client") << "Connected to server\n";
+                        Debug::Info("OnlineClient") << "Connected to server\n";
 
                         if (!SendClientHello()) {
                             running = false;
@@ -273,7 +336,7 @@ private:
                     }
                     else if (connInfo.m_eState == k_ESteamNetworkingConnectionState_ClosedByPeer ||
                         connInfo.m_eState == k_ESteamNetworkingConnectionState_Dead) {
-                        Debug::Info("Client") << "Connection to server failed\n";
+                        Debug::Info("OnlineClient") << "Connection to server failed\n";
                         running = false;
                         break;
                     }
@@ -283,16 +346,16 @@ private:
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
 
-        if (!running || !connected) {
+        if (!running || !connected || !ClientWindow::isWindowThreadRunning()) {
             return false;
         }
 
-        Debug::Info("Client") << "Waiting for server acceptance...\n";
+        Debug::Info("OnlineClient") << "Waiting for server acceptance...\n";
         auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10);
 
         while (!serverAccepted && running) {
             if (std::chrono::steady_clock::now() > timeout) {
-                Debug::Info("Client") << "Timeout waiting for server acceptance\n";
+                Debug::Info("OnlineClient") << "Timeout waiting for server acceptance\n";
                 return false;
             }
             net_.PumpCallbacks();
@@ -315,12 +378,12 @@ private:
         bool gameStarted = false;
         bool running = true;
 
-        Debug::Info("Client") << "Waiting for game to start...\n";
-        auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        Debug::Info("OnlineClient") << "Waiting for game to start...\n";
+        auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(60);
 
         while (!gameStarted && running) {
             if (std::chrono::steady_clock::now() > timeout) {
-                Debug::Info("Client") << "Timeout waiting for game start\n";
+                Debug::Info("OnlineClient") << "Timeout waiting for game start\n";
                 return false;
             }
 
@@ -375,7 +438,7 @@ private:
                 cWin.setServerState(prediction.GetLatestServerState());
             }
             else {
-                Debug::Info("Client") << "[CLIENT] Received malformed PACKET_STATE_UPDATE, len=" << len << "\n";
+                Debug::Info("OnlineClient") << "[CLIENT] Received malformed PACKET_STATE_UPDATE, len=" << len << "\n";
             }
         }
         else if (type == PACKET_DELTA_STATE_UPDATE) {
@@ -391,7 +454,7 @@ private:
             const size_t EXPECTED_MIN_LEN = 1 + 4 + 4 + sizeof(InputBlob);
 
             if (len < EXPECTED_MIN_LEN) {
-                Debug::Info("Client") << "[CLIENT] Malformed input packet, len=" << len << "\n";
+                Debug::Info("OnlineClient") << "[CLIENT] Malformed input packet, len=" << len << "\n";
             }
             else {
                 InputEntry ie = net_.ParseInputEntryPacket(data, len);
@@ -401,7 +464,7 @@ private:
         else if (type == PACKET_EVENT_UPDATE)  {
 			const size_t EXPECTED_MIN_LEN = 1 + 4 + 4;
 			if (len < EXPECTED_MIN_LEN) {
-				Debug::Info("Client") << "[CLIENT] Malformed event packet, len=" << len << "\n";
+				Debug::Info("OnlineClient") << "[CLIENT] Malformed event packet, len=" << len << "\n";
 			}
 			else {
 				EventEntry event = net_.ParseEventEntryPacket(data, len);
@@ -433,64 +496,5 @@ private:
             // Small sleep to prevent busy-waiting (1ms = ~1000 polls/sec)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-    }
-
-    void RunClientLoop(ClientPredictionNetcode& prediction, ClientWindow& cWindow) {
-        auto nextTick = std::chrono::high_resolution_clock::now();
-
-        cWindow.activate();
-
-        // Start network thread - processes packets directly
-        std::atomic<bool> networkRunning(true);
-        std::thread networkThread([this, &prediction, &cWindow, &networkRunning]() {
-            NetworkThread(prediction, cWindow, networkRunning);
-            });
-
-        prediction.UpdateCurrentFrame(1);
-
-        while (cWindow.isRunning() && !NetTFG_Engine::Get().HasPendingSwitch()) {
-            // Network thread handles all packet processing
-            // No polling needed here!
-
-            // ===== Game logic =====
-            InputBlob localInput = prediction.GetGameLogic()->GenerateLocalInput();
-            int frameToSubmit = prediction.SubmitLocalInput(localInput);
-            net_.SendInput(serverConnection_, assignedPlayerId_, frameToSubmit, localInput);
-
-            // Predict to current frame (mutex-protected)
-            prediction.Tick();
-            cWindow.setLocalState(prediction.GetCurrentState());
-
-            // ===== Debug output every 30 frames =====
-            if (frameToSubmit % 30 == 0) {
-                GameStateBlob s = prediction.GetCurrentState();
-                Debug::Info("Client") << "[CLIENT] Frame: " << frameToSubmit
-                    << " | Latency: " << inputDelayCalc.GetLastLatencyMs()
-                    << "ms | InputDelayFrames: " << inputDelayCalc.GetInputDelayFrames() << "\n";
-
-                // Send RTT sync
-                InputDelayPacket packet;
-                packet.playerId = assignedPlayerId_;
-                packet.timestamp = inputDelayCalc.GetTimestampMs();
-                net_.SendInputDelaySync(serverConnection_, packet);
-            }
-
-            nextTick += std::chrono::milliseconds(MS_PER_TICK);
-            std::this_thread::sleep_until(nextTick);
-        }
-
-        // Clean shutdown
-        networkRunning.store(false);
-        networkThread.join();
-
-        cWindow.deactivate();
-
-        if (serverConnection_ != k_HSteamNetConnection_Invalid) {
-            net_.GetSockets()->CloseConnection(serverConnection_,
-                k_ESteamNetConnectionEnd_App_Generic, nullptr, false);
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        }
-
-        Debug::Info("OnlineClient") << "[ONLINE] Online client finalished\n";
     }
 };

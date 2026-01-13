@@ -32,10 +32,64 @@ public:
     std::string clientName;
 	bool goingToConnect = false;
 	bool connecting = false;
+	bool errorConnecting = false;
 
 	ConnectionData() : ip(""), port(""), clientName(""), goingToConnect(false), connecting(false) {}
 	ConnectionData(const std::string& ip, const std::string& port, const std::string& clientName)
 		: ip(ip), port(port), clientName(clientName), goingToConnect(false), connecting(false) {
+	}
+};
+
+class TextAnimationData : public IComponent {
+public:
+	bool active = false;
+    int remainTicks = RENDER_TICKS_PER_SECOND / 4;
+    int currentState = 0;
+
+	std::string errorMessage = "";
+};
+
+class TextAnimationSystem : public ISystem {
+	void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
+		auto query = entityManager.CreateQuery<UIElement, UIText, TextAnimationData>();
+
+        auto buttonQuery = entityManager.CreateQuery<UIButton>();
+		UIButton* button = nullptr;
+
+		for (auto [buttonEntity, btn] : buttonQuery) {
+			button = btn;
+		}
+
+		for (auto [entity, element, text, animData] : query) {
+            if (!animData->active) 
+            {
+                text->text = animData->errorMessage;
+				button->isInteractable = true;
+				continue;
+            }
+
+			if(button) button->isInteractable = false;
+
+			animData->remainTicks--;
+			if (animData->remainTicks <= 0) {
+				animData->currentState = (animData->currentState + 1) % 4;
+				animData->remainTicks = RENDER_TICKS_PER_SECOND / 4;
+				switch (animData->currentState) {
+				case 0:
+					text->text = "Conectando.";
+					break;
+				case 1:
+                    text->text = "Conectando..";
+					break;
+				case 2:
+                    text->text = "Conectando...";
+					break;
+                case 3:
+                    text->text = "Conectando";
+					break;
+				}
+			}
+		}
 	}
 };
 
@@ -48,8 +102,21 @@ public:
         for (auto [entity, conn] : query) {
 
             if (conn->goingToConnect && !conn->connecting) {
-				Debug::Info("StartScreen") << "Space key pressed! Connecting to server at " << conn->ip << ":" << conn->port << "\n";
-                NetTFG_Engine::Get().RequestClientSwitch(1,conn->ip,stoi(conn->port),conn->clientName);
+				Debug::Info("StartScreen") << "Connecting to server at " << conn->ip << ":" << conn->port << "\n";
+                NetTFG_Engine::Get().ActivateClientAsync(1,
+                    [conn](int id, ConnectionCode code) {
+                        if (code == CONN_SUCCESS) {
+                            Debug::Info("StartScreen") << "Client " << id << " activated!\n";
+							NetTFG_Engine::Get().DeactivateClient(0);
+                        }
+                        else {
+                            Debug::Error("StartScreen") << "Client " << id << " failed: " << code << "\n";
+							conn->errorConnecting = true;
+							conn->connecting = false;
+							conn->goingToConnect = false;
+							
+                        }
+                    }, conn->ip,stoi(conn->port),conn->clientName);
 				conn->connecting = true;
             }
 
@@ -146,12 +213,12 @@ public:
         StartScreenGameState s = *reinterpret_cast<const StartScreenGameState*>(state.data);
 
         // Update text if space was pressed
-        auto textQuery = world.GetEntityManager().CreateQuery<UIElement, UIText>();
+        /*auto textQuery = world.GetEntityManager().CreateQuery<UIElement, UIText>();
         for (auto [entity, element, text] : textQuery) {
             if (s.spacePressed) {
                 text->text = "Starting...";
             }
-        }
+        }*/
     }
 
 
@@ -159,6 +226,9 @@ public:
         this->window = window;
         StartScreenGameState s;
         std::memcpy(&s, state.data, sizeof(StartScreenGameState));
+
+		world.GetEntityManager().RegisterComponentType<TextAnimationData>();
+		world.AddSystem(std::make_unique<TextAnimationSystem>());
 
         // Create camera
         Entity camera = world.GetEntityManager().CreateEntity();
@@ -240,9 +310,11 @@ public:
 
         UIText* text = world.GetEntityManager().AddComponent<UIText>(startText, UIText{});
         text->text = "";
-        text->fontSize = 48.0f;
+        text->fontSize = 18.0f;
         text->SetColor(1.0f, 1.0f, 1.0f, 1.0f);  // White
         text->SetFont("default");
+
+		world.GetEntityManager().AddComponent<TextAnimationData>(startText);
 
         // Create player entity for input
         Entity player = world.GetEntityManager().CreateEntity();
@@ -282,8 +354,23 @@ public:
 				auto buttonQuery = em.CreateQuery<UIButton>();
 
                 for (auto [buttonEntity, button] : buttonQuery) {
-                    if (!button->isInteractable) {
+
+                    if (connData->errorConnecting) 
+                    {
+						connData->errorConnecting = false;
+						button->isInteractable = true;
+						auto textAnimQuery = em.CreateQuery<UIElement, UIText, TextAnimationData>();
+						for (auto [taEntity, taElement, taText, taData] : textAnimQuery) {
+							taData->active = false;
+							taData->errorMessage = "Error connecting to " + connData->ip + ":" + connData->port;
+						}
+                    }
+                    else if (!button->isInteractable) {
                         connData->goingToConnect = true;
+						auto textAnimQuery = em.CreateQuery<UIElement, UIText, TextAnimationData>();
+                        for (auto [taEntity, taElement, taText, taData] : textAnimQuery) {
+                            taData->active = true;
+                        }
                     }
                 }
             }

@@ -50,8 +50,12 @@ int main(int argc, char** argv) {
     config.stopOnBelowMin = false;
     config.reconnectionTimeout = std::chrono::seconds(0);
 
-    Debug::Initialize("AsteroidsServer");
+    Debug::Initialize("AsteroidsServer", true);
 
     Server server(std::move(gameLogic), config);
-    return server.RunServer();
+    int code = server.RunServer();
+
+    Debug::Shutdown();
+
+    return code;
 }

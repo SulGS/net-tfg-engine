@@ -11,9 +11,13 @@ static LogMessage CreateMessage(LogLevel level, const std::string& text, const s
     return msg;
 }
 
-void Debug::Initialize(const std::string& productName) {
+void Debug::Initialize(const std::string& productName, bool consoleOutput) {
     LogRouter::Instance().SetProductName(productName);
-    LogRouter::Instance().Start();
+    LogRouter::Instance().Start(consoleOutput);
+}
+
+void Debug::Shutdown() {
+	LogRouter::Instance().Stop();
 }
 
 void Debug::Log(const std::string& msg, const std::string& channel) {

@@ -11,7 +11,7 @@ class LogRouter {
 public:
     static LogRouter& Instance();
 
-    void Start();
+    void Start(bool consoleOutput);
     void Stop();
 
     void SetProductName(const std::string& name);
@@ -26,6 +26,8 @@ private:
     void RouterThread();
 
     ThreadSafeQueue<LogMessage> queue;
+
+	bool consoleOutputEnabled = false;
 
     std::atomic<bool> running = false;
     std::thread worker;

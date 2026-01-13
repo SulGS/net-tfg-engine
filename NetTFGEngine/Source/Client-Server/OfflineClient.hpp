@@ -17,10 +17,11 @@ public:
         : gameLogic_(std::move(gameLogic))
         , gameRenderer_(std::move(gameRenderer))
         , assignedPlayerId_(0)
+		, cWindow_(nullptr)
     {
     }
 
-    int RunClient(const std::string& hostStr = "0.0.0.0", uint16_t port = 0, const std::string& customClientId = "") override {
+    ConnectionCode SetupClient(const std::string& hostStr = "0.0.0.0", uint16_t port = 0, const std::string& customClientId = "") override {
         Debug::Info("OfflineClient") << "Starting offline game (ignoring host and port parameters)\n";
 
 		isOfflineClient = true;
@@ -28,7 +29,7 @@ public:
         gameRenderer_->playerId = assignedPlayerId_;
         gameLogic_->playerId = assignedPlayerId_;
 
-        ClientWindow* cWindow = new ClientWindow(
+        cWindow_ = new ClientWindow(
             [this](GameStateBlob& state, OpenGLWindow* win) {
                 gameRenderer_->Init(state, win);
             },
@@ -41,13 +42,47 @@ public:
         );
 
         // Initialize game state
-        GameStateBlob currentState;
-        gameLogic_->Init(currentState);
+        gameLogic_->Init(gameState_);
 
-        Debug::Info("OfflineClient") << "Running offline game loop\n";
-        RunClientLoop(*cWindow, currentState);
+        cWindow_->activate();
 
-        return 0;
+        Debug::Info("OfflineClient") << "Offline client setup OK\n";
+
+        return CONN_SUCCESS;
+    }
+
+    void TickClient() override {
+        // Generate local input
+        InputBlob localInput = gameLogic_->GenerateLocalInput();
+
+        // Apply input to game state
+        std::vector<EventEntry> events;
+        std::map<int, InputEntry> inputs;
+
+        InputEntry entry = { currentFrame_,localInput,0 };
+
+
+        inputs[0] = entry;
+
+        gameLogic_->SimulateFrame(gameState_, events, inputs);
+
+        // Update render states
+        cWindow_->setLocalState(gameState_);
+        cWindow_->setServerState(gameState_);
+
+        // Debug output every 30 frames
+        if (currentFrame_ % 30 == 0) {
+            Debug::Info("OfflineClient") << "[OFFLINE] Frame: " << currentFrame_ << "\n";
+        }
+
+        currentFrame_++;
+    }
+
+    void CloseClient() override {
+
+        cWindow_->deactivate();
+        delete cWindow_;
+        Debug::Info("OfflineClient") << "[OFFLINE] Offline client finalished\n";
     }
 
 private:
@@ -55,43 +90,9 @@ private:
     std::unique_ptr<IGameRenderer> gameRenderer_;
     int assignedPlayerId_;
 
-    void RunClientLoop(ClientWindow& cWindow, GameStateBlob& gameState) {
-        auto nextTick = std::chrono::high_resolution_clock::now();
+	ClientWindow* cWindow_;
+	GameStateBlob gameState_;
+	int currentFrame_ = 0;
 
-        cWindow.activate();
-
-        int currentFrame = 0;
-
-        while (cWindow.isRunning() && !NetTFG_Engine::Get().HasPendingSwitch()) {
-            // Generate local input
-            InputBlob localInput = gameLogic_->GenerateLocalInput();
-
-            // Apply input to game state
-            std::vector<EventEntry> events;
-            std::map<int, InputEntry> inputs;
-
-            InputEntry entry = { currentFrame,localInput,0 };
-
-
-            inputs[0] = entry;
-
-            gameLogic_->SimulateFrame(gameState, events, inputs);
-
-            // Update render states
-            cWindow.setLocalState(gameState);
-            cWindow.setServerState(gameState);
-
-            // Debug output every 30 frames
-            if (currentFrame % 30 == 0) {
-                Debug::Info("OfflineClient") << "[OFFLINE] Frame: " << currentFrame << "\n";
-            }
-
-            currentFrame++;
-            nextTick += std::chrono::milliseconds(MS_PER_TICK);
-            std::this_thread::sleep_until(nextTick);
-        }
-
-        cWindow.deactivate();
-        Debug::Info("OfflineClient") << "[OFFLINE] Offline client finalished\n";
-    }
+    
 };

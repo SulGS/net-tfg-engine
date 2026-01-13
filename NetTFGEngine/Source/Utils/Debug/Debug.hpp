@@ -5,7 +5,8 @@
 
 class Debug {
 public:
-    static void Initialize(const std::string& productName);
+    static void Initialize(const std::string& productName, bool consoleOutput);
+	static void Shutdown();
 
     static void Log(const std::string& msg, const std::string& channel = "General");
     static void LogWarning(const std::string& msg, const std::string& channel = "General");

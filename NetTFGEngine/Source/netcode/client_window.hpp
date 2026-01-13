@@ -18,13 +18,12 @@ class ClientWindow {
 
     int tickCount = 0;
 
-    // Singleton window instance
+    // Singleton window instance (shared across all ClientWindow instances)
     static OpenGLWindow* window;
     static std::mutex windowMutex;
     static std::thread renderThread;
-    static ClientWindow* activeInstance;
+    static std::vector<ClientWindow*> activeInstances;  // Changed: vector of active instances
     static bool threadRunning;
-    static std::atomic<bool> callbacksChanged;
 
 public:
 
@@ -40,17 +39,19 @@ public:
     std::function<void(GameStateBlob&, OpenGLWindow*)> renderCallback;
     std::function<void(const GameStateBlob&, const GameStateBlob&, const GameStateBlob&, const GameStateBlob&, GameStateBlob&, float, float)> interpolationCallback;
 
+    bool needsInit;  // Track per-instance initialization
+
     ClientWindow(std::function<void(GameStateBlob&, OpenGLWindow*)> initCb,
         std::function<void(GameStateBlob&, OpenGLWindow*)> renderCb,
         std::function<void(const GameStateBlob&, const GameStateBlob&, const GameStateBlob&, const GameStateBlob&, GameStateBlob&, float, float)> interpolationCb)
-        : renderInitCallback(initCb), renderCallback(renderCb), interpolationCallback(interpolationCb)
+        : renderInitCallback(initCb), renderCallback(renderCb), interpolationCallback(interpolationCb), needsInit(true)
     {
         lastStateUpdate = std::chrono::steady_clock::now();
         lastLocalUpdate = std::chrono::steady_clock::now();
     }
 
     ~ClientWindow() {
-        // Don't destroy anything - window persists
+        deactivate();
     }
 
     // Initialize the window and start the persistent render thread
@@ -58,8 +59,8 @@ public:
         std::lock_guard<std::mutex> lock(windowMutex);
         if (!threadRunning) {
             threadRunning = true;
-            renderThread = std::thread([]() {
-                window = new OpenGLWindow(800, 600, "Client");
+            renderThread = std::thread([width, height, title]() {
+                window = new OpenGLWindow(width, height, title);
                 Input::Init(window->getWindow());
 
                 renderLoop();
@@ -82,30 +83,32 @@ public:
         }
     }
 
-    // Activate this ClientWindow instance (swap callbacks)
+    // Activate this ClientWindow instance (add to active list)
     void activate() {
         std::lock_guard<std::mutex> lock(windowMutex);
 
-        // If switching instances, mark for re-initialization
-        if (activeInstance != this) {
-            callbacksChanged = true;
+        // Check if already active
+        auto it = std::find(activeInstances.begin(), activeInstances.end(), this);
+        if (it == activeInstances.end()) {
+            activeInstances.push_back(this);
+            needsInit = true;
         }
 
-        activeInstance = this;
         gRunning = true;
     }
 
     void deactivate() {
         std::lock_guard<std::mutex> lock(windowMutex);
-        if (activeInstance == this) {
-            activeInstance = nullptr;
+        auto it = std::find(activeInstances.begin(), activeInstances.end(), this);
+        if (it != activeInstances.end()) {
+            activeInstances.erase(it);
         }
         gRunning = false;
     }
 
     void close() {
         gRunning = false;
-        if (window) window->close();
+        deactivate();
     }
 
     bool isRunning() const { return gRunning; }
@@ -134,13 +137,22 @@ public:
         return CurrentServerState;
     }
 
+    static bool isWindowThreadRunning() {
+        std::lock_guard<std::mutex> lock(windowMutex);
+        return threadRunning;
+    }
+
+    static size_t getActiveInstanceCount() {
+        std::lock_guard<std::mutex> lock(windowMutex);
+        return activeInstances.size();
+    }
+
 private:
     // The persistent render loop running on the dedicated thread
     static void renderLoop() {
         auto nextTick = std::chrono::high_resolution_clock::now();
         auto sampleStart = std::chrono::high_resolution_clock::now();
 
-        bool needsInit = false;
         int tickCount = 0;
         std::vector<long long> tickDurations;
         const size_t MAX_SAMPLES = 30;
@@ -150,23 +162,21 @@ private:
 
             window->pollEvents();
 
-            ClientWindow* instance = nullptr;
+            // Get snapshot of active instances
+            std::vector<ClientWindow*> instances;
             {
                 std::lock_guard<std::mutex> lock(windowMutex);
-                instance = activeInstance;
-
-                // Check if we need to reinitialize for new instance
-                if (instance && callbacksChanged) {
-                    needsInit = true;
-                    callbacksChanged = false;
-                }
+                instances = activeInstances;
             }
 
-            if (instance) {
+            // Process each active instance
+            for (ClientWindow* instance : instances) {
+                if (!instance || !instance->gRunning) continue;
+
                 // Call init callback if needed
-                if (needsInit && instance->renderInitCallback) {
+                if (instance->needsInit && instance->renderInitCallback) {
                     instance->renderInitCallback(instance->RenderState, window);
-                    needsInit = false;
+                    instance->needsInit = false;
                 }
 
                 instance->gStateMutex.lock();
@@ -216,10 +226,12 @@ private:
             if (window->shouldClose()) {
                 std::lock_guard<std::mutex> lock(windowMutex);
                 threadRunning = false;
-                if (activeInstance) {
-                    activeInstance->gRunning = false;
+                for (auto* instance : activeInstances) {
+                    if (instance) {
+                        instance->gRunning = false;
+                    }
                 }
-                break;  // Exit render loop
+                break;
             }
 
             tickCount++;
@@ -239,7 +251,7 @@ private:
                 double currentMs = (durationUs / 1000.0) / RENDER_TICKS_PER_SECOND;
                 double meanMs = (mean / 1000.0) / RENDER_TICKS_PER_SECOND;
 
-                Debug::Info("ClientWindow") << "Current: " << currentMs << " ms | Mean: " << meanMs << " ms\n";
+                Debug::Info("ClientWindow") << "Current: " << currentMs << " ms | Mean: " << meanMs << " ms | Active: " << instances.size() << "\n";
 
                 tickCount = 0;
             }
@@ -256,8 +268,7 @@ private:
 OpenGLWindow* ClientWindow::window = nullptr;
 std::mutex ClientWindow::windowMutex;
 std::thread ClientWindow::renderThread;
-ClientWindow* ClientWindow::activeInstance = nullptr;
+std::vector<ClientWindow*> ClientWindow::activeInstances;
 bool ClientWindow::threadRunning = false;
-std::atomic<bool> ClientWindow::callbacksChanged{ false };
 
 #endif //NETCODE_CLIENT_WINDOW_H

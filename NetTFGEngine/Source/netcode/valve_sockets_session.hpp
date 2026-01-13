@@ -8,6 +8,25 @@
 #include <functional>
 #include "Utils/Debug/Debug.hpp"
 
+enum ConnectionCode : uint8_t {
+	CONN_SUCCESS = 0,
+	CONN_SOCKETS_FAILED = 1,
+	CONN_PARSE_ERROR = 2,
+	CONN_TIMEOUT = 3,
+	CONN_DENIED = 4
+};
+
+std::ostream& operator<<(std::ostream& os, ConnectionCode code) {
+    switch (code) {
+    case CONN_SUCCESS: return os << "CONN_SUCCESS";
+    case CONN_SOCKETS_FAILED: return os << "CONN_SOCKETS_FAILED";
+    case CONN_PARSE_ERROR: return os << "CONN_PARSE_ERROR";
+    case CONN_TIMEOUT: return os << "CONN_TIMEOUT";
+    case CONN_DENIED: return os << "CONN_DENIED";
+    default: return os << "UNKNOWN(" << static_cast<int>(code) << ")";
+    }
+}
+
 class GNSSession {
 public:
     enum ConnectionEventType {
@@ -94,34 +113,64 @@ public:
         return true;
     }
 
-    bool ConnectTo(const std::string& hostStr, uint16_t port) {
-        if (!sockets) {
-            Debug::Error("Sockets") << "GNS not initialized\n";
-            return false;
-        }
+    ConnectionCode ConnectTo(const std::string& hostStr, uint16_t port)
+    {
+        if (!sockets)
+            return CONN_SOCKETS_FAILED;
 
         SteamNetworkingIPAddr serverAddr;
         serverAddr.Clear();
-        if (!serverAddr.ParseString(hostStr.c_str())) {
-            Debug::Error("Sockets") << "Failed to parse server address: " << hostStr << "\n";
-            return false;
-        }
+        if (!serverAddr.ParseString(hostStr.c_str()))
+            return CONN_PARSE_ERROR;
+
         serverAddr.m_port = port;
 
         SteamNetworkingConfigValue_t opt;
         opt.SetInt32(k_ESteamNetworkingConfig_TimeoutInitial, 10000);
 
-        connectedConnection = sockets->ConnectByIPAddress(serverAddr, 1, &opt);
-        if (connectedConnection == k_HSteamNetConnection_Invalid) {
-            Debug::Error("Sockets") << "Failed to initiate connection to " << hostStr << ":" << port << "\n";
-            return false;
-        }
+        HSteamNetConnection conn =
+            sockets->ConnectByIPAddress(serverAddr, 1, &opt);
 
-        s_pInstance = this;
-        isServer = false;
-        Debug::Info("Sockets") << "Client connecting to " << hostStr << ":" << port << "\n";
-        return true;
+        if (conn == k_HSteamNetConnection_Invalid)
+            return CONN_SOCKETS_FAILED;
+
+        const uint64 start = SteamNetworkingUtils()->GetLocalTimestamp();
+        const uint64 timeoutUS = 10 * 1000 * 1000; // 10 seconds
+
+        while (true)
+        {
+            // REQUIRED: pump callbacks
+			PumpCallbacks();
+
+            SteamNetConnectionInfo_t info;
+            sockets->GetConnectionInfo(conn, &info);
+
+            switch (info.m_eState)
+            {
+            case k_ESteamNetworkingConnectionState_Connected:
+                connectedConnection = conn;
+                return CONN_SUCCESS;
+
+            case k_ESteamNetworkingConnectionState_ProblemDetectedLocally:
+            case k_ESteamNetworkingConnectionState_ClosedByPeer:
+                sockets->CloseConnection(conn, 0, nullptr, false);
+                return CONN_TIMEOUT;
+
+            default:
+                break;
+            }
+
+            // User-level timeout safety net
+            if (SteamNetworkingUtils()->GetLocalTimestamp() - start > timeoutUS)
+            {
+                sockets->CloseConnection(conn, 0, "User timeout", false);
+                return CONN_TIMEOUT;
+            }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
     }
+
 
     void PumpCallbacks() {
         if (sockets) {
