@@ -402,8 +402,15 @@ std::vector<float> BulletVerts() {
                     Mesh* m = new Mesh(BulletVerts(), bulletInds, yellow);
                     world.GetEntityManager().AddComponent<MeshComponent>(newBullet, MeshComponent(m));
 
-                    AudioSourceComponent* audio = world.GetEntityManager().AddComponent<AudioSourceComponent>(
-                        newBullet, AudioSourceComponent("shoot.wav", AudioChannel::SFX, false));
+                    Entity bulletSound = world.GetEntityManager().CreateEntity();
+
+                    t = world.GetEntityManager().AddComponent<Transform>(bulletSound, Transform{});
+                    t->setPosition(glm::vec3(b.posX, b.posY, 0.0f));
+
+                    DestroyTimer* dt = world.GetEntityManager().AddComponent<DestroyTimer>(bulletSound, DestroyTimer{});
+                    dt->framesRemaining = RENDER_TICKS_PER_SECOND * 3;
+
+                    AudioSourceComponent* audio = world.GetEntityManager().AddComponent<AudioSourceComponent>(bulletSound, AudioSourceComponent("shoot.wav", AudioChannel::SFX, false));
 
                     audio->play = true;
                 }
@@ -427,6 +434,7 @@ std::vector<float> BulletVerts() {
         world.GetEntityManager().RegisterComponentType<SpaceShip>();
         world.GetEntityManager().RegisterComponentType<ECSBullet>();
         world.GetEntityManager().RegisterComponentType<ChargingShootEffect>();
+		world.GetEntityManager().RegisterComponentType<DestroyTimer>();
         
 
         Entity player1 = world.GetEntityManager().CreateEntity();
@@ -477,6 +485,7 @@ std::vector<float> BulletVerts() {
         world.AddSystem(std::make_unique<CameraFollowSystem>());
         world.AddSystem(std::make_unique<OnDeathRenderSystem>());
         world.AddSystem(std::make_unique<ChargingBulletRenderSystem>());
+		world.AddSystem(std::make_unique<DestroyTimerSystem>());
 
 
         AudioListenerComponent* listener = world.GetEntityManager().AddComponent<AudioListenerComponent>(camera, AudioListenerComponent{});

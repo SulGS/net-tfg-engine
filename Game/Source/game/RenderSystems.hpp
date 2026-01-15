@@ -210,3 +210,16 @@ public:
         }
     }
 };
+
+class DestroyTimerSystem : public ISystem {
+public:
+	void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
+		auto query = entityManager.CreateQuery<DestroyTimer>();
+		for (auto [entity, destroyTimer] : query) {
+			destroyTimer->framesRemaining -= 1;
+			if (destroyTimer->framesRemaining <= 0) {
+				entityManager.DestroyEntity(entity);
+			}
+		}
+	}
+};

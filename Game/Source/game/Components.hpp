@@ -34,4 +34,11 @@ public:
     ChargingShootEffect() : entity(0) {}
 };
 
+class DestroyTimer : public IComponent {
+public:
+	int framesRemaining;
+	DestroyTimer() : framesRemaining(0) {}
+	DestroyTimer(int fr) : framesRemaining(fr) {}
+};
+
 #endif // COMPONENTS_ASTEROIDS
