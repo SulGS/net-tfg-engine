@@ -46,6 +46,9 @@ public:
         entry.refCount = 1;
 
         typeMap.emplace(key, std::move(entry));
+
+		Debug::Info("AssetManager") << "Loaded asset: " << key << "\n";
+
         return h;
     }
 

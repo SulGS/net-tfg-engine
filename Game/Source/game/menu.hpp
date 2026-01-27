@@ -317,11 +317,11 @@ public:
 		Entity imageEntity = world.GetEntityManager().CreateEntity();
 		UIElement* imgElement = world.GetEntityManager().AddComponent<UIElement>(imageEntity, UIElement{});
 		imgElement->anchor = UIAnchor::BOTTOM_RIGHT;
-		imgElement->position = glm::vec2(0.0f, 0.0f);
-		imgElement->size = glm::vec2(100.0f, 100.0f);
+		imgElement->position = glm::vec2(-400.0f, -400.0f);
+		imgElement->size = glm::vec2(400.0f, 400.0f);
 		imgElement->layer = 5;
 		UIImage* imgComp = world.GetEntityManager().AddComponent<UIImage>(imageEntity, UIImage{});
-		imgComp->texturePath = "spaceboard.png";
+		imgComp->texturePath = "mena.jpg";
         
 
 		world.GetEntityManager().AddComponent<TextAnimationData>(startText);

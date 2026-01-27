@@ -13,7 +13,7 @@
 
 #include "Utils/AssetManager.hpp"
 
-#include <IL/ilut.h>
+#include <SOIL2/SOIL2.h>
 
 class NetTFG_Engine {
 public:
@@ -246,10 +246,6 @@ public:
 private:
     NetTFG_Engine()
     {
-        ilInit();
-        iluInit();
-        ilutInit();
-        ilutRenderer(ILUT_OPENGL);
 
         AssetManager::instance().registerType<ALuint>(
             [](const std::string& path) -> ALuint
@@ -266,31 +262,40 @@ private:
         AssetManager::instance().registerType<GLuint>(
             [](const std::string& path) -> GLuint
             {
+                // SOIL2 loads and creates OpenGL texture in one call
+                GLuint textureID = SOIL_load_OGL_texture(
+                    path.c_str(),
+                    SOIL_LOAD_AUTO,
+                    SOIL_CREATE_NEW_ID,
+                    SOIL_FLAG_MIPMAPS | SOIL_FLAG_INVERT_Y | SOIL_FLAG_NTSC_SAFE_RGB | SOIL_FLAG_COMPRESS_TO_DXT
+                );
 
-                std::vector<char> buf(path.begin(), path.end());
-                buf.push_back('\0');          // null-terminate
-
-                char* cpath = buf.data();     // writable, valid
-
-                GLuint texID = ilutGLLoadImage(reinterpret_cast<wchar_t*>(cpath));
-
-                if (texID == 0) {
-                    ILenum err = ilGetError();
-                    const char* txt = reinterpret_cast<const char*>(iluErrorString(err));
-
+                if (textureID == 0) {
                     Debug::Error("AssetManager")
-                        << "DevIL error: " << txt << "\n";
+                        << "SOIL2 failed to load texture: " << path
+                        << " - " << SOIL_last_result() << "\n";
+                    return 0;
                 }
 
+                // Set texture parameters
+                glBindTexture(GL_TEXTURE_2D, textureID);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-                return texID;
+                Debug::Info("AssetManager")
+                    << "Successfully loaded texture: " << path
+                    << " (ID: " << textureID << ")\n";
+
+                return textureID;
             },
             [](GLuint texture)
             {
                 if (texture != 0)
                     glDeleteTextures(1, &texture);
             }
-		);
+        );
 
     }
 

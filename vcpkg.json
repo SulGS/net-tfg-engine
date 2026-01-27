@@ -7,6 +7,6 @@
     "glm",
     "openal-soft",
     "opengl",
-    "devil"
+    "soil2"
   ]
 }

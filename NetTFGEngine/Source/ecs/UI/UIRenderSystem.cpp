@@ -141,22 +141,24 @@ void UIRenderSystem::Update(EntityManager& entityManager, std::vector<EventEntry
         // Check for image component
         UIImage* image = entityManager.GetComponent<UIImage>(entity);
         if (image) {
-
             if (!image->isLoaded) {
                 auto reqBuffer = AssetManager::instance().acquire<GLuint>(image->texturePath);
                 if (!reqBuffer)
                 {
                     Debug::Error("UIRenderSystem") << "Failed to load texture: " << image->texturePath << "\n";
                 }
-                else 
+                else
                 {
                     image->textureID = *reqBuffer;
-					image->isLoaded = true;
-                    RenderUIImage(element, image);
+                    image->isLoaded = true;
                 }
-                
             }
 
+            // Render the image every frame (if loaded)
+            if (image->isLoaded) {
+				//Debug::Info("UIRenderSystem") << "Rendering image with texture ID: " << image->textureID << "\n";
+                RenderUIImage(element, image);
+            }
         }
         
         // Check for text component
@@ -230,29 +232,29 @@ void UIRenderSystem::InitializeQuad() {
     // Quad vertices (position + texcoord)
     float vertices[] = {
         // Pos      // Tex
-        0.0f, 1.0f, 0.0f, 1.0f,
-        1.0f, 0.0f, 1.0f, 0.0f,
-        0.0f, 0.0f, 0.0f, 0.0f,
-        
-        0.0f, 1.0f, 0.0f, 1.0f,
-        1.0f, 1.0f, 1.0f, 1.0f,
-        1.0f, 0.0f, 1.0f, 0.0f
+        0.0f, 1.0f, 0.0f, 0.0f,  // Changed from 0.0f, 1.0f
+        1.0f, 0.0f, 1.0f, 1.0f,  // Changed from 1.0f, 0.0f
+        0.0f, 0.0f, 0.0f, 1.0f,  // Changed from 0.0f, 0.0f
+
+        0.0f, 1.0f, 0.0f, 0.0f,  // Changed from 0.0f, 1.0f
+        1.0f, 1.0f, 1.0f, 0.0f,  // Changed from 1.0f, 1.0f
+        1.0f, 0.0f, 1.0f, 1.0f   // Changed from 1.0f, 0.0f
     };
-    
+
     glGenVertexArrays(1, &quadVAO);
     glGenBuffers(1, &quadVBO);
-    
+
     glBindVertexArray(quadVAO);
     glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-    
+
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
-    
+
     glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), 
-                         (void*)(2 * sizeof(float)));
-    
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
+        (void*)(2 * sizeof(float)));
+
     glBindVertexArray(0);
 }
 
@@ -263,7 +265,7 @@ void UIRenderSystem::UpdateProjection() {
 void UIRenderSystem::RenderUIImage(const UIElement* element, const UIImage* image) {
     glm::vec2 pos = element->GetScreenPosition(screenWidth, screenHeight);
     glm::vec4 color = image->color * glm::vec4(1.0f, 1.0f, 1.0f, element->opacity);
-    
+
     RenderQuad(pos, element->size, color, image->textureID, image->uvRect);
 }
 
@@ -509,7 +511,8 @@ void UIRenderSystem::RenderUIButton(Entity entity, const UIElement* element, con
 void UIRenderSystem::RenderQuad(const glm::vec2& position, const glm::vec2& size,
     const glm::vec4& color, GLuint textureID,
     const glm::vec4& uvRect) {
-    glUseProgram(shaderProgram);  // Ensure shader is active
+
+    glUseProgram(shaderProgram);
     glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "uProjection"),
         1, GL_FALSE, glm::value_ptr(projection));
     glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "uModel"),
@@ -524,6 +527,11 @@ void UIRenderSystem::RenderQuad(const glm::vec2& position, const glm::vec2& size
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, textureID);
         glUniform1i(glGetUniformLocation(shaderProgram, "uTexture"), 0);
+
+        // DEBUG: Check if texture is valid
+        GLint width, height;
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &width);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &height);
     }
     else {
         glUniform1i(glGetUniformLocation(shaderProgram, "uUseTexture"), 0);
@@ -532,6 +540,11 @@ void UIRenderSystem::RenderQuad(const glm::vec2& position, const glm::vec2& size
     glBindVertexArray(quadVAO);
     glDrawArrays(GL_TRIANGLES, 0, 6);
     glBindVertexArray(0);
+
+    // Unbind texture
+    if (textureID) {
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
 }
 
 
