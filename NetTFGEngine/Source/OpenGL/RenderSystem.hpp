@@ -28,6 +28,8 @@ public:
     Camera* activeCamera = nullptr;
     Transform* cameraTransform = nullptr;
 
+	entityManager.acquireMutex();
+
     auto query = entityManager.CreateQuery<Camera, Transform>();
     
     for (auto [entity, camera, transform] : query) {
@@ -71,6 +73,8 @@ public:
     }
 
     glUseProgram(0);
+
+	entityManager.releaseMutex();
 }
 
 

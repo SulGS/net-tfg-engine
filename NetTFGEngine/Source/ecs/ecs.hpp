@@ -80,7 +80,18 @@ class EntityManager {
     Entity nextEntityId = 1; // Start from 1, reserve 0 as NULL_ENTITY
     size_t entityCount = 0;
 
+	std::mutex entityMutex;
+
 public:
+
+	void acquireMutex() {
+		entityMutex.lock();
+	}
+
+	void releaseMutex() {
+		entityMutex.unlock();
+	}
+
     Entity CreateEntity() {
         Entity entityId;
         
@@ -382,10 +393,10 @@ public:
 		//	<< events.size() << " events generated.\n";
     }
 
-    void Clear() {
+    /*void Clear() {
         entityManager = EntityManager();
         systems.clear();
-    }
+    }*/
 
     template<typename T>
     T* GetSystem() {

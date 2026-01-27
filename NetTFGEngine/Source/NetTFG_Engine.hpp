@@ -11,6 +11,8 @@
 #include "Client-Server/ClientManager.hpp"
 #include "Utils/Debug/Debug.hpp"
 
+#include "Utils/AssetManager.hpp"
+
 class NetTFG_Engine {
 public:
     // ---- Singleton ----
@@ -240,7 +242,21 @@ public:
     }
 
 private:
-    NetTFG_Engine() = default;
+    NetTFG_Engine()
+    {
+        AssetManager::instance().registerType<ALuint>(
+            [](const std::string& path) -> ALuint
+            {
+                return loadWavAL(path);
+            },
+            [](ALuint buffer)
+            {
+                if (buffer != 0)
+                    alDeleteBuffers(1, &buffer);
+            }
+        );
+
+    }
 
     bool ReconnectClientInternal(int id) {
         auto it = clientIndexMap.find(id);

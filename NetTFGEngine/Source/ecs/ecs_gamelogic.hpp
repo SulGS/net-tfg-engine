@@ -94,6 +94,9 @@ public:
 		//GameState_To_ECSWorld(state);
         this->generatedEvents.clear();
 		this->generatedDeltas.clear();
+
+		world.GetEntityManager().acquireMutex();
+
         ProcessEvents(events);
 		ProcessInputs(inputs);
         world.Update(isServer, 1 / TICKS_PER_SECOND);
@@ -106,6 +109,8 @@ public:
             world.ClearEvents();
             GenerateDeltas(prevState, state);
         }
+
+		world.GetEntityManager().releaseMutex();
     }
 };
 
