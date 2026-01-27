@@ -25,7 +25,7 @@ int main(int argc, char** argv) {
 
     auto& engine = NetTFG_Engine::Get();
 
-    Debug::Initialize("AsteroidsClient", false);
+    Debug::Initialize("AsteroidsClient", true);
 	engine.RegisterClient(1, new OnlineClient(std::move(gameLogic), std::move(gameRenderer)));
 
 	std::unique_ptr<IGameLogic> menuLogic = std::make_unique<StartScreenGame>();

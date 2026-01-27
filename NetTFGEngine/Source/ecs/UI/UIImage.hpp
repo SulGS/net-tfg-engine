@@ -5,6 +5,8 @@
 #include "OpenGL/OpenGLIncludes.hpp"
 #include <string>
 
+#include <Utils/AssetManager.hpp>
+
 class UIImage : public IComponent {
 public:
     UIImage()
@@ -12,6 +14,9 @@ public:
         , color(1.0f, 1.0f, 1.0f, 1.0f)
         , uvRect(0.0f, 0.0f, 1.0f, 1.0f)
     {}
+
+	std::string texturePath; // Path to the texture file
+	bool isLoaded = false;    // Flag indicating if the texture is loaded
 
     GLuint textureID;           // OpenGL texture ID
     glm::vec4 color;            // Tint color (RGBA)
@@ -24,6 +29,13 @@ public:
     void SetUVRect(float x, float y, float w, float h) {
         uvRect = glm::vec4(x, y, w, h);
     }
+
+    void Destroy() override {
+        if (isLoaded && textureID != 0) {
+			AssetManager::instance().release<GLuint>(texturePath);
+            textureID = 0;
+        }
+	}
 };
 
 #endif // UIIMAGE_HPP

@@ -13,6 +13,8 @@
 
 #include "Utils/AssetManager.hpp"
 
+#include <IL/ilut.h>
+
 class NetTFG_Engine {
 public:
     // ---- Singleton ----
@@ -244,6 +246,11 @@ public:
 private:
     NetTFG_Engine()
     {
+        ilInit();
+        iluInit();
+        ilutInit();
+        ilutRenderer(ILUT_OPENGL);
+
         AssetManager::instance().registerType<ALuint>(
             [](const std::string& path) -> ALuint
             {
@@ -255,6 +262,35 @@ private:
                     alDeleteBuffers(1, &buffer);
             }
         );
+
+        AssetManager::instance().registerType<GLuint>(
+            [](const std::string& path) -> GLuint
+            {
+
+                std::vector<char> buf(path.begin(), path.end());
+                buf.push_back('\0');          // null-terminate
+
+                char* cpath = buf.data();     // writable, valid
+
+                GLuint texID = ilutGLLoadImage(reinterpret_cast<wchar_t*>(cpath));
+
+                if (texID == 0) {
+                    ILenum err = ilGetError();
+                    const char* txt = reinterpret_cast<const char*>(iluErrorString(err));
+
+                    Debug::Error("AssetManager")
+                        << "DevIL error: " << txt << "\n";
+                }
+
+
+                return texID;
+            },
+            [](GLuint texture)
+            {
+                if (texture != 0)
+                    glDeleteTextures(1, &texture);
+            }
+		);
 
     }
 

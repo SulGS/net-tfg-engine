@@ -314,6 +314,16 @@ public:
         text->SetColor(1.0f, 1.0f, 1.0f, 1.0f);  // White
         text->SetFont("default");
 
+		Entity imageEntity = world.GetEntityManager().CreateEntity();
+		UIElement* imgElement = world.GetEntityManager().AddComponent<UIElement>(imageEntity, UIElement{});
+		imgElement->anchor = UIAnchor::BOTTOM_RIGHT;
+		imgElement->position = glm::vec2(0.0f, 0.0f);
+		imgElement->size = glm::vec2(100.0f, 100.0f);
+		imgElement->layer = 5;
+		UIImage* imgComp = world.GetEntityManager().AddComponent<UIImage>(imageEntity, UIImage{});
+		imgComp->texturePath = "spaceboard.png";
+        
+
 		world.GetEntityManager().AddComponent<TextAnimationData>(startText);
 
         // Create player entity for input

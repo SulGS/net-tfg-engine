@@ -2,6 +2,7 @@
 #include <iostream>
 #include <algorithm>
 #include "Utils/Debug/Debug.hpp"
+#include "Utils/AssetManager.hpp"
 
 // UI Shaders
 const char* uiVertexShader = R"(
@@ -140,7 +141,22 @@ void UIRenderSystem::Update(EntityManager& entityManager, std::vector<EventEntry
         // Check for image component
         UIImage* image = entityManager.GetComponent<UIImage>(entity);
         if (image) {
-            RenderUIImage(element, image);
+
+            if (!image->isLoaded) {
+                auto reqBuffer = AssetManager::instance().acquire<GLuint>(image->texturePath);
+                if (!reqBuffer)
+                {
+                    Debug::Error("UIRenderSystem") << "Failed to load texture: " << image->texturePath << "\n";
+                }
+                else 
+                {
+                    image->textureID = *reqBuffer;
+					image->isLoaded = true;
+                    RenderUIImage(element, image);
+                }
+                
+            }
+
         }
         
         // Check for text component

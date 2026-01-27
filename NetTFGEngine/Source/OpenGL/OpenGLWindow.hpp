@@ -3,6 +3,9 @@
 
 #include "OpenGLIncludes.hpp"
 #include <string>
+#include <IL/il.h>
+#include <IL/ilu.h>
+#include <IL/ilut.h>
 
 class OpenGLWindow {
 public:
