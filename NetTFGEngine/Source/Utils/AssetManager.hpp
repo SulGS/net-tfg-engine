@@ -11,11 +11,13 @@
 #include <cstdint>
 #include <algorithm>
 #include <filesystem>
+#include <cstring>
 #include "Utils/Debug/Debug.hpp"
 
 #include <AL/al.h>
+#include <openssl/md5.h>
 
-
+using AssetID = uint64_t;
 
 struct AssetLocation {
     uint64_t offset;
@@ -26,6 +28,7 @@ struct AssetLocation {
 struct BinData {
     std::vector<uint8_t> data;
     std::string name;
+    uint64_t dataOffset = 0; // offset to start of actual asset data
 };
 
 struct TextureID { GLuint value; };
@@ -50,7 +53,7 @@ public:
        ============================ */
     bool loadBin(const std::string& binFile)
     {
-        if (binNameToId.count(binFile)) return true; // already loaded
+        if (binNameToId.count(binFile)) return true;
 
         std::ifstream f(binFile, std::ios::binary | std::ios::ate);
         if (!f.is_open()) return false;
@@ -62,6 +65,25 @@ public:
         bin.data.resize(size);
         bin.name = binFile;
         f.read(reinterpret_cast<char*>(bin.data.data()), size);
+
+        const uint8_t* ptr = bin.data.data();
+
+        // Validate header
+        if (std::memcmp(ptr, "ASPK", 4) != 0) {
+            Debug::Error("AssetManager") << "Invalid bin magic: " << binFile << "\n";
+            return false;
+        }
+
+        uint32_t version = *reinterpret_cast<const uint32_t*>(ptr + 4);
+        if (version != 1) {
+            Debug::Error("AssetManager") << "Unsupported bin version\n";
+            return false;
+        }
+
+        uint32_t entryCount = *reinterpret_cast<const uint32_t*>(ptr + 8);
+
+        // Each entry: id(8) + offset(8) + size(8)
+        bin.dataOffset = 12 + entryCount * (8 + 8 + 8);
 
         uint32_t binId = static_cast<uint32_t>(bins.size());
         binNameToId[binFile] = binId;
@@ -81,7 +103,7 @@ public:
         // Remove all assets referencing this bin
         for (auto& [type, typeMap] : assets)
         {
-            std::vector<std::string> toErase;
+            std::vector<AssetID> toErase;
             for (auto& [key, entry] : typeMap)
             {
                 if (entry.binId == binId)
@@ -106,26 +128,26 @@ public:
     template<typename Handle>
     std::optional<Handle> loadAsset(const Key& key)
     {
+        AssetID id = hashAsset(key);
+
         auto& typeMap = assets[typeid(Handle)];
 
-        // Already loaded?
-        auto itLoaded = typeMap.find(key);
+        auto itLoaded = typeMap.find(id);
         if (itLoaded != typeMap.end())
         {
             ++itLoaded->second.refCount;
             return std::any_cast<Handle>(itLoaded->second.handle);
         }
 
-        // Find asset in index
-        auto itIndex = assetIndex.find(key);
-        if (itIndex == assetIndex.end()) return std::nullopt;
+        auto itIndex = assetIndex.find(id);
+        if (itIndex == assetIndex.end())
+            return std::nullopt;
 
         const AssetLocation& loc = itIndex->second;
 
         Debug::Info("AssetManager") << "Loading asset: " << key
             << " as type " << typeid(Handle).name()
             << ", size: " << loc.size << "\n";
-
 
         if (loc.binId >= bins.size() || bins[loc.binId].data.empty())
         {
@@ -143,7 +165,7 @@ public:
         entry.handle = h;
         entry.refCount = 1;
         entry.binId = loc.binId;
-        typeMap[key] = std::move(entry);
+        typeMap[id] = std::move(entry);
 
         Debug::Info("AssetManager") << "Loaded asset: " << key << " from bin " << bins[loc.binId].name << "\n";
         return h;
@@ -153,7 +175,7 @@ public:
     void unloadAsset(const Key& key)
     {
         auto& typeMap = assets[typeid(Handle)];
-        auto it = typeMap.find(key);
+        auto it = typeMap.find(hashAsset(key));
         if (it == typeMap.end()) return;
 
         Entry& entry = it->second;
@@ -177,7 +199,12 @@ public:
         std::function<void(Handle)> destroyer)
     {
         loaders[typeid(Handle)] = [loader](const AssetLocation& loc, const BinData& bin) {
-            return std::any(loader(bin.data.data() + loc.offset, static_cast<size_t>(loc.size)));
+            return std::any(
+                loader(
+                    bin.data.data() + bin.dataOffset + loc.offset, // <-- FIXED
+                    static_cast<size_t>(loc.size)
+                )
+            );
             };
 
         destroyers[typeid(Handle)] = [destroyer](std::any h) {
@@ -188,7 +215,7 @@ public:
     /* ============================
        Asset index management
        ============================ */
-    void setAssetIndex(const std::unordered_map<std::string, AssetLocation>& idx)
+    void setAssetIndex(const std::unordered_map<AssetID, AssetLocation>& idx)
     {
         assetIndex = idx;
     }
@@ -199,51 +226,55 @@ private:
         loadFromBuildRoot();
     }
 
+    static AssetID hashAsset(const std::string& path)
+    {
+        std::string normalized = path;
+        std::replace(normalized.begin(), normalized.end(), '\\', '/');
+
+        unsigned char digest[MD5_DIGEST_LENGTH];
+        MD5(reinterpret_cast<const unsigned char*>(normalized.data()),
+            normalized.size(),
+            digest);
+
+        AssetID id = 0;
+        std::memcpy(&id, digest, sizeof(AssetID)); // first 8 bytes
+        return id;
+    }
+
     bool loadFromBuildRoot()
     {
-        namespace fs = std::filesystem;
-
-        std::string indexPath = "assets.idx";
-        std::ifstream f(indexPath, std::ios::binary);
-        if (!f.is_open()) {
-            Debug::Error("AssetManager") << "Failed to open asset index: " << indexPath << "\n";
+        std::ifstream f("assets.idx", std::ios::binary);
+        if (!f.is_open())
+        {
+            Debug::Error("AssetManager") << "Failed to open assets.idx\n";
             return false;
         }
 
-        // Read asset count
         uint32_t numAssets = 0;
         f.read(reinterpret_cast<char*>(&numAssets), sizeof(numAssets));
 
-        std::unordered_map<std::string, AssetLocation> idx;
+        std::unordered_map<AssetID, AssetLocation> idx;
 
-        // Read asset entries
         for (uint32_t i = 0; i < numAssets; ++i)
         {
-            uint32_t nameLen;
-            f.read(reinterpret_cast<char*>(&nameLen), sizeof(nameLen));
-            std::string name(nameLen, '\0');
-            f.read(name.data(), nameLen);
-
+            AssetID assetID;
             AssetLocation loc;
+
+            f.read(reinterpret_cast<char*>(&assetID), sizeof(assetID));
             f.read(reinterpret_cast<char*>(&loc.binId), sizeof(loc.binId));
             f.read(reinterpret_cast<char*>(&loc.offset), sizeof(loc.offset));
             f.read(reinterpret_cast<char*>(&loc.size), sizeof(loc.size));
 
-            idx[name] = loc;
+            idx[assetID] = loc;
         }
 
-        setAssetIndex(idx);
-        Debug::Info("AssetManager") << "Loaded asset index with " << numAssets << " entries\n";
+        assetIndex = std::move(idx);
 
-        // Load shared.bin if exists
-        std::string sharedBinPath = "shared.bin";
-        if (fs::exists(sharedBinPath))
-        {
-            if (loadBin(sharedBinPath))
-                Debug::Info("AssetManager") << "Loaded shared bin: " << sharedBinPath << "\n";
-            else
-                Debug::Error("AssetManager") << "Failed to load shared bin: " << sharedBinPath << "\n";
-        }
+        Debug::Info("AssetManager")
+            << "Loaded asset index with " << numAssets << " entries\n";
+
+        if (std::filesystem::exists("shared.bin"))
+            loadBin("shared.bin");
 
         return true;
     }
@@ -257,10 +288,10 @@ private:
     std::vector<BinData> bins;
     std::unordered_map<std::string, uint32_t> binNameToId;
 
-    std::unordered_map<std::type_index, std::unordered_map<std::string, Entry>> assets;
+    std::unordered_map<std::type_index, std::unordered_map<AssetID, Entry>> assets;
     std::unordered_map<std::type_index, std::function<std::any(const AssetLocation&, const BinData&)>> loaders;
     std::unordered_map<std::type_index, std::function<void(std::any)>> destroyers;
-    std::unordered_map<std::string, AssetLocation> assetIndex;
+    std::unordered_map<AssetID, AssetLocation> assetIndex;
 
     template<typename Handle>
     void destroy(Handle h)

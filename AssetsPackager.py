@@ -6,6 +6,14 @@ from collections import defaultdict
 MAGIC = b"ASPK"
 VERSION = 1
 
+import hashlib
+
+def hash_asset(path: str) -> int:
+    path = path.replace("\\", "/")  # normalize
+    digest = hashlib.md5(path.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], byteorder="little", signed=False)
+
+
 def collect_ntfg_files(root):
     scenes = {}
     for base, _, files in os.walk(root):
@@ -28,59 +36,41 @@ def read_scene_assets(ntfg_path):
 def pack_bin(bin_name, assets, asset_root, out_dir):
     entries = []
     data_blob = bytearray()
-    offset = 0
 
-    # First, prepare all assets in memory
-    asset_datas = []
     for asset in assets:
         full_path = os.path.join(asset_root, asset)
         with open(full_path, "rb") as f:
             data = f.read()
 
-        # Logical path relative to asset_root
-        logical_path = os.path.relpath(full_path, asset_root).replace("\\", "/")
+        logical_path = asset.replace("\\", "/")
+        asset_id = hash_asset(logical_path)
+
         print(f"Packing: {logical_path}")
 
-        asset_datas.append((logical_path, data))
         entries.append({
-            "name": logical_path.encode("utf-8"),
-            "asset": logical_path,  # used for index
-            "offset": 0,            # placeholder, will fix later
+            "asset_id": asset_id,
+            "offset": len(data_blob),
             "size": len(data),
         })
 
-    # Compute offsets
-    header_size = 4 + 4 + 4  # MAGIC(4) + VERSION(4) + num_entries(4)
-    entry_table_size = 0
-    for e in entries:
-        entry_table_size += 4 + len(e["name"]) + 8 + 8  # name length + name + offset + size
-
-    data_start_offset = header_size + entry_table_size
-    running_offset = 0
-    for e, (_, data) in zip(entries, asset_datas):
-        e["offset"] = data_start_offset + running_offset
-        running_offset += len(data)
         data_blob.extend(data)
 
-    # Write the bin
     out_path = os.path.join(out_dir, bin_name)
     with open(out_path, "wb") as out:
-        # Header
         out.write(MAGIC)
         out.write(struct.pack("<I", VERSION))
         out.write(struct.pack("<I", len(entries)))
 
-        # Entry table
         for e in entries:
-            out.write(struct.pack("<I", len(e["name"])))
-            out.write(e["name"])
+            out.write(struct.pack("<Q", e["asset_id"]))
             out.write(struct.pack("<Q", e["offset"]))
             out.write(struct.pack("<Q", e["size"]))
 
-        # All asset data
         out.write(data_blob)
 
     return entries
+
+
 
 
 def main(asset_root, output_dir):
@@ -103,7 +93,7 @@ def main(asset_root, output_dir):
         for scene, assets in scene_assets.items()
     }
 
-    asset_index = []
+    asset_index = []  # (asset_id, bin_id, offset, size)
     bin_ids = {}
     next_bin_id = 0
 
@@ -116,7 +106,7 @@ def main(asset_root, output_dir):
         entries = pack_bin(bin_name, shared_assets, asset_root, output_dir)
         for e in entries:
             asset_index.append((
-                e["asset"],           # logical path
+                e["asset_id"],
                 bin_ids[bin_name],
                 e["offset"],
                 e["size"]
@@ -134,21 +124,29 @@ def main(asset_root, output_dir):
         entries = pack_bin(bin_name, assets, asset_root, output_dir)
         for e in entries:
             asset_index.append((
-                e["asset"],           # logical path
+                e["asset_id"],
                 bin_ids[bin_name],
                 e["offset"],
                 e["size"]
             ))
 
+
     # Write index
+    # Write index (C++ compatible)
     idx_path = os.path.join(output_dir, "assets.idx")
     with open(idx_path, "wb") as out:
-        out.write(struct.pack("<I", len(asset_index)))  # number of assets
-        for logical_path, bin_id, offset, size in asset_index:
-            path_bytes = logical_path.encode("utf-8")
-            out.write(struct.pack("<I", len(path_bytes)))  # path length
-            out.write(path_bytes)                           # path string
-            out.write(struct.pack("<I Q Q", bin_id, offset, size))  # binId, offset, size
+        out.write(struct.pack("<I", len(asset_index)))
+
+        for asset_id, bin_id, offset, size in asset_index:
+            out.write(struct.pack(
+                "<Q I Q Q",
+                asset_id,
+                bin_id,
+                offset,
+                size
+            ))
+
+
 
     print(f"Packed {len(asset_index)} assets")
     print(f"Bins created: {len(bin_ids)}")
