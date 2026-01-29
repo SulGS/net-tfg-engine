@@ -80,6 +80,8 @@ public:
         size_t index = it->second;
         Client* client = ClientManager::Get().GetClient(index);
 
+		AssetManager::instance().unloadBin(client->binName);
+
         if (client) {
             // Close the client properly
             client->CloseClient();
@@ -247,24 +249,33 @@ private:
     NetTFG_Engine()
     {
 
-        AssetManager::instance().registerType<ALuint>(
-            [](const std::string& path) -> ALuint
+        AssetManager::instance().registerType<AudioBuffer>(
+            // Loader
+			[](const uint8_t* data, size_t size) -> AudioBuffer
             {
-                return loadWavAL(path);
+				AudioBuffer buffer;
+				buffer.value = loadWavALFromMemory(data, size);
+                return buffer;
             },
-            [](ALuint buffer)
+
+            // Destroyer
+            [](AudioBuffer buffer)
             {
-                if (buffer != 0)
-                    alDeleteBuffers(1, &buffer);
+                if (buffer.value != 0)
+                    alDeleteBuffers(1, &(buffer.value));
             }
         );
 
-        AssetManager::instance().registerType<GLuint>(
-            [](const std::string& path) -> GLuint
+        AssetManager::instance().registerType<TextureID>(
+            [](const uint8_t* data, size_t size) -> TextureID
             {
-                // SOIL2 loads and creates OpenGL texture in one call
-                GLuint textureID = SOIL_load_OGL_texture(
-                    path.c_str(),
+
+                TextureID texture;
+				texture.value = 0;
+
+                GLuint textureID = SOIL_load_OGL_texture_from_memory(
+                    data,
+                    static_cast<int>(size),
                     SOIL_LOAD_AUTO,
                     SOIL_CREATE_NEW_ID,
                     SOIL_FLAG_MIPMAPS | SOIL_FLAG_INVERT_Y | SOIL_FLAG_NTSC_SAFE_RGB | SOIL_FLAG_COMPRESS_TO_DXT
@@ -272,9 +283,9 @@ private:
 
                 if (textureID == 0) {
                     Debug::Error("AssetManager")
-                        << "SOIL2 failed to load texture: " << path
-                        << " - " << SOIL_last_result() << "\n";
-                    return 0;
+                        << "SOIL2 failed to load texture from memory: "
+                        << SOIL_last_result() << "\n";
+                    return texture;
                 }
 
                 // Set texture parameters
@@ -285,17 +296,19 @@ private:
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
                 Debug::Info("AssetManager")
-                    << "Successfully loaded texture: " << path
-                    << " (ID: " << textureID << ")\n";
+                    << "Successfully loaded texture from memory (ID: " << textureID << ")\n";
 
-                return textureID;
+				texture.value = textureID;
+
+                return texture;
             },
-            [](GLuint texture)
+            [](TextureID texture)
             {
-                if (texture != 0)
-                    glDeleteTextures(1, &texture);
+                if (texture.value != 0)
+                    glDeleteTextures(1, &(texture.value));
             }
         );
+
 
     }
 
@@ -345,6 +358,8 @@ private:
         }
 
         Debug::Info("NetTFG_Engine") << "Setting up client " << id << "...\n";
+
+		AssetManager::instance().loadBin(client->binName);
 
         // Setup the client with connection parameters (may block)
         ConnectionCode result = client->SetupClient(host, port, customClientId);

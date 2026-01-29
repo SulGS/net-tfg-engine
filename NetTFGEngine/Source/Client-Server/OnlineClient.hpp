@@ -25,13 +25,14 @@
 class OnlineClient : public Client {
 public:
     OnlineClient(std::unique_ptr<IGameLogic> gameLogic,
-        std::unique_ptr<IGameRenderer> gameRenderer)
+        std::unique_ptr<IGameRenderer> gameRenderer,std::string binFileName)
         : gameLogic_(std::move(gameLogic))
         , gameRenderer_(std::move(gameRenderer))
         , assignedPlayerId_(-1)
         , isReconnection_(false)
         , serverConnection_(k_HSteamNetConnection_Invalid)
     {
+		binName = binFileName;
     }
 
     ConnectionCode SetupClient(const std::string& hostStr = "0.0.0.0", uint16_t port = 0, const std::string& customClientId = "") override {

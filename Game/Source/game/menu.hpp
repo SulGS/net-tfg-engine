@@ -321,7 +321,7 @@ public:
 		imgElement->size = glm::vec2(400.0f, 400.0f);
 		imgElement->layer = 5;
 		UIImage* imgComp = world.GetEntityManager().AddComponent<UIImage>(imageEntity, UIImage{});
-		imgComp->texturePath = "mena.jpg";
+		imgComp->texturePath = "spaceboard.png";
         
 
 		world.GetEntityManager().AddComponent<TextAnimationData>(startText);
@@ -391,8 +391,8 @@ public:
 
 
 
-
-        printf("[StartScreen] Renderer initialized!\n");
+		AudioManager::PlayMusic("BandaSonora.wav", true);
+        //printf("[StartScreen] Renderer initialized!\n");
     }
 
     void Interpolate(const GameStateBlob& previousServerState,

@@ -25,15 +25,22 @@ int main(int argc, char** argv) {
 
     auto& engine = NetTFG_Engine::Get();
 
+#if defined(_DEBUG) || defined(DEBUG)
     Debug::Initialize("AsteroidsClient", true);
-	engine.RegisterClient(1, new OnlineClient(std::move(gameLogic), std::move(gameRenderer)));
+#else
+	Debug::Initialize("AsteroidsClient", false);
+#endif
+
+
+
+	engine.RegisterClient(1, new OnlineClient(std::move(gameLogic), std::move(gameRenderer),"online_level.bin"));
 
 	std::unique_ptr<IGameLogic> menuLogic = std::make_unique<StartScreenGame>();
 	std::unique_ptr<IGameRenderer> menuRenderer = std::make_unique<StartScreenGameRenderer>();
 
 	menuRenderer->LinkGameLogic(menuLogic.get());
 
-	engine.RegisterClient(0, new OfflineClient(std::move(menuLogic), std::move(menuRenderer)));
+	engine.RegisterClient(0, new OfflineClient(std::move(menuLogic), std::move(menuRenderer), "menu.bin"));
 
 	engine.ActivateClient(0);
     engine.Start(800, 600, "Asteroids");

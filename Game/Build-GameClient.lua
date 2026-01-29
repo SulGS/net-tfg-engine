@@ -27,11 +27,11 @@ project "GameClient"
       systemversion "latest"
       defines { "WINDOWS" }
       
-      postbuildcommands 
-      {
-         -- Copy game content only
-         'if exist "%{prj.location}\\Content" (xcopy /Y /E /I /Q "%{prj.location}\\Content\\*" "%{Directories.ContentDir}\\")',
-      }
+      postbuildcommands {
+			'if exist "%{prj.location}/Assets" (python "%{prj.location}/../AssetsPackager.py" "%{prj.location}/Assets" "%{cfg.targetdir}")'
+		}
+
+
 
    filter "configurations:Debug"
       defines { "DEBUG" }

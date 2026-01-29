@@ -201,7 +201,7 @@ public:
     {
         // Step 1: Acquire new buffer FIRST
         auto reqBuffer =
-            AssetManager::instance().acquire<ALuint>(file);
+            AssetManager::instance().loadAsset<AudioBuffer>(file);
 
         if (!reqBuffer)
         {
@@ -210,7 +210,7 @@ public:
             return;
         }
 
-        ALuint newBuffer = *reqBuffer;
+		ALuint newBuffer = reqBuffer->value;
 
         // Step 2: Try to bind & configure
         alSourceStop(musicSource);
@@ -222,7 +222,7 @@ public:
         {
             // Rollback
             alSourcei(musicSource, AL_BUFFER, musicBuffer);
-            AssetManager::instance().release<ALuint>(file);
+            AssetManager::instance().unloadAsset<AudioBuffer>(file);
 
             Debug::Error("AudioSystem")
                 << "Failed to bind music source: " << file << "\n";
@@ -232,7 +232,7 @@ public:
         // Step 3: Commit (safe point)
         if (musicBuffer != 0)
         {
-            AssetManager::instance().release<ALuint>(lastMusicFile);
+            AssetManager::instance().unloadAsset<AudioBuffer>(lastMusicFile);
         }
 
         musicBuffer = newBuffer;
@@ -432,7 +432,7 @@ private:
 
         // 2️⃣ Release music buffer via AssetManager (never delete manually!)
         if (!lastMusicFile.empty()) {
-            AssetManager::instance().release<ALuint>(lastMusicFile);
+            AssetManager::instance().unloadAsset<AudioBuffer>(lastMusicFile);
             lastMusicFile.clear();
             musicBuffer = 0;
         }
@@ -449,7 +449,7 @@ private:
 
         // 4️⃣ Flush all ALuint assets from AssetManager
         // Optional but required if context/device will be destroyed
-        AssetManager::instance().clearType<ALuint>();
+        //AssetManager::instance().clear<ALuint>();
 
         // 5️⃣ Destroy OpenAL context and device
         if (context) {
@@ -514,7 +514,7 @@ private:
             return;
 
         auto reqBuffer =
-            AssetManager::instance().acquire<ALuint>(ac.filePath);
+            AssetManager::instance().loadAsset<AudioBuffer>(ac.filePath);
 
         if (!reqBuffer)
         {
@@ -523,12 +523,12 @@ private:
             return;
         }
 
-        ac.buffer = *reqBuffer;
+        ac.buffer = reqBuffer->value;
 
         alGenSources(1, &ac.source);
         if (alGetError() != AL_NO_ERROR)
         {
-            AssetManager::instance().release<ALuint>(ac.filePath);
+            AssetManager::instance().unloadAsset<AudioBuffer>(ac.filePath);
             Debug::Error("AudioSystem")
                 << "Failed to create OpenAL source\n";
             return;
@@ -549,7 +549,7 @@ private:
         alSourceStop(ac.source);
         alDeleteSources(1, &ac.source);
 
-        AssetManager::instance().release<ALuint>(ac.filePath);
+        AssetManager::instance().unloadAsset<AudioBuffer>(ac.filePath);
 
         ac.initialized = false;
         ac.source = 0;
@@ -564,65 +564,60 @@ private:
 
 };
 
-ALuint loadWavAL(const std::string& file)
+ALuint loadWavALFromMemory(const uint8_t* data, size_t size)
 {
-    std::string contentPath = file;
-
-    unsigned int channels;
-    unsigned int sampleRate;
-    drwav_uint64 totalPCMFrames;
-
-    float* pcmData = drwav_open_file_and_read_pcm_frames_f32(
-        contentPath.c_str(),
-        &channels,
-        &sampleRate,
-        &totalPCMFrames,
-        nullptr
-    );
-
-    if (!pcmData)
+    drwav wav;
+    if (!drwav_init_memory(&wav, data, size, nullptr))
     {
-        Debug::Error("AudioSystem")
-            << "Failed to load WAV: " << contentPath << "\n";
+        Debug::Error("AudioSystem") << "Failed to init WAV from memory\n";
         return 0;
     }
 
-    ALenum format =
-        (channels == 1) ? AL_FORMAT_MONO_FLOAT32 :
+    unsigned int channels = wav.channels;
+    unsigned int sampleRate = wav.sampleRate;
+    drwav_uint64 totalFrames = wav.totalPCMFrameCount;
+
+    std::vector<float> pcmData(static_cast<size_t>(totalFrames * channels));
+    drwav_uint64 framesRead = drwav_read_pcm_frames_f32(&wav, totalFrames, pcmData.data());
+    drwav_uninit(&wav);
+
+    if (framesRead != totalFrames)
+    {
+        Debug::Error("AudioSystem") << "Failed to read WAV frames from memory\n";
+        return 0;
+    }
+
+    ALenum format = (channels == 1) ? AL_FORMAT_MONO_FLOAT32 :
         (channels == 2) ? AL_FORMAT_STEREO_FLOAT32 :
         AL_NONE;
 
     if (format == AL_NONE)
     {
-        Debug::Error("AudioSystem")
-            << "Unsupported WAV channel count: " << channels << "\n";
-        drwav_free(pcmData, nullptr);
+        Debug::Error("AudioSystem") << "Unsupported WAV channel count: " << channels << "\n";
         return 0;
     }
 
     ALuint buffer = 0;
     alGenBuffers(1, &buffer);
-
     alBufferData(
         buffer,
         format,
-        pcmData,
-        static_cast<ALsizei>(totalPCMFrames * channels * sizeof(float)),
+        pcmData.data(),
+        static_cast<ALsizei>(totalFrames * channels * sizeof(float)),
         static_cast<ALsizei>(sampleRate)
     );
 
-    drwav_free(pcmData, nullptr);
-
-    // Optional: error check
     if (alGetError() != AL_NO_ERROR)
     {
-        Debug::Error("AudioSystem")
-            << "OpenAL error while loading: " << contentPath << "\n";
+        Debug::Error("AudioSystem") << "OpenAL error while loading WAV from memory\n";
         alDeleteBuffers(1, &buffer);
         return 0;
     }
 
+    Debug::Info("AudioSystem") << "Loaded WAV from memory into buffer: " << buffer << "\n";
     return buffer;
 }
+
+
 
 #endif

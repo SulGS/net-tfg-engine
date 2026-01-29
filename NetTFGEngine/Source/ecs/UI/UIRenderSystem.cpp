@@ -142,14 +142,14 @@ void UIRenderSystem::Update(EntityManager& entityManager, std::vector<EventEntry
         UIImage* image = entityManager.GetComponent<UIImage>(entity);
         if (image) {
             if (!image->isLoaded) {
-                auto reqBuffer = AssetManager::instance().acquire<GLuint>(image->texturePath);
+                auto reqBuffer = AssetManager::instance().loadAsset<TextureID>(image->texturePath);
                 if (!reqBuffer)
                 {
                     Debug::Error("UIRenderSystem") << "Failed to load texture: " << image->texturePath << "\n";
                 }
                 else
                 {
-                    image->textureID = *reqBuffer;
+                    image->textureID = reqBuffer->value;
                     image->isLoaded = true;
                 }
             }

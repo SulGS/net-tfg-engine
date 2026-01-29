@@ -32,10 +32,12 @@ public:
 
     void Destroy() override {
         if (isLoaded && textureID != 0) {
-			AssetManager::instance().release<GLuint>(texturePath);
+			AssetManager::instance().unloadAsset<TextureID>(texturePath);
             textureID = 0;
         }
 	}
 };
+
+
 
 #endif // UIIMAGE_HPP

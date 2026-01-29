@@ -26,13 +26,6 @@ project "GameServer"
    filter "system:windows"
       systemversion "latest"
       defines { "WINDOWS" }
-      
-      postbuildcommands 
-      {
-         -- Copy server-specific content only
-         'if exist "%{prj.location}\\Content\\Server" (xcopy /Y /E /I /Q "%{prj.location}\\Content\\Server\\*" "%{Directories.ContentDir}\\Server\\")',
-         'if exist "%{prj.location}\\Content\\Config" (xcopy /Y /E /I /Q "%{prj.location}\\Content\\Config\\*" "%{Directories.ContentDir}\\Config\\")',
-      }
 
    filter "configurations:Debug"
       defines { "DEBUG" }
