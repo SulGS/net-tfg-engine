@@ -106,12 +106,25 @@ public:
             std::vector<AssetID> toErase;
             for (auto& [key, entry] : typeMap)
             {
+                if (entry.binId == binId && entry.refCount > 0)
+                {
+                    Debug::Error("AssetManager")
+                        << "Attempted to unload bin while assets are still referenced: "
+                        << binFile << "\n";
+                    return;
+                }
+
                 if (entry.binId == binId)
                     toErase.push_back(key);
             }
             for (auto& key : toErase)
             {
-                destroyers[type](typeMap[key].handle);
+                auto itDestroyer = destroyers.find(type);
+                if (itDestroyer != destroyers.end())
+                {
+                    itDestroyer->second(typeMap[key].handle);
+                }
+
                 typeMap.erase(key);
             }
         }
@@ -159,13 +172,40 @@ public:
         auto loaderIt = loaders.find(typeid(Handle));
         if (loaderIt == loaders.end()) return std::nullopt;
 
-        Handle h = std::any_cast<Handle>(loaderIt->second(loc, bins[loc.binId]));
+        std::any anyHandle = loaderIt->second(loc, bins[loc.binId]);
+
+        if (!anyHandle.has_value())
+        {
+            Debug::Error("AssetManager") << "Loader returned empty handle for: " << key << "\n";
+            return std::nullopt;
+        }
+
+        Handle h = std::any_cast<Handle>(anyHandle);
+
+        // ---- HANDLE VALIDATION ----
+        if constexpr (std::is_same_v<Handle, AudioBuffer>)
+        {
+            if (h.value == 0)
+            {
+                Debug::Error("AssetManager") << "Invalid AudioBuffer for asset: " << key << "\n";
+                return std::nullopt;
+            }
+        }
+        else if constexpr (std::is_same_v<Handle, TextureID>)
+        {
+            if (h.value == 0)
+            {
+                Debug::Error("AssetManager") << "Invalid TextureID for asset: " << key << "\n";
+                return std::nullopt;
+            }
+        }
 
         Entry entry;
         entry.handle = h;
         entry.refCount = 1;
         entry.binId = loc.binId;
         typeMap[id] = std::move(entry);
+
 
         Debug::Info("AssetManager") << "Loaded asset: " << key << " from bin " << bins[loc.binId].name << "\n";
         return h;
@@ -218,6 +258,18 @@ public:
     void setAssetIndex(const std::unordered_map<AssetID, AssetLocation>& idx)
     {
         assetIndex = idx;
+    }
+
+    template<typename Handle>
+    void clearType()
+    {
+        auto it = assets.find(typeid(Handle));
+        if (it == assets.end()) return;
+
+        for (auto& [id, entry] : it->second) {
+            destroy<Handle>(std::any_cast<Handle>(entry.handle));
+        }
+        it->second.clear();
     }
 
 private:
@@ -279,6 +331,7 @@ private:
         return true;
     }
 
+
     struct Entry {
         std::any handle;
         size_t refCount = 0;
@@ -297,7 +350,10 @@ private:
     void destroy(Handle h)
     {
         auto it = destroyers.find(typeid(Handle));
-        assert(it != destroyers.end());
+        if (it == destroyers.end())
+            return;
+
         it->second(std::any(h));
     }
+
 };

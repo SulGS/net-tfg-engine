@@ -37,6 +37,7 @@ public:
     AudioSystem() {
         initializeOpenAL();   // opens default device (effective default)
         initMusicSource();
+		initSourcePool();
     }
 
     ~AudioSystem() {
@@ -182,6 +183,7 @@ public:
 
         // Re-init music source and other state
         initMusicSource();
+        initSourcePool();
         needsReinit = true;
 
         // Restore music if needed
@@ -333,6 +335,19 @@ public:
         auto sourceQuery = entityManager.CreateQuery<AudioSourceComponent, Transform>();
 
         for (auto [ent, audio, t] : sourceQuery) {
+
+            if (audio->initialized) {
+                ALint state;
+                alGetSourcei(audio->source, AL_SOURCE_STATE, &state);
+
+                // 🔧 AUTO-CLEANUP FINISHED ONE-SHOTS
+                if (state == AL_STOPPED && !audio->loop) {
+                    cleanupSource(*audio);
+                    activeAudioEntities.erase(ent);
+                    continue;
+                }
+            }
+
             if (!audio->initialized) {
                 initializeSource(*audio);
                 activeAudioEntities.insert(ent);
@@ -348,6 +363,7 @@ public:
                 audio->play = false;
             }
         }
+
 
 		entityManager.releaseMutex();
     }
@@ -449,7 +465,7 @@ private:
 
         // 4️⃣ Flush all ALuint assets from AssetManager
         // Optional but required if context/device will be destroyed
-        //AssetManager::instance().clear<ALuint>();
+        AssetManager::instance().clearType<AudioBuffer>();
 
         // 5️⃣ Destroy OpenAL context and device
         if (context) {
@@ -525,14 +541,15 @@ private:
 
         ac.buffer = reqBuffer->value;
 
-        alGenSources(1, &ac.source);
-        if (alGetError() != AL_NO_ERROR)
+        ac.source = acquireSource();
+        if (ac.source == 0)
         {
             AssetManager::instance().unloadAsset<AudioBuffer>(ac.filePath);
-            Debug::Error("AudioSystem")
-                << "Failed to create OpenAL source\n";
+            Debug::Warning("AudioSystem")
+                << "No free audio sources available\n";
             return;
         }
+
 
         alSourcei(ac.source, AL_BUFFER, ac.buffer);
         alSourcei(ac.source, AL_LOOPING, ac.loop ? AL_TRUE : AL_FALSE);
@@ -546,8 +563,7 @@ private:
         if (!ac.initialized)
             return;
 
-        alSourceStop(ac.source);
-        alDeleteSources(1, &ac.source);
+        releaseSource(ac.source);
 
         AssetManager::instance().unloadAsset<AudioBuffer>(ac.filePath);
 
@@ -557,10 +573,68 @@ private:
     }
 
 
+
+
     void updateSourceTransform(AudioSourceComponent& ac, const Transform& t) {
         glm::vec3 pos = t.getPosition();
         alSource3f(ac.source, AL_POSITION, pos.x, pos.y, pos.z);
     }
+
+    static constexpr int MAX_SOURCES = 32;
+
+    std::vector<ALuint> sourcePool;
+    std::vector<bool> sourceInUse;
+
+    void initSourcePool()
+    {
+        sourcePool.resize(MAX_SOURCES);
+        sourceInUse.assign(MAX_SOURCES, false);
+
+        alGenSources(MAX_SOURCES, sourcePool.data());
+
+        for (ALuint s : sourcePool)
+        {
+            alSourcef(s, AL_GAIN, 1.0f);
+            alSourcei(s, AL_LOOPING, AL_FALSE);
+        }
+
+        Debug::Info("AudioSystem")
+            << "Initialized " << MAX_SOURCES << " audio sources\n";
+    }
+
+    ALuint acquireSource()
+    {
+        for (size_t i = 0; i < sourcePool.size(); ++i)
+        {
+            if (!sourceInUse[i])
+            {
+                ALint state;
+                alGetSourcei(sourcePool[i], AL_SOURCE_STATE, &state);
+                if (state != AL_PLAYING)
+                {
+                    sourceInUse[i] = true;
+                    return sourcePool[i];
+                }
+            }
+        }
+        return 0;
+    }
+
+    void releaseSource(ALuint src)
+    {
+        for (size_t i = 0; i < sourcePool.size(); ++i)
+        {
+            if (sourcePool[i] == src)
+            {
+                alSourceStop(src);
+                alSourcei(src, AL_BUFFER, 0);
+                sourceInUse[i] = false;
+                return;
+            }
+        }
+    }
+
+
 
 };
 
