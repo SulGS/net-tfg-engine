@@ -200,9 +200,9 @@ public:
                                                 0, 31, 1
                                                                 };
 
-                    float yellow[3] = { 1.0f, 1.0f, 0.0f };
-
-                    entityManager.AddComponent<MeshComponent>(effectEntity, MeshComponent(new Mesh(CircleVerts(1), circleInds, yellow)));
+                    auto shootingMat = std::make_shared<Material>("generic.vert", "generic.frag");
+                    shootingMat->setVec3("uColor", glm::vec3(1.0f, 1.0f, 0.0f));
+                    entityManager.AddComponent<MeshComponent>(effectEntity, MeshComponent(new Mesh(CircleVerts(1), circleInds, shootingMat)));
 
                 }
 

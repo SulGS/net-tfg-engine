@@ -372,7 +372,6 @@ std::vector<float> BulletVerts() {
             }
         }
 
-        float yellow[3] = {1.0f, 1.0f, 0.0f};
         std::vector<unsigned int> bulletInds = {0,1,2,2,3,0};
 
         // Update or create bullets from state
@@ -397,9 +396,12 @@ std::vector<float> BulletVerts() {
                     Entity newBullet = world.GetEntityManager().CreateEntity();
                     Transform* t = world.GetEntityManager().AddComponent<Transform>(newBullet, Transform{});
                     t->setPosition(glm::vec3(b.posX, b.posY, 0.0f));
+
+                    auto bulletMat = std::make_shared<Material>("generic.vert", "generic.frag");
+                    bulletMat->setVec3("uColor", glm::vec3(1.0f, 1.0f, 0.0f));
                     
                     world.GetEntityManager().AddComponent<ECSBullet>(newBullet, ECSBullet{b.id, b.velX, b.velY, b.ownerId, b.lifetime});
-                    Mesh* m = new Mesh(BulletVerts(), bulletInds, yellow);
+                    Mesh* m = new Mesh(BulletVerts(), bulletInds, bulletMat);
                     world.GetEntityManager().AddComponent<MeshComponent>(newBullet, MeshComponent(m));
 
                     Entity bulletSound = world.GetEntityManager().CreateEntity();
@@ -423,8 +425,6 @@ std::vector<float> BulletVerts() {
     void InitECSRenderer(const GameStateBlob& state, OpenGLWindow* window) override {
         this->window = window;  // Store window pointer for later use
         
-        float red[3] = {1.0f, 0.0f, 0.0f};
-        float blue[3] = {0.0f, 0.0f, 1.0f};
         
         std::vector<unsigned int> triangleInds = {0, 1, 2};
         
@@ -441,19 +441,25 @@ std::vector<float> BulletVerts() {
         Transform* t1 = world.GetEntityManager().AddComponent<Transform>(player1, Transform{});
         t1->setPosition(glm::vec3(s.posX[0], s.posY[0], 0.0f));
         t1->setRotation(glm::vec3(0.0f, 0.0f, 0.0f));
+
+        auto player1Mat = std::make_shared<Material>("generic.vert", "generic.frag");
+        player1Mat->setVec3("uColor", glm::vec3(1.0f, 0.0f, 0.0f));
         
         world.GetEntityManager().AddComponent<Playable>(player1, Playable{0, MakeZeroInputBlob(), (0 == playerId ? true : false)});
         world.GetEntityManager().AddComponent<SpaceShip>(player1, SpaceShip{100,-1,0,0,true});
-        world.GetEntityManager().AddComponent<MeshComponent>(player1, MeshComponent(new Mesh(TriangleVerts(), triangleInds, red)));
+        world.GetEntityManager().AddComponent<MeshComponent>(player1, MeshComponent(new Mesh(TriangleVerts(), triangleInds, player1Mat)));
 
         Entity player2 = world.GetEntityManager().CreateEntity();
         Transform* t2 = world.GetEntityManager().AddComponent<Transform>(player2, Transform{});
         t2->setPosition(glm::vec3(s.posX[1], s.posY[1], 0.0f));
         t2->setRotation(glm::vec3(0.0f, 0.0f, 180.0f));
+
+        auto player2Mat = std::make_shared<Material>("generic.vert", "generic.frag");
+        player2Mat->setVec3("uColor", glm::vec3(0.0f, 0.0f, 1.0f));
         
         world.GetEntityManager().AddComponent<Playable>(player2, Playable{1, MakeZeroInputBlob(), (1 == playerId ? true : false)});
         world.GetEntityManager().AddComponent<SpaceShip>(player2, SpaceShip{100,-1,0,0,true});
-        world.GetEntityManager().AddComponent<MeshComponent>(player2, MeshComponent(new Mesh(TriangleVerts(), triangleInds, blue)));
+        world.GetEntityManager().AddComponent<MeshComponent>(player2, MeshComponent(new Mesh(TriangleVerts(), triangleInds, player2Mat)));
 
         Entity camera = world.GetEntityManager().CreateEntity();
         Transform* camTrans = world.GetEntityManager().AddComponent<Transform>(camera, Transform{});

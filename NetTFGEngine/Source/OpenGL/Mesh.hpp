@@ -1,37 +1,45 @@
 #ifndef MESH_HPP
 #define MESH_HPP
+
 #include <vector>
+#include <memory>
 #include "OpenGLIncludes.hpp"
+#include "Material.hpp"
 #include "ecs/ecs.hpp"
 
 class Mesh {
 public:
-    // Constructor: provide vertices (x, y, z), indices, and RGB color
+    // Constructor: geometry + a shared Material
     Mesh(const std::vector<float>& verts,
-         const std::vector<unsigned int>& inds,
-         const float color[3]);
+        const std::vector<unsigned int>& inds,
+        std::shared_ptr<Material> material);
 
     ~Mesh();
 
-    // Render the mesh
-    void render() const;
+    // Render: binds the material, then issues the draw call
+    void render(const glm::mat4& model,
+        const glm::mat4& view,
+        const glm::mat4& projection) const;
 
-    // Update vertices dynamically (expects x, y, z for each vertex)
+    // Update vertex data dynamically (expects x, y, z per vertex)
     void updateVertices(const std::vector<float>& newVertices);
 
-    // Access color (RenderSystem will set shader uniform)
-    const float* getColor() const { return meshColor; }
+    // Access the material (e.g. to set uniforms before drawing)
+    Material* getMaterial() const { return material.get(); }
 
 private:
-    std::vector<float> vertices;
+    // Geometry
+    std::vector<float>        vertices;
     std::vector<unsigned int> indices;
-    float meshColor[3];        // RGB
 
-    unsigned int VAO = 0;
-    unsigned int VBO = 0;
-    unsigned int EBO = 0;
+    // OpenGL buffer handles
+    GLuint VAO = 0;
+    GLuint VBO = 0;
+    GLuint EBO = 0;
 
-    // Initialize OpenGL buffers for 3D vertices
+    // Shared material (shader + uniforms)
+    std::shared_ptr<Material> material;
+
     void initBuffers();
 };
 

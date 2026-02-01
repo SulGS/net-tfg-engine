@@ -33,6 +33,9 @@ struct BinData {
 
 struct TextureID { GLuint value; };
 struct AudioBuffer { ALuint value; };
+struct ShaderSource {
+    std::string code;
+};
 
 class AssetManager
 {

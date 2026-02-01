@@ -249,6 +249,16 @@ private:
     NetTFG_Engine()
     {
 
+        AssetManager::instance().registerType<ShaderSource>(
+            // Loader
+            [](const uint8_t* data, size_t size) -> ShaderSource
+            {
+                return { std::string(reinterpret_cast<const char*>(data), size) };
+            },
+            // Destroyer
+            [](ShaderSource) {}
+        );
+
         AssetManager::instance().registerType<AudioBuffer>(
             // Loader
 			[](const uint8_t* data, size_t size) -> AudioBuffer
