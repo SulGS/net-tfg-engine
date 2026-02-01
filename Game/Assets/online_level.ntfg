@@ -2,3 +2,8 @@ shoot.wav
 song.wav
 generic.vert
 generic.frag
+bullet.glb
+charge.glb
+ship.glb
+generic_texture.vert
+generic_texture.frag

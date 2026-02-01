@@ -15,6 +15,12 @@
 
 #include <SOIL2/SOIL2.h>
 
+#define TINYGLTF_IMPLEMENTATION
+#define TINYGLTF_NO_STB_IMAGE_WRITE
+
+#include <tiny_gltf.h>
+
+
 class NetTFG_Engine {
 public:
     // ---- Singleton ----
@@ -248,6 +254,144 @@ public:
 private:
     NetTFG_Engine()
     {
+        AssetManager::instance().registerType<MeshBuffer>(
+            // Loader
+            [](const uint8_t* data, size_t size) -> MeshBuffer
+            {
+                MeshBuffer buffer{};
+                tinygltf::TinyGLTF loader;
+                tinygltf::Model model;
+                std::string err, warn;
+
+                if (!loader.LoadBinaryFromMemory(&model, &err, &warn, data, size, "")) {
+                    Debug::Error("GLTF") << err << "\n";
+                    return buffer;
+                }
+
+                if (!warn.empty())
+                    Debug::Warning("GLTF") << warn << "\n";
+
+                std::vector<Vertex> vertices;
+                std::vector<uint32_t> indices;
+
+                // ---- We'll pack all primitives into a single VBO/EBO ----
+                for (const auto& mesh : model.meshes) {
+                    for (const auto& prim : mesh.primitives) {
+                        // --- Extract attributes ---
+                        auto getAccessorFloat = [&](const std::string& name) -> const float* {
+                            auto it = prim.attributes.find(name);
+                            if (it == prim.attributes.end()) return nullptr;
+                            const auto& acc = model.accessors[it->second];
+                            const auto& view = model.bufferViews[acc.bufferView];
+                            const auto& buf = model.buffers[view.buffer];
+                            return reinterpret_cast<const float*>(buf.data.data() + view.byteOffset + acc.byteOffset);
+                            };
+
+                        const float* pos = getAccessorFloat("POSITION");
+                        const float* norm = getAccessorFloat("NORMAL");
+                        const float* uv = getAccessorFloat("TEXCOORD_0");
+
+                        if (!pos) continue; // must have positions
+
+                        size_t vertOffset = vertices.size();
+                        const auto& posAcc = model.accessors[prim.attributes.at("POSITION")];
+                        vertices.resize(vertOffset + posAcc.count);
+
+                        for (size_t i = 0; i < posAcc.count; ++i) {
+                            Vertex& v = vertices[vertOffset + i];
+                            v.position = glm::vec3(pos[i * 3 + 0], pos[i * 3 + 1], pos[i * 3 + 2]);
+                            v.normal = norm ? glm::vec3(norm[i * 3 + 0], norm[i * 3 + 1], norm[i * 3 + 2])
+                                : glm::vec3(0.0f, 1.0f, 0.0f);
+                            v.uv = uv ? glm::vec2(uv[i * 2 + 0], uv[i * 2 + 1])
+                                : glm::vec2(0.0f, 0.0f);
+                        }
+
+                        // --- Extract indices ---
+                        std::vector<uint32_t> primIndices;
+                        if (prim.indices >= 0) {
+                            const auto& idxAcc = model.accessors[prim.indices];
+                            const auto& idxView = model.bufferViews[idxAcc.bufferView];
+                            const auto& idxBuf = model.buffers[idxView.buffer];
+
+                            primIndices.resize(idxAcc.count);
+                            for (size_t i = 0; i < idxAcc.count; ++i) {
+                                if (idxAcc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT)
+                                    primIndices[i] = static_cast<uint32_t>(reinterpret_cast<const uint16_t*>(idxBuf.data.data() + idxView.byteOffset + idxAcc.byteOffset)[i]);
+                                else
+                                    primIndices[i] = reinterpret_cast<const uint32_t*>(idxBuf.data.data() + idxView.byteOffset + idxAcc.byteOffset)[i];
+                                primIndices[i] += static_cast<uint32_t>(vertOffset); // adjust for global VBO
+                            }
+
+                            indices.insert(indices.end(), primIndices.begin(), primIndices.end());
+                        }
+
+                        // --- Load texture for this primitive ---
+                        GLuint texID = 0;
+                        if (prim.material >= 0 && prim.material < model.materials.size()) {
+                            const auto& mat = model.materials[prim.material];
+                            if (mat.pbrMetallicRoughness.baseColorTexture.index >= 0) {
+                                int texIdx = mat.pbrMetallicRoughness.baseColorTexture.index;
+                                if (texIdx >= 0 && texIdx < model.textures.size()) {
+                                    const auto& tex = model.textures[texIdx];
+                                    const auto& img = model.images[tex.source];
+
+                                    glGenTextures(1, &texID);
+                                    glBindTexture(GL_TEXTURE_2D, texID);
+                                    GLint fmt = img.component == 3 ? GL_RGB : GL_RGBA;
+                                    glTexImage2D(GL_TEXTURE_2D, 0, fmt, static_cast<GLsizei>(img.width),
+                                        static_cast<GLsizei>(img.height), 0, fmt, GL_UNSIGNED_BYTE, img.image.data());
+                                    glGenerateMipmap(GL_TEXTURE_2D);
+                                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+                                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+                                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+                                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                                    glBindTexture(GL_TEXTURE_2D, 0);
+                                }
+                            }
+                        }
+
+                        // --- Save submesh range ---
+                        SubMeshRange smr;
+                        smr.indexOffset = static_cast<uint32_t>(indices.size() - primIndices.size());
+                        smr.indexCount = static_cast<uint32_t>(primIndices.size());
+                        smr.diffuseTex = texID;
+                        buffer.subMeshes.push_back(smr);
+                    }
+                }
+
+                // --- Upload to GPU ---
+                glGenVertexArrays(1, &buffer.VAO);
+                glGenBuffers(1, &buffer.VBO);
+                glGenBuffers(1, &buffer.EBO);
+
+                glBindVertexArray(buffer.VAO);
+
+                glBindBuffer(GL_ARRAY_BUFFER, buffer.VBO);
+                glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(Vertex), vertices.data(), GL_STATIC_DRAW);
+
+                glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, buffer.EBO);
+                glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(uint32_t), indices.data(), GL_STATIC_DRAW);
+
+                glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, position));
+                glEnableVertexAttribArray(0);
+                glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, normal));
+                glEnableVertexAttribArray(1);
+                glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, uv));
+                glEnableVertexAttribArray(2);
+
+                glBindVertexArray(0);
+
+                return buffer;
+            },
+            // Destroyer
+            [](MeshBuffer buffer) {
+                for (auto& sm : buffer.subMeshes)
+                    if (sm.diffuseTex) glDeleteTextures(1, &sm.diffuseTex);
+                if (buffer.EBO) glDeleteBuffers(1, &buffer.EBO);
+                if (buffer.VBO) glDeleteBuffers(1, &buffer.VBO);
+                if (buffer.VAO) glDeleteVertexArrays(1, &buffer.VAO);
+            });
+
 
         AssetManager::instance().registerType<ShaderSource>(
             // Loader

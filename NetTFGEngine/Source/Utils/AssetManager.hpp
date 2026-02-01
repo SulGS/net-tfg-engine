@@ -37,6 +37,28 @@ struct ShaderSource {
     std::string code;
 };
 
+
+struct Vertex {
+    glm::vec3 position;
+    glm::vec3 normal;
+    glm::vec2 uv;
+};
+
+struct SubMeshRange {
+    uint32_t indexOffset;   // starting index in EBO
+    uint32_t indexCount;    // number of indices
+    GLuint diffuseTex;      // optional texture per primitive
+};
+
+struct MeshBuffer {
+    GLuint VAO = 0;
+    GLuint VBO = 0;
+    GLuint EBO = 0;
+    std::vector<SubMeshRange> subMeshes; // multi-primitive support
+};
+
+
+
 class AssetManager
 {
 public:

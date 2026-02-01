@@ -7,6 +7,7 @@
     "glm",
     "openal-soft",
     "opengl",
-    "soil2"
+    "soil2",
+    "tinygltf"
   ]
 }
