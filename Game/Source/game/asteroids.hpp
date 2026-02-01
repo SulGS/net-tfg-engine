@@ -1,4 +1,4 @@
-#ifndef ASTEROIDS
+ï»¿#ifndef ASTEROIDS
 #define ASTEROIDS
 
 #include "OpenGL/OpenGLIncludes.hpp"
@@ -38,44 +38,61 @@ private:
 public:
 
     void printGameState(const AsteroidShooterGameState& state) const {
-        printf("=== Asteroid Shooter Game State ===\n\n");
+        Debug::Info("GameState") << "=== Asteroid Shooter Game State ===";
 
-        // Print player positions and rotations
-        printf("Players:\n");
+        // Players
+        Debug::Info("GameState") << "Players:";
         for (int i = 0; i < 2; i++) {
-            printf("  Player %d:\n", i);
-            printf("    Position: (%.2f, %.2f)\n", state.posX[i], state.posY[i]);
-            printf("    Rotation: %f degrees\n", state.rot[i]);
-            printf("    Health: %d\n", state.health[i]);
-            printf("    Remaining shoot frames: %d\n", state.remaingShootFrames[i]);
-            printf("    Shoot Cooldown: %d\n", state.shootCooldown[i]);
-            printf("    Death Cooldown: %d\n", state.deathCooldown[i]);
+            Debug::Info("GameState") << "  Player " << i << ":";
+            Debug::Info("GameState") << "    Position: ("
+                << state.posX[i] << ", "
+                << state.posY[i] << ")";
+            Debug::Info("GameState") << "    Rotation: "
+                << state.rot[i] << " degrees";
+            Debug::Info("GameState") << "    Health: "
+                << state.health[i];
+            Debug::Info("GameState") << "    Alive: "
+                << (state.alive[i] ? "true" : "false");
+            Debug::Info("GameState") << "    Remaining shoot frames: "
+                << state.remaingShootFrames[i];
+            Debug::Info("GameState") << "    Shoot Cooldown: "
+                << state.shootCooldown[i];
+            Debug::Info("GameState") << "    Death Cooldown: "
+                << state.deathCooldown[i];
         }
 
-        // Print bullet information
-        printf("\nBullets:\n");
-        printf("  Active Bullet Count: %d\n", state.bulletCount);
+        // Bullets
+        Debug::Info("GameState") << "Bullets:";
+        Debug::Info("GameState") << "  Active Bullet Count: "
+            << state.bulletCount;
 
         if (state.bulletCount > 0) {
-            printf("  Active Bullets:\n");
+            Debug::Info("GameState") << "  Active Bullets:";
             for (int i = 0; i < MAX_BULLETS; i++) {
-                if (state.bullets[i].active) {
-                    printf("    Bullet #%d:\n", state.bullets[i].id);
-                    printf("      Position: (%.2f, %.2f)\n",
-                        state.bullets[i].posX, state.bullets[i].posY);
-                    printf("      Velocity: (%.2f, %.2f)\n",
-                        state.bullets[i].velX, state.bullets[i].velY);
-                    printf("      Owner: Player %d\n", state.bullets[i].ownerId);
-                    printf("      Lifetime: %d frames\n", state.bullets[i].lifetime);
-                }
+                const Bullet& b = state.bullets[i];
+                if (!b.active)
+                    continue;
+
+                Debug::Info("GameState") << "    Bullet #" << b.id;
+                Debug::Info("GameState") << "      Position: ("
+                    << b.posX << ", "
+                    << b.posY << ")";
+                Debug::Info("GameState") << "      Velocity: ("
+                    << b.velX << ", "
+                    << b.velY << ")";
+                Debug::Info("GameState") << "      Owner: Player "
+                    << b.ownerId;
+                Debug::Info("GameState") << "      Lifetime: "
+                    << b.lifetime << " frames";
             }
         }
         else {
-            printf("  No active bullets\n");
+            Debug::Info("GameState") << "  No active bullets";
         }
 
-        printf("\n===================================\n");
+        Debug::Info("GameState") << "===================================";
     }
+
 
     std::unique_ptr<IGameLogic> Clone() const override {
         return std::make_unique<AsteroidShooterGame>();
@@ -304,96 +321,255 @@ public:
 class AsteroidShooterGameRenderer : public IECSGameRenderer {
 public:
 
+    void printGameState(const AsteroidShooterGameState& state) const {
+        Debug::Info("GameState") << "=== Asteroid Shooter Game State ===";
 
+        // Players
+        Debug::Info("GameState") << "Players:";
+        for (int i = 0; i < 2; i++) {
+            Debug::Info("GameState") << "  Player " << i << ":";
+            Debug::Info("GameState") << "    Position: ("
+                << state.posX[i] << ", "
+                << state.posY[i] << ")";
+            Debug::Info("GameState") << "    Rotation: "
+                << state.rot[i] << " degrees";
+            Debug::Info("GameState") << "    Health: "
+                << state.health[i];
+            Debug::Info("GameState") << "    Alive: "
+                << (state.alive[i] ? "true" : "false");
+            Debug::Info("GameState") << "    Remaining shoot frames: "
+                << state.remaingShootFrames[i];
+            Debug::Info("GameState") << "    Shoot Cooldown: "
+                << state.shootCooldown[i];
+            Debug::Info("GameState") << "    Death Cooldown: "
+                << state.deathCooldown[i];
+        }
 
-    void GameState_To_ECSWorld(const GameStateBlob& state) {
-        AsteroidShooterGameState s = *reinterpret_cast<const AsteroidShooterGameState*>(state.data);
+        // Bullets
+        Debug::Info("GameState") << "Bullets:";
+        Debug::Info("GameState") << "  Active Bullet Count: "
+            << state.bulletCount;
 
-        auto query = world.GetEntityManager().CreateQuery<Transform, Playable, SpaceShip,MeshComponent>();
-        for (auto [entity, transform, play, ship, mesh] : query) {
+        if (state.bulletCount > 0) {
+            Debug::Info("GameState") << "  Active Bullets:";
+            for (int i = 0; i < MAX_BULLETS; i++) {
+                const Bullet& b = state.bullets[i];
+                if (!b.active)
+                    continue;
+
+                Debug::Info("GameState") << "    Bullet #" << b.id;
+                Debug::Info("GameState") << "      Position: ("
+                    << b.posX << ", "
+                    << b.posY << ")";
+                Debug::Info("GameState") << "      Velocity: ("
+                    << b.velX << ", "
+                    << b.velY << ")";
+                Debug::Info("GameState") << "      Owner: Player "
+                    << b.ownerId;
+                Debug::Info("GameState") << "      Lifetime: "
+                    << b.lifetime << " frames";
+            }
+        }
+        else {
+            Debug::Info("GameState") << "  No active bullets";
+        }
+
+        Debug::Info("GameState") << "===================================";
+    }
+    
+    void GameState_To_ECSWorld(const GameStateBlob& state)
+    {
+        AsteroidShooterGameState s =
+            *reinterpret_cast<const AsteroidShooterGameState*>(state.data);
+
+        EntityManager& em = world.GetEntityManager();
+
+        // ============================================================
+        // 1. SNAPSHOT CLEANUP (derived / visual-only state)
+        // ============================================================
+
+        // Remove all charging shoot effects (purely visual, snapshot-derived)
+        {
+            auto q = em.CreateQuery<ChargingShootEffect>();
+            for (auto [e, effect] : q)
+            {
+                em.DestroyEntity(e);
+            }
+        }
+
+        // Optional: reset UI state (prevents death/health UI layout conflicts)
+        {
+            auto q = em.CreateQuery<UIElement, UIText>();
+            for (auto [e, element, text] : q)
+            {
+                text->text.clear();
+                element->anchor = UIAnchor::TOP_LEFT;
+                element->pivot = glm::vec2(0.0f);
+                element->position = glm::vec2(0.0f);
+            }
+        }
+
+        // ============================================================
+        // 2. PLAYER STATE SYNC (authoritative)
+        // ============================================================
+
+        auto playerQuery =
+            em.CreateQuery<Transform, Playable, SpaceShip, MeshComponent>();
+
+        for (auto [entity, transform, play, ship, mesh] : playerQuery)
+        {
             int p = play->playerId;
-            transform->setPosition(glm::vec3(s.posX[p], s.posY[p], 0.0f));
-            transform->setRotation(glm::vec3(0.0f, 0.0f, s.rot[p]+90.0f));
+
+            transform->setPosition(
+                glm::vec3(s.posX[p], s.posY[p], 0.0f)
+            );
+
+            transform->setRotation(
+                glm::vec3(0.0f, 0.0f, s.rot[p] + 90.0f)
+            );
 
             ship->shootCooldown = s.shootCooldown[p];
             ship->health = s.health[p];
             ship->remainingShootFrames = s.remaingShootFrames[p];
-            ship->deathCooldown = s.deathCooldown[p];
-			ship->isAlive = s.alive[p];
+
+            // Clamp defensively at snapshot boundary
+            ship->deathCooldown = std::max(0, s.deathCooldown[p]);
+
+            // --- ALIVE EDGE DETECTION ---
+            bool wasAlive = ship->isAlive;
+            ship->isAlive = s.alive[p];
+
+            if (!wasAlive && ship->isAlive)
+            {
+                // Respawn: restore visuals + reset derived state
+                mesh->enabled = true;
+                ship->remainingShootFrames = -1;
+            }
+            else if (wasAlive && !ship->isAlive)
+            {
+                // Death
+                mesh->enabled = false;
+            }
         }
 
-        // First, collect all existing bullet IDs in ECS
+        // ============================================================
+        // 3. BULLET RECONCILIATION (authoritative)
+        // ============================================================
+
+        // Collect active bullet IDs from ECS
         std::set<int> ecsActiveBulletIds;
-        auto bulletQuery = world.GetEntityManager().CreateQuery<ECSBullet>();
-        for (auto [entity, ecsb] : bulletQuery) {
-            ecsActiveBulletIds.insert(ecsb->id);
+        {
+            auto q = em.CreateQuery<ECSBullet>();
+            for (auto [e, ecsb] : q)
+            {
+                ecsActiveBulletIds.insert(ecsb->id);
+            }
         }
 
-        // Create a set of active bullet IDs from state
+        // Collect active bullet IDs from snapshot
         std::set<int> stateActiveBulletIds;
-        for (int i = 0; i < MAX_BULLETS; i++) {
-            if (s.bullets[i].active) {
+        for (int i = 0; i < MAX_BULLETS; i++)
+        {
+            if (s.bullets[i].active)
+            {
                 stateActiveBulletIds.insert(s.bullets[i].id);
             }
         }
 
-        // Remove bullets that are in ECS but not in state
-        auto bulletQuery2 = world.GetEntityManager().CreateQuery<ECSBullet,MeshComponent>();
-        for (auto [entity, ecsb, mesh] : bulletQuery2) {
-            if (stateActiveBulletIds.find(ecsb->id) == stateActiveBulletIds.end()) {
-                //window->removeMesh(mesh->mesh);
-                world.GetEntityManager().DestroyEntity(entity);
+        // Remove ECS bullets not present in snapshot
+        {
+            auto q = em.CreateQuery<ECSBullet, MeshComponent>();
+            for (auto [e, ecsb, mesh] : q)
+            {
+                if (stateActiveBulletIds.find(ecsb->id) ==
+                    stateActiveBulletIds.end())
+                {
+                    em.DestroyEntity(e);
+                }
             }
         }
 
-
-        // Update or create bullets from state
-        for (int i = 0; i < MAX_BULLETS; i++) {
+        // Update or create bullets from snapshot
+        for (int i = 0; i < MAX_BULLETS; i++)
+        {
             const Bullet& b = s.bullets[i];
-            if (b.active) {
-                bool found = false;
-                auto bulletQuery3 = world.GetEntityManager().CreateQuery<Transform, ECSBullet, MeshComponent>();
-                for (auto [entity, transform, ecsb, mesh] : bulletQuery3) {
-                    if (ecsb->id == b.id) {
-                        transform->setPosition(glm::vec3(b.posX, b.posY, 0.0f));
-                        
-                        ecsb->velX = b.velX;
-                        ecsb->velY = b.velY;
-                        ecsb->ownerId = b.ownerId;
-                        ecsb->lifetime = b.lifetime;
-                        found = true;
-                        break;
-                    }
+            if (!b.active)
+                continue;
+
+            bool found = false;
+
+            auto q = em.CreateQuery<Transform, ECSBullet, MeshComponent>();
+            for (auto [e, transform, ecsb, mesh] : q)
+            {
+                if (ecsb->id == b.id)
+                {
+                    transform->setPosition(
+                        glm::vec3(b.posX, b.posY, 0.0f)
+                    );
+
+                    ecsb->velX = b.velX;
+                    ecsb->velY = b.velY;
+                    ecsb->ownerId = b.ownerId;
+                    ecsb->lifetime = b.lifetime;
+
+                    found = true;
+                    break;
                 }
-                if (!found) {
-                    Entity newBullet = world.GetEntityManager().CreateEntity();
-                    Transform* t = world.GetEntityManager().AddComponent<Transform>(newBullet, Transform{});
-                    t->setPosition(glm::vec3(b.posX, b.posY, 0.0f));
+            }
 
-                    auto bulletMat = std::make_shared<Material>("generic.vert", "generic.frag");
-                    bulletMat->setVec3("uColor", glm::vec3(1.0f, 1.0f, 0.0f));
-                    
-                    world.GetEntityManager().AddComponent<ECSBullet>(newBullet, ECSBullet{b.id, b.velX, b.velY, b.ownerId, b.lifetime});
-                    Mesh* m = new Mesh("bullet.glb", bulletMat);
-                    world.GetEntityManager().AddComponent<MeshComponent>(newBullet, MeshComponent(m));
+            if (!found)
+            {
+                // Create new bullet entity
+                Entity newBullet = em.CreateEntity();
 
-                    Entity bulletSound = world.GetEntityManager().CreateEntity();
+                Transform* t =
+                    em.AddComponent<Transform>(newBullet, Transform{});
 
-                    t = world.GetEntityManager().AddComponent<Transform>(bulletSound, Transform{});
-                    t->setPosition(glm::vec3(b.posX, b.posY, 0.0f));
+                t->setPosition(
+                    glm::vec3(b.posX, b.posY, 0.0f)
+                );
 
-                    DestroyTimer* dt = world.GetEntityManager().AddComponent<DestroyTimer>(bulletSound, DestroyTimer{});
-                    dt->framesRemaining = RENDER_TICKS_PER_SECOND * 3;
+                auto bulletMat =
+                    std::make_shared<Material>("generic.vert", "generic.frag");
 
-                    AudioSourceComponent* audio = world.GetEntityManager().AddComponent<AudioSourceComponent>(bulletSound, AudioSourceComponent("shoot.wav", AudioChannel::SFX, false));
+                bulletMat->setVec3("uColor", glm::vec3(1.0f, 1.0f, 0.0f));
 
-                    audio->play = true;
-                }
+                em.AddComponent<ECSBullet>(
+                    newBullet,
+                    ECSBullet{ b.id, b.velX, b.velY, b.ownerId, b.lifetime }
+                );
+
+                Mesh* m = new Mesh("bullet.glb", bulletMat);
+                em.AddComponent<MeshComponent>(newBullet, MeshComponent(m));
+
+                // Spawn bullet sound (non-authoritative, time-limited)
+                Entity bulletSound = em.CreateEntity();
+
+                Transform* st =
+                    em.AddComponent<Transform>(bulletSound, Transform{});
+
+                st->setPosition(
+                    glm::vec3(b.posX, b.posY, 0.0f)
+                );
+
+                DestroyTimer* dt =
+                    em.AddComponent<DestroyTimer>(bulletSound, DestroyTimer{});
+
+                dt->framesRemaining = RENDER_TICKS_PER_SECOND * 3;
+
+                AudioSourceComponent* audio =
+                    em.AddComponent<AudioSourceComponent>(
+                        bulletSound,
+                        AudioSourceComponent("shoot.wav",
+                            AudioChannel::SFX,
+                            false)
+                    );
+
+                audio->play = true;
             }
         }
     }
 
-    
 
     void InitECSRenderer(const GameStateBlob& state, OpenGLWindow* window) override {
         this->window = window;  // Store window pointer for later use
@@ -491,10 +667,10 @@ public:
             {
                 rend.posX[i] = prevLocal.posX[i] + (currLocal.posX[i] - prevLocal.posX[i]) * localInterpolation;
                 rend.posY[i] = prevLocal.posY[i] + (currLocal.posY[i] - prevLocal.posY[i]) * localInterpolation;
-                // Rotación: interpola linealmente (puedes mejorar con shortest path si lo necesitas)
+                // RotaciÃ³n: interpola linealmente (puedes mejorar con shortest path si lo necesitas)
                 float delta = currLocal.rot[i] - prevLocal.rot[i];
 
-                // Normaliza el delta al rango [-180, 180] para tomar el camino más corto
+                // Normaliza el delta al rango [-180, 180] para tomar el camino mÃ¡s corto
                 while (delta > 180.0f) delta -= 360.0f;
                 while (delta < -180.0f) delta += 360.0f;
 
@@ -506,10 +682,10 @@ public:
             {
                 rend.posX[i] = prevServer.posX[i] + (currServer.posX[i] - prevServer.posX[i]) * serverInterpolation;
                 rend.posY[i] = prevServer.posY[i] + (currServer.posY[i] - prevServer.posY[i]) * serverInterpolation;
-                // Rotación: interpola linealmente, corrigiendo el camino más corto
+                // RotaciÃ³n: interpola linealmente, corrigiendo el camino mÃ¡s corto
                 float delta = currServer.rot[i] - prevServer.rot[i];
 
-                // Normaliza el delta al rango [-180, 180] para tomar el camino más corto
+                // Normaliza el delta al rango [-180, 180] para tomar el camino mÃ¡s corto
                 while (delta > 180.0f) delta -= 360.0f;
                 while (delta < -180.0f) delta += 360.0f;
 
@@ -550,7 +726,7 @@ public:
                 }
                 else
                 {
-                    // Si solo está activa en el estado actual del servidor, copia el actual del servidor
+                    // Si solo estÃ¡ activa en el estado actual del servidor, copia el actual del servidor
                     rendBullet = currServerBullet;
                 }
 			}
