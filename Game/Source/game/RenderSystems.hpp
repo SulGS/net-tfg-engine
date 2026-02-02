@@ -19,12 +19,10 @@ public:
         float deltaTime
     ) override
     {
-        // Query cameras with their transforms
         auto camQuery = entityManager.CreateQuery<Camera, Transform>();
         if (camQuery.Count() == 0)
-            return; // No camera found
+            return;
 
-        // Find the local player position (if any)
         glm::vec3 localPos(0.0f);
         bool foundLocal = false;
 
@@ -50,36 +48,27 @@ public:
             }
         }
 
-        // Update each camera to follow the local player smoothly
-        const float followSpeed = 8.0f; // higher = snappier, lower = smoother
+        if (!foundLocal)
+            return;
 
         for (auto [camEntity, cam, camTrans] : camQuery)
         {
-            if (!foundLocal)
-                break; // nothing to follow
-
-            // Desired camera position preserves Z but matches player's X/Y
-            glm::vec3 desiredPos(
+            glm::vec3 newCamPos(
                 localPos.x,
                 localPos.y - 27.0f,
                 camTrans->getPosition().z
             );
 
-            // Let Transform perform smoothing
-            camTrans->SmoothPositionToward(desiredPos, deltaTime, followSpeed);
+            // Hard snap position
+            camTrans->setPosition(newCamPos);
 
-            // Smooth camera target toward the player
-            glm::vec3 currentTarget = cam->getTarget();
-            float t = 1.0f - std::exp(-followSpeed * deltaTime);
-
-            glm::vec3 newTarget =
-                currentTarget + (localPos - currentTarget) * t;
-
-            cam->setTarget(newTarget);
+            // Hard snap target
+            cam->setTarget(localPos);
             cam->markViewDirty();
         }
     }
 };
+
 
 class OnDeathRenderSystem : public ISystem
 {
