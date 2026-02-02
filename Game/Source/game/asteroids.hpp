@@ -37,61 +37,63 @@ private:
     int debugTicks = 0;
 public:
 
-    void printGameState(const AsteroidShooterGameState& state) const {
-        Debug::Info("GameState") << "=== Asteroid Shooter Game State ===";
+    void printGameState(const AsteroidShooterGameState& state) const
+    {
+        Debug::Info("GameState") << "=== Asteroid Shooter Game State ===\n";
 
         // Players
-        Debug::Info("GameState") << "Players:";
+        Debug::Info("GameState") << "Players:\n";
         for (int i = 0; i < 2; i++) {
-            Debug::Info("GameState") << "  Player " << i << ":";
+            Debug::Info("GameState") << "  Player " << i << ":\n";
             Debug::Info("GameState") << "    Position: ("
                 << state.posX[i] << ", "
-                << state.posY[i] << ")";
+                << state.posY[i] << ")\n";
             Debug::Info("GameState") << "    Rotation: "
-                << state.rot[i] << " degrees";
+                << state.rot[i] << " degrees\n";
             Debug::Info("GameState") << "    Health: "
-                << state.health[i];
+                << state.health[i] << "\n";
             Debug::Info("GameState") << "    Alive: "
-                << (state.alive[i] ? "true" : "false");
+                << (state.alive[i] ? "true" : "false") << "\n";
             Debug::Info("GameState") << "    Remaining shoot frames: "
-                << state.remaingShootFrames[i];
+                << state.remaingShootFrames[i] << "\n";
             Debug::Info("GameState") << "    Shoot Cooldown: "
-                << state.shootCooldown[i];
+                << state.shootCooldown[i] << "\n";
             Debug::Info("GameState") << "    Death Cooldown: "
-                << state.deathCooldown[i];
+                << state.deathCooldown[i] << "\n";
         }
 
         // Bullets
-        Debug::Info("GameState") << "Bullets:";
+        Debug::Info("GameState") << "Bullets:\n";
         Debug::Info("GameState") << "  Active Bullet Count: "
-            << state.bulletCount;
+            << state.bulletCount << "\n";
 
         if (state.bulletCount > 0) {
-            Debug::Info("GameState") << "  Active Bullets:";
+            Debug::Info("GameState") << "  Active Bullets:\n";
             for (int i = 0; i < MAX_BULLETS; i++) {
                 const Bullet& b = state.bullets[i];
                 if (!b.active)
                     continue;
 
-                Debug::Info("GameState") << "    Bullet #" << b.id;
+                Debug::Info("GameState") << "    Bullet #" << b.id << "\n";
                 Debug::Info("GameState") << "      Position: ("
                     << b.posX << ", "
-                    << b.posY << ")";
+                    << b.posY << ")\n";
                 Debug::Info("GameState") << "      Velocity: ("
                     << b.velX << ", "
-                    << b.velY << ")";
+                    << b.velY << ")\n";
                 Debug::Info("GameState") << "      Owner: Player "
-                    << b.ownerId;
+                    << b.ownerId << "\n";
                 Debug::Info("GameState") << "      Lifetime: "
-                    << b.lifetime << " frames";
+                    << b.lifetime << " frames\n";
             }
         }
         else {
-            Debug::Info("GameState") << "  No active bullets";
+            Debug::Info("GameState") << "  No active bullets\n";
         }
 
-        Debug::Info("GameState") << "===================================";
+        Debug::Info("GameState") << "===================================\n";
     }
+
 
 
     std::unique_ptr<IGameLogic> Clone() const override {
@@ -216,6 +218,11 @@ public:
         }
 
 		state.len = sizeof(AsteroidShooterGameState);
+
+        //if (Input::KeyPressed(Input::CharToKeycode('p')))
+        //{
+		//	printGameState(s);
+        //}
     }
 
     bool CompareStates(const GameStateBlob& a, const GameStateBlob& b) const override {
@@ -226,8 +233,8 @@ public:
         AsteroidShooterGameState* s = reinterpret_cast<AsteroidShooterGameState*>(state.data);
         
         // Initialize players
-        s->posX[0] = -50; s->posY[0] = -50;
-        s->posX[1] =  50; s->posY[1] =  50;
+        s->posX[0] = -10; s->posY[0] = -10;
+        s->posX[1] =  10; s->posY[1] =  10;
         s->rot[0] = 0; s->rot[1] = 180;
         
         // Initialize bullets (all inactive)
@@ -321,60 +328,61 @@ public:
 class AsteroidShooterGameRenderer : public IECSGameRenderer {
 public:
 
-    void printGameState(const AsteroidShooterGameState& state) const {
-        Debug::Info("GameState") << "=== Asteroid Shooter Game State ===";
+    void printGameState(const AsteroidShooterGameState& state) const
+    {
+        Debug::Info("GameState") << "=== Asteroid Shooter Game State ===\n";
 
         // Players
-        Debug::Info("GameState") << "Players:";
+        Debug::Info("GameState") << "Players:\n";
         for (int i = 0; i < 2; i++) {
-            Debug::Info("GameState") << "  Player " << i << ":";
+            Debug::Info("GameState") << "  Player " << i << ":\n";
             Debug::Info("GameState") << "    Position: ("
                 << state.posX[i] << ", "
-                << state.posY[i] << ")";
+                << state.posY[i] << ")\n";
             Debug::Info("GameState") << "    Rotation: "
-                << state.rot[i] << " degrees";
+                << state.rot[i] << " degrees\n";
             Debug::Info("GameState") << "    Health: "
-                << state.health[i];
+                << state.health[i] << "\n";
             Debug::Info("GameState") << "    Alive: "
-                << (state.alive[i] ? "true" : "false");
+                << (state.alive[i] ? "true" : "false") << "\n";
             Debug::Info("GameState") << "    Remaining shoot frames: "
-                << state.remaingShootFrames[i];
+                << state.remaingShootFrames[i] << "\n";
             Debug::Info("GameState") << "    Shoot Cooldown: "
-                << state.shootCooldown[i];
+                << state.shootCooldown[i] << "\n";
             Debug::Info("GameState") << "    Death Cooldown: "
-                << state.deathCooldown[i];
+                << state.deathCooldown[i] << "\n";
         }
 
         // Bullets
-        Debug::Info("GameState") << "Bullets:";
+        Debug::Info("GameState") << "Bullets:\n";
         Debug::Info("GameState") << "  Active Bullet Count: "
-            << state.bulletCount;
+            << state.bulletCount << "\n";
 
         if (state.bulletCount > 0) {
-            Debug::Info("GameState") << "  Active Bullets:";
+            Debug::Info("GameState") << "  Active Bullets:\n";
             for (int i = 0; i < MAX_BULLETS; i++) {
                 const Bullet& b = state.bullets[i];
                 if (!b.active)
                     continue;
 
-                Debug::Info("GameState") << "    Bullet #" << b.id;
+                Debug::Info("GameState") << "    Bullet #" << b.id << "\n";
                 Debug::Info("GameState") << "      Position: ("
                     << b.posX << ", "
-                    << b.posY << ")";
+                    << b.posY << ")\n";
                 Debug::Info("GameState") << "      Velocity: ("
                     << b.velX << ", "
-                    << b.velY << ")";
+                    << b.velY << ")\n";
                 Debug::Info("GameState") << "      Owner: Player "
-                    << b.ownerId;
+                    << b.ownerId << "\n";
                 Debug::Info("GameState") << "      Lifetime: "
-                    << b.lifetime << " frames";
+                    << b.lifetime << " frames\n";
             }
         }
         else {
-            Debug::Info("GameState") << "  No active bullets";
+            Debug::Info("GameState") << "  No active bullets\n";
         }
 
-        Debug::Info("GameState") << "===================================";
+        Debug::Info("GameState") << "===================================\n";
     }
     
     void GameState_To_ECSWorld(const GameStateBlob& state)
@@ -618,7 +626,7 @@ public:
         camTrans->setPosition(glm::vec3(0.0f, 0.0f, 18.0f));
         Camera* camSettings = world.GetEntityManager().AddComponent<Camera>(camera, Camera{});
             
-		camSettings->setPerspective(45.0f, window->getAspectRatio(), 0.1f, 100.0f);
+		camSettings->setPerspective(45.0f, window->getAspectRatio(), 0.001f, 1000.0f);
         camSettings->setTarget(glm::vec3(0.0f, 0.0f, 0.0f));
         camSettings->setUp(glm::vec3(0.0f, 1.0f, 0.0f));
 
@@ -637,6 +645,16 @@ public:
         text->fontSize = 32.0f;
         text->SetColor(1.0f, 1.0f, 1.0f, 1.0f);  // White
         text->SetFont("default");
+
+        Entity escenario = world.GetEntityManager().CreateEntity();
+        Transform* tesc = world.GetEntityManager().AddComponent<Transform>(escenario, Transform{});
+        tesc->setPosition(glm::vec3(0.0f, 0.0f, -2.0f));
+        tesc->setRotation(glm::vec3(90.0f, 0.0f, 0.0f));
+        tesc->setScale(glm::vec3(6.0f, 6.0f, 6.0f));
+
+        auto escenarioMat = std::make_shared<Material>("generic_texture.vert", "generic_texture.frag");
+        //player1Mat->setVec3("uColor", glm::vec3(1.0f, 0.0f, 0.0f));
+        world.GetEntityManager().AddComponent<MeshComponent>(escenario, MeshComponent(new Mesh("escenario.glb", escenarioMat)));
 
         // Add camera follow system so camera follows local player
         world.AddSystem(std::make_unique<CameraFollowSystem>());
@@ -663,42 +681,38 @@ public:
 
         // Interpola jugadores
         for (int i = 0; i < 2; ++i) {
-            if (playerId == i) 
+            if (playerId == i)
             {
                 rend.posX[i] = prevLocal.posX[i] + (currLocal.posX[i] - prevLocal.posX[i]) * localInterpolation;
                 rend.posY[i] = prevLocal.posY[i] + (currLocal.posY[i] - prevLocal.posY[i]) * localInterpolation;
-                // Rotación: interpola linealmente (puedes mejorar con shortest path si lo necesitas)
                 float delta = currLocal.rot[i] - prevLocal.rot[i];
-
-                // Normaliza el delta al rango [-180, 180] para tomar el camino más corto
                 while (delta > 180.0f) delta -= 360.0f;
                 while (delta < -180.0f) delta += 360.0f;
-
                 rend.rot[i] = prevLocal.rot[i] + delta * localInterpolation;
-
                 rend.remaingShootFrames[i] = currLocal.remaingShootFrames[i];
+
+                // USE LOCAL STATE FOR LOCAL PLAYER
+                rend.alive[i] = currLocal.alive[i];
             }
-            else 
+            else
             {
                 rend.posX[i] = prevServer.posX[i] + (currServer.posX[i] - prevServer.posX[i]) * serverInterpolation;
                 rend.posY[i] = prevServer.posY[i] + (currServer.posY[i] - prevServer.posY[i]) * serverInterpolation;
-                // Rotación: interpola linealmente, corrigiendo el camino más corto
                 float delta = currServer.rot[i] - prevServer.rot[i];
-
-                // Normaliza el delta al rango [-180, 180] para tomar el camino más corto
                 while (delta > 180.0f) delta -= 360.0f;
                 while (delta < -180.0f) delta += 360.0f;
-
                 rend.rot[i] = prevServer.rot[i] + delta * serverInterpolation;
                 rend.remaingShootFrames[i] = currServer.remaingShootFrames[i];
+
+                // USE SERVER STATE FOR REMOTE PLAYERS
+                rend.alive[i] = currServer.alive[i];
             }
-            
-            // No interpolamos salud ni cooldowns, solo copiamos el actual
+
+            // Health, cooldowns still use server (authority)
             rend.health[i] = currServer.health[i];
-            
             rend.shootCooldown[i] = currServer.shootCooldown[i];
             rend.deathCooldown[i] = currServer.deathCooldown[i];
-			rend.alive[i] = currServer.alive[i];
+            // REMOVE rend.alive[i] = currServer.alive[i]; from here
         }
 
         // Interpola balas

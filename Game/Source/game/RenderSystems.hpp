@@ -19,6 +19,7 @@ public:
         float deltaTime
     ) override
     {
+
         auto camQuery = entityManager.CreateQuery<Camera, Transform>();
         if (camQuery.Count() == 0)
             return;

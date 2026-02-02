@@ -100,12 +100,18 @@ void OpenGLWindow::initializeGLEW() {
     }
 }
 
-void OpenGLWindow::setupOpenGL() {
-    // Enable depth testing for 3D rendering
+void OpenGLWindow::setupOpenGL()
+{
+    // Depth testing
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
-    
-    // Enable blending for transparency
+
+    // Backface culling
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_BACK);      // Cull back-facing triangles
+    glFrontFace(GL_CCW);      // Counter-clockwise = front face (default)
+
+    // Blending (transparency)
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }
