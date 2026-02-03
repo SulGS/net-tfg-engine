@@ -48,6 +48,12 @@ public:
     {
         lastStateUpdate = std::chrono::steady_clock::now();
         lastLocalUpdate = std::chrono::steady_clock::now();
+
+		PreviousServerState.frame = -1;
+		CurrentServerState.frame = -1;
+		PreviousLocalState.frame = -1;
+		CurrentLocalState.frame = -1;
+		RenderState.frame = -1;
     }
 
     ~ClientWindow() {
@@ -115,9 +121,14 @@ public:
 
     void setServerState(GameStateBlob state) {
         std::lock_guard<std::mutex> lock(gStateMutex);
-        PreviousServerState = CurrentServerState;
-        CurrentServerState = state;
-        lastStateUpdate = std::chrono::steady_clock::now();
+		
+
+        if (state.frame > CurrentServerState.frame) {
+            Debug::Info("ClientWindow") << "Received server state for frame " << state.frame << "\n";
+            PreviousServerState = CurrentServerState;
+            CurrentServerState = state;
+            lastStateUpdate = std::chrono::steady_clock::now();
+        }
     }
 
     void setLocalState(GameStateBlob state) {

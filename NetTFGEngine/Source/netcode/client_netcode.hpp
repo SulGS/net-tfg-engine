@@ -62,6 +62,7 @@ public:
 		}
 
 		latestServerState = snapshot.state;
+		latestServerState.frame = deltaFrame;
 
 		if (needsCorrection) 
 		{

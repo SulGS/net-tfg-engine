@@ -5,8 +5,15 @@ workspace "TFG Project"
    startproject "GameClient"
 
    -- Workspace-wide build options for MSVC
-   filter "system:windows"
-      buildoptions { "/EHsc", "/Zc:preprocessor", "/Zc:__cplusplus" }
+	filter "toolset:msc*"
+	   buildoptions {
+		  "/EHsc",
+		  "/Zc:preprocessor",
+		  "/Zc:__cplusplus",
+		  "/bigobj"
+	   }
+	filter {}
+
 
 OutputDir = "%{cfg.system}-%{cfg.architecture}/%{cfg.buildcfg}"
 
