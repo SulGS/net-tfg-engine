@@ -117,6 +117,7 @@ public:
         // Predict to current frame (mutex-protected)
         prediction_->Tick();
         cWindow_->setLocalState(prediction_->GetCurrentState());
+        cWindow_->setServerState(prediction_->GetLatestServerState());
 
         // ===== Debug output every 30 frames =====
         if (frameToSubmit % 30 == 0) {
@@ -436,7 +437,6 @@ private:
                 StateUpdate update = net_.ParseStateUpdate(data, len);
 
                 prediction.OnServerStateUpdate(update);
-                cWin.setServerState(prediction.GetLatestServerState());
             }
             else {
                 Debug::Info("OnlineClient") << "[CLIENT] Received malformed PACKET_STATE_UPDATE, len=" << len << "\n";
@@ -449,7 +449,6 @@ private:
             net_.ParseDeltasUpdate(data, len, deltas, frame);
 
             prediction.OnServerDeltasUpdate(deltas,frame);
-            cWin.setServerState(prediction.GetLatestServerState());
         }
         else if (type == PACKET_INPUT_UPDATE) {
             const size_t EXPECTED_MIN_LEN = 1 + 4 + 4 + sizeof(InputBlob);

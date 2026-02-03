@@ -1,4 +1,4 @@
-#ifndef NETCODE_CLIENT_WINDOW_H
+﻿#ifndef NETCODE_CLIENT_WINDOW_H
 #define NETCODE_CLIENT_WINDOW_H
 #include "netcode_common.hpp"
 #include "OpenGL/OpenGLWindow.hpp"
@@ -183,18 +183,19 @@ private:
 
                 // Calculate interpolation factors
                 auto now = std::chrono::high_resolution_clock::now();
+
                 float serverInterpolationFactor = 0.0f;
                 if (instance->CurrentServerState.frame != instance->PreviousServerState.frame) {
                     auto frameDelta = std::chrono::milliseconds(MS_PER_TICK);
-                    auto elapsed = now - instance->lastLocalUpdate;
+                    auto elapsed = now - instance->lastStateUpdate;  // ✅ FIXED: Use lastStateUpdate
                     serverInterpolationFactor = std::chrono::duration<float, std::milli>(elapsed).count() / frameDelta.count();
                     if (serverInterpolationFactor > 1.0f) serverInterpolationFactor = 1.0f;
                 }
 
                 float localInterpolationFactor = 0.0f;
-                if (instance->CurrentServerState.frame != instance->PreviousServerState.frame) {
+                if (instance->CurrentLocalState.frame != instance->PreviousLocalState.frame) {  // ✅ FIXED: Check local frames
                     auto frameDelta = std::chrono::milliseconds(MS_PER_TICK);
-                    auto elapsed = now - instance->lastStateUpdate;
+                    auto elapsed = now - instance->lastLocalUpdate;  // ✅ FIXED: Use lastLocalUpdate
                     localInterpolationFactor = std::chrono::duration<float, std::milli>(elapsed).count() / frameDelta.count();
                     if (localInterpolationFactor > 1.0f) localInterpolationFactor = 1.0f;
                 }

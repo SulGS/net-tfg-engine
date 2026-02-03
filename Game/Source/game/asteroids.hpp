@@ -123,6 +123,7 @@ public:
             transform->setRotation(glm::vec3(0.0f, 0.0f, static_cast<float>(s.rot[p])));
             ship->shootCooldown = s.shootCooldown[p];
             ship->health = s.health[p];
+			ship->isShooting = s.isShooting[p];
             ship->remainingShootFrames = s.remaingShootFrames[p];
             ship->deathCooldown = s.deathCooldown[p];
 			ship->isAlive = s.alive[p];
@@ -193,6 +194,7 @@ public:
             s.rot[p] = transform->getRotation().z;
             s.shootCooldown[p] = ship->shootCooldown;
             s.remaingShootFrames[p] = ship->remainingShootFrames;
+			s.isShooting[p] = ship->isShooting;
             s.health[p] = ship->health;
             s.deathCooldown[p] = ship->deathCooldown;
 			s.alive[p] = ship->isAlive;
@@ -244,8 +246,11 @@ public:
         }
         s->bulletCount = 0;
 
-        s->remaingShootFrames[0] = -1;
-        s->remaingShootFrames[1] = -1;
+        s->remaingShootFrames[0] = 0;
+        s->remaingShootFrames[1] = 0;
+
+		s->isShooting[0] = false;
+		s->isShooting[1] = false;
         
         // Initialize cooldowns
         s->shootCooldown[0] = 0;
@@ -384,7 +389,7 @@ public:
 
         Debug::Info("GameState") << "===================================\n";
     }
-    
+
     void GameState_To_ECSWorld(const GameStateBlob& state)
     {
         AsteroidShooterGameState s =
@@ -393,75 +398,33 @@ public:
         EntityManager& em = world.GetEntityManager();
 
         // ============================================================
-        // 1. SNAPSHOT CLEANUP (derived / visual-only state)
+        // PLAYER STATE SYNC (authoritative)
         // ============================================================
+        auto playerQuery = em.CreateQuery<Transform, Playable, SpaceShip>();
 
-        // Remove all charging shoot effects (purely visual, snapshot-derived)
-        {
-            auto q = em.CreateQuery<ChargingShootEffect>();
-            for (auto [e, effect] : q)
-            {
-                em.DestroyEntity(e);
-            }
-        }
-
-        // Optional: reset UI state (prevents death/health UI layout conflicts)
-        {
-            auto q = em.CreateQuery<UIElement, UIText>();
-            for (auto [e, element, text] : q)
-            {
-                text->text.clear();
-                element->anchor = UIAnchor::TOP_LEFT;
-                element->pivot = glm::vec2(0.0f);
-                element->position = glm::vec2(0.0f);
-            }
-        }
-
-        // ============================================================
-        // 2. PLAYER STATE SYNC (authoritative)
-        // ============================================================
-
-        auto playerQuery =
-            em.CreateQuery<Transform, Playable, SpaceShip, MeshComponent>();
-
-        for (auto [entity, transform, play, ship, mesh] : playerQuery)
+        for (auto [entity, transform, play, ship] : playerQuery)
         {
             int p = play->playerId;
 
-            transform->setPosition(
-                glm::vec3(s.posX[p], s.posY[p], 0.0f)
-            );
+            transform->setPosition(glm::vec3(s.posX[p], s.posY[p], 0.0f));
+            transform->setRotation(glm::vec3(0.0f, 0.0f, s.rot[p] + 90.0f));
 
-            transform->setRotation(
-                glm::vec3(0.0f, 0.0f, s.rot[p] + 90.0f)
-            );
-
-            ship->shootCooldown = s.shootCooldown[p];
+            
             ship->health = s.health[p];
-            ship->remainingShootFrames = s.remaingShootFrames[p];
-
-            // Clamp defensively at snapshot boundary
-            ship->deathCooldown = std::max(0, s.deathCooldown[p]);
-
-            // --- ALIVE EDGE DETECTION ---
-            bool wasAlive = ship->isAlive;
             ship->isAlive = s.alive[p];
 
-            if (!wasAlive && ship->isAlive)
-            {
-                // Respawn: restore visuals + reset derived state
-                mesh->enabled = true;
-                ship->remainingShootFrames = -1;
-            }
-            else if (wasAlive && !ship->isAlive)
-            {
-                // Death
-                mesh->enabled = false;
-            }
+			ship->isShooting = s.isShooting[p];
+            ship->remainingShootFrames = s.remaingShootFrames[p];
+
+            ship->shootCooldown = s.shootCooldown[p];
+            ship->deathCooldown = std::max(0, s.deathCooldown[p]);
+
+            // Simple assignment - render systems will handle visuals
+            
         }
 
         // ============================================================
-        // 3. BULLET RECONCILIATION (authoritative)
+        // BULLET RECONCILIATION (authoritative)
         // ============================================================
 
         // Collect active bullet IDs from ECS
@@ -511,9 +474,7 @@ public:
             {
                 if (ecsb->id == b.id)
                 {
-                    transform->setPosition(
-                        glm::vec3(b.posX, b.posY, 0.0f)
-                    );
+                    transform->setPosition(glm::vec3(b.posX, b.posY, 0.0f));
 
                     ecsb->velX = b.velX;
                     ecsb->velY = b.velY;
@@ -530,16 +491,10 @@ public:
                 // Create new bullet entity
                 Entity newBullet = em.CreateEntity();
 
-                Transform* t =
-                    em.AddComponent<Transform>(newBullet, Transform{});
+                Transform* t = em.AddComponent<Transform>(newBullet, Transform{});
+                t->setPosition(glm::vec3(b.posX, b.posY, 0.0f));
 
-                t->setPosition(
-                    glm::vec3(b.posX, b.posY, 0.0f)
-                );
-
-                auto bulletMat =
-                    std::make_shared<Material>("generic.vert", "generic.frag");
-
+                auto bulletMat = std::make_shared<Material>("generic.vert", "generic.frag");
                 bulletMat->setVec3("uColor", glm::vec3(1.0f, 1.0f, 0.0f));
 
                 em.AddComponent<ECSBullet>(
@@ -553,26 +508,16 @@ public:
                 // Spawn bullet sound (non-authoritative, time-limited)
                 Entity bulletSound = em.CreateEntity();
 
-                Transform* st =
-                    em.AddComponent<Transform>(bulletSound, Transform{});
+                Transform* st = em.AddComponent<Transform>(bulletSound, Transform{});
+                st->setPosition(glm::vec3(b.posX, b.posY, 0.0f));
 
-                st->setPosition(
-                    glm::vec3(b.posX, b.posY, 0.0f)
-                );
-
-                DestroyTimer* dt =
-                    em.AddComponent<DestroyTimer>(bulletSound, DestroyTimer{});
-
+                DestroyTimer* dt = em.AddComponent<DestroyTimer>(bulletSound, DestroyTimer{});
                 dt->framesRemaining = RENDER_TICKS_PER_SECOND * 3;
 
-                AudioSourceComponent* audio =
-                    em.AddComponent<AudioSourceComponent>(
-                        bulletSound,
-                        AudioSourceComponent("shoot.wav",
-                            AudioChannel::SFX,
-                            false)
-                    );
-
+                AudioSourceComponent* audio = em.AddComponent<AudioSourceComponent>(
+                    bulletSound,
+                    AudioSourceComponent("shoot.wav", AudioChannel::SFX, false)
+                );
                 audio->play = true;
             }
         }
@@ -581,18 +526,16 @@ public:
 
     void InitECSRenderer(const GameStateBlob& state, OpenGLWindow* window) override {
         this->window = window;  // Store window pointer for later use
-        
-        
-        std::vector<unsigned int> triangleInds = {0, 1, 2};
-        
+
+        std::vector<unsigned int> triangleInds = { 0, 1, 2 };
+
         AsteroidShooterGameState s;
         std::memcpy(&s, state.data, sizeof(AsteroidShooterGameState));
 
         world.GetEntityManager().RegisterComponentType<SpaceShip>();
         world.GetEntityManager().RegisterComponentType<ECSBullet>();
         world.GetEntityManager().RegisterComponentType<ChargingShootEffect>();
-		world.GetEntityManager().RegisterComponentType<DestroyTimer>();
-        
+        world.GetEntityManager().RegisterComponentType<DestroyTimer>();
 
         Entity player1 = world.GetEntityManager().CreateEntity();
         Transform* t1 = world.GetEntityManager().AddComponent<Transform>(player1, Transform{});
@@ -601,10 +544,9 @@ public:
         t1->setScale(glm::vec3(1.0f, 1.0f, 1.0f));
 
         auto player1Mat = std::make_shared<Material>("generic_texture.vert", "generic_texture.frag");
-        //player1Mat->setVec3("uColor", glm::vec3(1.0f, 0.0f, 0.0f));
-        
-        world.GetEntityManager().AddComponent<Playable>(player1, Playable{0, MakeZeroInputBlob(), (0 == playerId ? true : false)});
-        world.GetEntityManager().AddComponent<SpaceShip>(player1, SpaceShip{100,-1,0,0,true});
+
+        world.GetEntityManager().AddComponent<Playable>(player1, Playable{ 0, MakeZeroInputBlob(), (0 == playerId ? true : false) });
+        world.GetEntityManager().AddComponent<SpaceShip>(player1, SpaceShip{ 100,-1,0,0,true });
         world.GetEntityManager().AddComponent<MeshComponent>(player1, MeshComponent(new Mesh("ship.glb", player1Mat)));
 
         Entity player2 = world.GetEntityManager().CreateEntity();
@@ -614,36 +556,31 @@ public:
         t2->setScale(glm::vec3(1.0f, 1.0f, 1.0f));
 
         auto player2Mat = std::make_shared<Material>("generic_texture.vert", "generic_texture.frag");
-        //player2Mat->setVec3("uColor", glm::vec3(0.0f, 0.0f, 1.0f));
-        
-        world.GetEntityManager().AddComponent<Playable>(player2, Playable{1, MakeZeroInputBlob(), (1 == playerId ? true : false)});
-        world.GetEntityManager().AddComponent<SpaceShip>(player2, SpaceShip{100,-1,0,0,true});
+
+        world.GetEntityManager().AddComponent<Playable>(player2, Playable{ 1, MakeZeroInputBlob(), (1 == playerId ? true : false) });
+        world.GetEntityManager().AddComponent<SpaceShip>(player2, SpaceShip{ 100,-1,0,0,true });
         world.GetEntityManager().AddComponent<MeshComponent>(player2, MeshComponent(new Mesh("ship.glb", player2Mat)));
 
         Entity camera = world.GetEntityManager().CreateEntity();
         Transform* camTrans = world.GetEntityManager().AddComponent<Transform>(camera, Transform{});
-        // Place camera above the scene on Z axis so it looks down at origin
         camTrans->setPosition(glm::vec3(0.0f, 0.0f, 18.0f));
         Camera* camSettings = world.GetEntityManager().AddComponent<Camera>(camera, Camera{});
-            
-		camSettings->setPerspective(45.0f, window->getAspectRatio(), 0.001f, 1000.0f);
+        camSettings->setPerspective(45.0f, window->getAspectRatio(), 0.001f, 1000.0f);
         camSettings->setTarget(glm::vec3(0.0f, 0.0f, 0.0f));
         camSettings->setUp(glm::vec3(0.0f, 1.0f, 0.0f));
 
-
         Entity healthText = world.GetEntityManager().CreateEntity();
-
         UIElement* element = world.GetEntityManager().AddComponent<UIElement>(healthText, UIElement{});
         element->anchor = UIAnchor::TOP_LEFT;
-        element->position = glm::vec2(0.0f, 0.0f);  
+        element->position = glm::vec2(0.0f, 0.0f);
         element->size = glm::vec2(150.0f, 40.0f);
         element->pivot = glm::vec2(0.0f, 0.0f);
         element->layer = 1;
-        
+
         UIText* text = world.GetEntityManager().AddComponent<UIText>(healthText, UIText{});
         text->text = "Health:";
         text->fontSize = 32.0f;
-        text->SetColor(1.0f, 1.0f, 1.0f, 1.0f);  // White
+        text->SetColor(1.0f, 1.0f, 1.0f, 1.0f);
         text->SetFont("default");
 
         Entity escenario = world.GetEntityManager().CreateEntity();
@@ -653,18 +590,15 @@ public:
         tesc->setScale(glm::vec3(6.0f, 6.0f, 6.0f));
 
         auto escenarioMat = std::make_shared<Material>("generic_texture.vert", "generic_texture.frag");
-        //player1Mat->setVec3("uColor", glm::vec3(1.0f, 0.0f, 0.0f));
         world.GetEntityManager().AddComponent<MeshComponent>(escenario, MeshComponent(new Mesh("escenario.glb", escenarioMat)));
 
-        // Add camera follow system so camera follows local player
+        // Add render systems
         world.AddSystem(std::make_unique<CameraFollowSystem>());
         world.AddSystem(std::make_unique<OnDeathRenderSystem>());
         world.AddSystem(std::make_unique<ChargingBulletRenderSystem>());
-		world.AddSystem(std::make_unique<DestroyTimerSystem>());
-
+        world.AddSystem(std::make_unique<DestroyTimerSystem>());
 
         AudioListenerComponent* listener = world.GetEntityManager().AddComponent<AudioListenerComponent>(camera, AudioListenerComponent{});
-
         AudioManager::SetEntityManager(&world.GetEntityManager());
         AudioManager::PlayMusic("song.wav", true);
         AudioManager::SetMusicVolume(0.25f);
@@ -683,36 +617,38 @@ public:
         for (int i = 0; i < 2; ++i) {
             if (playerId == i)
             {
+                // Local player - use local prediction
                 rend.posX[i] = prevLocal.posX[i] + (currLocal.posX[i] - prevLocal.posX[i]) * localInterpolation;
                 rend.posY[i] = prevLocal.posY[i] + (currLocal.posY[i] - prevLocal.posY[i]) * localInterpolation;
+
+                // Rotación: interpola linealmente (con el camino más corto)
                 float delta = currLocal.rot[i] - prevLocal.rot[i];
+                // Normaliza el delta al rango [-180, 180] para tomar el camino más corto
                 while (delta > 180.0f) delta -= 360.0f;
                 while (delta < -180.0f) delta += 360.0f;
                 rend.rot[i] = prevLocal.rot[i] + delta * localInterpolation;
-                rend.remaingShootFrames[i] = currLocal.remaingShootFrames[i];
-
-                // USE LOCAL STATE FOR LOCAL PLAYER
-                rend.alive[i] = currLocal.alive[i];
             }
             else
             {
+                // Remote player - use server state
                 rend.posX[i] = prevServer.posX[i] + (currServer.posX[i] - prevServer.posX[i]) * serverInterpolation;
                 rend.posY[i] = prevServer.posY[i] + (currServer.posY[i] - prevServer.posY[i]) * serverInterpolation;
+
+                // Rotación: interpola linealmente, corrigiendo el camino más corto
                 float delta = currServer.rot[i] - prevServer.rot[i];
+                // Normaliza el delta al rango [-180, 180] para tomar el camino más corto
                 while (delta > 180.0f) delta -= 360.0f;
                 while (delta < -180.0f) delta += 360.0f;
                 rend.rot[i] = prevServer.rot[i] + delta * serverInterpolation;
-                rend.remaingShootFrames[i] = currServer.remaingShootFrames[i];
-
-                // USE SERVER STATE FOR REMOTE PLAYERS
-                rend.alive[i] = currServer.alive[i];
             }
 
-            // Health, cooldowns still use server (authority)
+            // Server is authority for health and cooldowns (for both players)
             rend.health[i] = currServer.health[i];
+			rend.alive[i] = currServer.alive[i];
+			rend.remaingShootFrames[i] = currServer.remaingShootFrames[i];
+			rend.isShooting[i] = currServer.isShooting[i];
             rend.shootCooldown[i] = currServer.shootCooldown[i];
             rend.deathCooldown[i] = currServer.deathCooldown[i];
-            // REMOVE rend.alive[i] = currServer.alive[i]; from here
         }
 
         // Interpola balas
@@ -720,15 +656,16 @@ public:
         for (int i = 0; i < MAX_BULLETS; ++i) {
             const Bullet& prevServerBullet = prevServer.bullets[i];
             const Bullet& currServerBullet = currServer.bullets[i];
-			const Bullet& prevLocalBullet = prevLocal.bullets[i];
-			const Bullet& currLocalBullet = currLocal.bullets[i];
+            const Bullet& prevLocalBullet = prevLocal.bullets[i];
+            const Bullet& currLocalBullet = currLocal.bullets[i];
 
             Bullet& rendBullet = rend.bullets[i];
 
-            if (currServerBullet.active) 
+            if (currServerBullet.active)
             {
                 if (prevServerBullet.active)
                 {
+                    // Bullet was active in both previous and current - interpolate
                     rendBullet.id = currServerBullet.id;
                     rendBullet.active = true;
                     rendBullet.posX = prevServerBullet.posX + (currServerBullet.posX - prevServerBullet.posX) * serverInterpolation;
@@ -743,11 +680,11 @@ public:
                     // Si solo está activa en el estado actual del servidor, copia el actual del servidor
                     rendBullet = currServerBullet;
                 }
-			}
-			else
-			{
-				// Bala inactiva
-				rendBullet.active = false;
+            }
+            else
+            {
+                // Bala inactiva
+                rendBullet.active = false;
             }
         }
     }

@@ -86,24 +86,21 @@ public:
 
         for (auto [entity, playerTransform, play, ship, meshC] : playerQuery)
         {
-            if (play->isLocal)
+            if (play->isLocal && !ship->isAlive)
             {
                 auto textQuery = entityManager.CreateQuery<UIElement, UIText>();
 
                 for (auto [uiEntity, element, text] : textQuery)
                 {
-                    if (!ship->isAlive)
-                    {
-                        element->anchor = UIAnchor::CENTER;
-                        element->position = glm::vec2(0.0f);
-                        element->size = glm::vec2(150.0f, 40.0f);
-                        element->pivot = glm::vec2(0.5f);
+                    element->anchor = UIAnchor::CENTER;
+                    element->position = glm::vec2(0.0f);
+                    element->size = glm::vec2(150.0f, 40.0f);
+                    element->pivot = glm::vec2(0.5f);
 
-                        int secondsRemain =
-                            std::max(0, ship->deathCooldown / TICKS_PER_SECOND);
+                    int secondsRemain =
+                        std::max(0, ship->deathCooldown / TICKS_PER_SECOND);
 
-                        text->text = std::to_string(secondsRemain + 1);
-                    }
+                    text->text = std::to_string(secondsRemain + 1);
                 }
             }
 
@@ -148,7 +145,7 @@ public:
                 {
                     foundIt = true;
 
-                    if (ship->remainingShootFrames == -1)
+                    if (!ship->isShooting)
                     {
                         entityManager.DestroyEntity(effectEntity);
                     }
@@ -162,8 +159,7 @@ public:
                             )
                         );
 
-                        float scale =
-                            (CHARGING_BULLET_FRAMES - ship->remainingShootFrames + 1) * 1.5f;
+                        float scale = (CHARGING_BULLET_FRAMES - ship->remainingShootFrames + 1) * 1.5f;
 
                         effectTransform->setScale(
                             glm::vec3(scale, scale, 1.0f)
@@ -172,7 +168,7 @@ public:
                 }
             }
 
-            if (!foundIt && ship->remainingShootFrames != -1)
+            if (!foundIt && ship->isShooting)
             {
                 Entity effectEntity = entityManager.CreateEntity();
 

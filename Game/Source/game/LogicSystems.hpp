@@ -74,12 +74,12 @@ public:
                     ship->remainingShootFrames--;
                 }
                 if (ship->remainingShootFrames == 0) {
-                    ship->remainingShootFrames = -1;
+					ship->isShooting = false;
                 }
             }
 
             // Skip input processing if charging shot
-            if (ship->remainingShootFrames != -1) continue;
+            if (ship->isShooting) continue;
 
             // Rotation
             if (m & INPUT_LEFT) {
@@ -108,7 +108,7 @@ public:
             // Shooting - only set the charge frames, server handles cooldown
             if ((m & INPUT_SHOOT) && ship->shootCooldown <= 0 && ship->isAlive) {
                 ship->remainingShootFrames = CHARGE_SHOOT_FRAMES;
-
+				ship->isShooting = true;
             }
         }
     }
@@ -141,8 +141,8 @@ public:
             }
 
             // Shooting
-            if (ship->remainingShootFrames == 0) {
-                ship->remainingShootFrames = -1;
+            if (ship->remainingShootFrames == 0 && ship->isShooting) {
+				ship->isShooting = false;
 
                 if (ship->isAlive) {
                     // Find first available bullet ID

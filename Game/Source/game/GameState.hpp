@@ -17,17 +17,20 @@ struct Bullet {
 struct AsteroidShooterGameState {
     float posX[2];
     float posY[2];
-    int health[2];
-	bool alive[2];
     float rot[2];
 
-    // Bullet pool
-    Bullet bullets[MAX_BULLETS];
-    int bulletCount;  // Number of active bullets (for quick iteration)
+    int health[2];
+	bool alive[2];
+    
 
+	bool isShooting[2];
     int remaingShootFrames[2];
 
     // Shooting cooldown per player
     int shootCooldown[2];
     int deathCooldown[2];
+
+    // Bullet pool
+    Bullet bullets[MAX_BULLETS];
+    int bulletCount;  // Number of active bullets (for quick iteration)
 };
