@@ -690,6 +690,15 @@ public:
 
         if (Input::KeyPressed(Input::CharToKeycode('p'))) 
         {
+			Debug::Info("Interpolation") << "=== Prev Server Game State ===\n";
+            printGameState(prevServer);
+			Debug::Info("Interpolation") << "=== Prev Local Game State ===\n";
+            printGameState(prevLocal);
+			Debug::Info("Interpolation") << "=== Curr Server Game State ===\n";
+            printGameState(currServer);
+			Debug::Info("Interpolation") << "=== Curr Local Game State ===\n";
+            printGameState(currLocal);
+			Debug::Info("Interpolation") << "=== Rendered Game State ===\n";
 			printGameState(rend);
         }
     }

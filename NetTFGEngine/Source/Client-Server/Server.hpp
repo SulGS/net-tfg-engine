@@ -655,16 +655,14 @@ private:
         }
 
         if (config_.allowReconnection) {
-            Debug::Info("Server") << "Reconnection is ENABLED (timeout: ";
 
             if (config_.reconnectionTimeout.count() > 0) {
-                Debug::Info("Server") << config_.reconnectionTimeout.count() << "s";
+                Debug::Info("Server") << "Reconnection is ENABLED (timeout: " << config_.reconnectionTimeout.count() << "s)\n";
             }
             else {
-                Debug::Info("Server") << "infinity";
+                Debug::Info("Server") << "Reconnection is ENABLED (timeout: infinity)\n";
             }
 
-            Debug::Info("Server") << ")\n";
         }
     }
 };
