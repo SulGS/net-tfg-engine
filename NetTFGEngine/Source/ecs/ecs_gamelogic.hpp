@@ -90,7 +90,8 @@ public:
 	}
 
     void SimulateFrame(GameStateBlob& state, std::vector<EventEntry> events, std::map<int, InputEntry> inputs) override {
-        GameStateBlob prevState = state;
+        GameStateBlob prevState;
+        ECSWorld_To_GameState(prevState);
 		//GameState_To_ECSWorld(state);
         this->generatedEvents.clear();
 		this->generatedDeltas.clear();

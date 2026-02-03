@@ -362,6 +362,12 @@ public:
                 alSourcePlay(audio->source);
                 audio->play = false;
             }
+
+            if (audio->pendingToDestroy && audio->initialized) 
+            {
+				cleanupSource(*audio);
+				entityManager.DestroyEntity(ent);
+            }
         }
 
 
@@ -570,6 +576,9 @@ private:
         ac.initialized = false;
         ac.source = 0;
         ac.buffer = 0;
+
+        //Debug::Info("AudioSystem")
+		//	<< "Cleaned up audio source for: " << ac.filePath << "\n";
     }
 
 

@@ -17,6 +17,7 @@ struct AudioSourceComponent : public IComponent {
     ALuint source = 0;
     ALuint buffer = 0;
     bool initialized = false;
+	bool pendingToDestroy = false;
 
     AudioSourceComponent() = default;
 
@@ -27,15 +28,7 @@ struct AudioSourceComponent : public IComponent {
     }
 
     void Destroy() override {
-        if (source) {
-            alDeleteSources(1, &source);
-            source = 0;
-        }
-        if (buffer) {
-            alDeleteBuffers(1, &buffer);
-            buffer = 0;
-        }
-        initialized = false;
+		//AudioSystem::AddPendingSourceString(source,filePath);
     }
 };
 

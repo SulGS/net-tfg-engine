@@ -687,6 +687,11 @@ public:
                 rendBullet.active = false;
             }
         }
+
+        if (Input::KeyPressed(Input::CharToKeycode('p'))) 
+        {
+			printGameState(rend);
+        }
     }
 
     ~AsteroidShooterGameRenderer() override {

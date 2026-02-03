@@ -226,11 +226,14 @@ public:
 
         for (auto [entity, destroyTimer] : query)
         {
+            auto audio = entityManager.GetComponent<AudioSourceComponent>(entity);
+            if (audio->pendingToDestroy) continue;
             destroyTimer->framesRemaining -= 1;
 
             if (destroyTimer->framesRemaining <= 0)
             {
-                entityManager.DestroyEntity(entity);
+				
+                audio->pendingToDestroy = true;
             }
         }
     }
