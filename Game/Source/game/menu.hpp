@@ -19,6 +19,8 @@
 #include "ecs/UI/UIElement.hpp"
 #include "NetTFG_Engine.hpp"
 
+#include <openssl/evp.h>
+
 // Simple game state for start screen
 struct StartScreenGameState {
     bool spacePressed;
@@ -195,6 +197,31 @@ public:
         world.AddSystem(std::make_unique<StartScreenInputSystem>());
 
         printf("[StartScreen] Game logic initialized!\n");
+    }
+
+    void HashState(const GameStateBlob& state, uint8_t(&outHash)[SHA256_DIGEST_LENGTH]) const override {
+        // Create context
+        EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+        if (!ctx) throw std::runtime_error("Failed to create EVP_MD_CTX");
+
+        // Initialize SHA-256
+        if (1 != EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr)) {
+            EVP_MD_CTX_free(ctx);
+            throw std::runtime_error("EVP_DigestInit_ex failed");
+        }
+
+        // No data to hash currently
+        // (would normally call EVP_DigestUpdate(ctx, data, size); here)
+
+        // Finalize hash
+        unsigned int len = 0;
+        if (1 != EVP_DigestFinal_ex(ctx, outHash, &len)) {
+            EVP_MD_CTX_free(ctx);
+            throw std::runtime_error("EVP_DigestFinal_ex failed");
+        }
+
+        // Cleanup
+        EVP_MD_CTX_free(ctx);
     }
 
     void PrintState(const GameStateBlob& state) const override {

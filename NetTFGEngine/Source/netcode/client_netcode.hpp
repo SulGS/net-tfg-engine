@@ -97,6 +97,7 @@ public:
 		lastConfirmedFrame = update.frame;
 		snapshot.stateConfirmed = true;
 		latestServerState = update.state;
+		latestServerState.frame = update.frame;
 
 		
 

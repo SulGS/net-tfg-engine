@@ -18,6 +18,7 @@
 #include <atomic>
 #include <cstdint>
 #include <algorithm>
+#include <openssl/sha.h>
 
 #if defined(_WIN32) || defined(_WIN64)
 #pragma comment(lib, "ws2_32.lib")
@@ -84,6 +85,7 @@ struct StateDeltaBlob {
 */
 
 enum PacketType : uint8_t {
+	PACKET_HASH = 0x00,
     PACKET_INPUT = 0x01,
     PACKET_STATE_UPDATE = 0x02,
     PACKET_INPUT_UPDATE = 0x03,
@@ -92,6 +94,11 @@ enum PacketType : uint8_t {
     PACKET_INPUT_DELAY = 0x06,
 	PACKET_DELTA_STATE_UPDATE = 0x07,
 	PACKET_EVENT_UPDATE = 0x08
+};
+
+struct HashPacket {
+	int frame;
+	uint8_t hash[SHA256_DIGEST_LENGTH];
 };
 
 struct DeltaStateBlob {
@@ -170,6 +177,7 @@ public:
     virtual void GenerateDeltas(const GameStateBlob& previousState, const GameStateBlob& newState) = 0;
     virtual void ApplyDeltasToGameState(GameStateBlob& state, const std::vector<DeltaStateBlob>& deltas) = 0;
     virtual void Init(GameStateBlob& state) = 0;
+	virtual void HashState(const GameStateBlob& state, uint8_t (& outHash)[SHA256_DIGEST_LENGTH]) const = 0;
     virtual void PrintState(const GameStateBlob& state) const = 0;
 };
 

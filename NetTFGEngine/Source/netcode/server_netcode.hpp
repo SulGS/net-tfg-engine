@@ -4,6 +4,7 @@
 #include <set>
 #include <algorithm>
 #include <cmath>
+#include <queue>
 
 // Server-side rollback netcode
 class ServerNetcode {
@@ -87,6 +88,25 @@ public:
         return gameState;
     }
 
+	GameStateBlob GetStateAtFrame(int frame) {
+		std::lock_guard<std::mutex> lk(mtx);
+		
+		// Search in state history
+		std::queue<GameStateBlob> tempQueue = stateHistory;
+		while (!tempQueue.empty())
+		{
+			GameStateBlob s = tempQueue.front();
+			tempQueue.pop();
+			if (s.frame == frame)
+			{
+				return s;
+			}
+		}
+
+		// If not found, return current state as fallback
+		return gameState;
+	}
+
     void SetGameLogic(std::unique_ptr<IGameLogic> logic) {
         std::lock_guard<std::mutex> lk(mtx);
         gameLogic = std::move(logic);
@@ -107,6 +127,7 @@ private:
     std::mutex mtx;
     int currentFrame = 0;
     GameStateBlob gameState;
+	std::queue<GameStateBlob> stateHistory;
     std::unique_ptr<IGameLogic> gameLogic;
     InputHistory appliedInputs;
     EventsHistory appliedEvents;
@@ -149,6 +170,12 @@ private:
         }
         appliedEvents[frame + 1] = gameLogic->generatedEvents;
         gameState.frame = frame+1;
+
+		stateHistory.push(gameState);
+		if (stateHistory.size() > 300) 
+		{
+			stateHistory.pop();
+		}
     }
 
     // ✅ NEW: Cleanup old frames to prevent unbounded memory growth

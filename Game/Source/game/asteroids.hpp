@@ -31,6 +31,8 @@
 #include "OpenAL/AudioManager.hpp"
 #include "OpenAL/AudioComponents.hpp"
 
+#include <openssl/evp.h>
+
 
 class AsteroidShooterGame : public IECSGameLogic {
 private:
@@ -318,6 +320,41 @@ public:
         
         
 		
+    }
+
+    void HashState(const GameStateBlob& state, uint8_t(&outHash)[SHA256_DIGEST_LENGTH]) const override {
+        const AsteroidShooterGameState& s =
+            *reinterpret_cast<const AsteroidShooterGameState*>(state.data);
+
+        // Create a new EVP context
+        EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+        if (!ctx) throw std::runtime_error("Failed to create EVP_MD_CTX");
+
+        // Initialize SHA-256
+        if (1 != EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr)) {
+            EVP_MD_CTX_free(ctx);
+            throw std::runtime_error("EVP_DigestInit_ex failed");
+        }
+
+        // Hash selected fields
+        EVP_DigestUpdate(ctx, &s.health[0], sizeof(s.health[0]));
+        EVP_DigestUpdate(ctx, &s.health[1], sizeof(s.health[1]));
+
+        EVP_DigestUpdate(ctx, &s.alive[0], sizeof(s.alive[0]));
+        EVP_DigestUpdate(ctx, &s.alive[1], sizeof(s.alive[1]));
+
+        EVP_DigestUpdate(ctx, &s.deathCooldown[0], sizeof(s.deathCooldown[0]));
+        EVP_DigestUpdate(ctx, &s.deathCooldown[1], sizeof(s.deathCooldown[1]));
+
+        // Finalize hash
+        unsigned int len = 0;
+        if (1 != EVP_DigestFinal_ex(ctx, outHash, &len)) {
+            EVP_MD_CTX_free(ctx);
+            throw std::runtime_error("EVP_DigestFinal_ex failed");
+        }
+
+        // Cleanup
+        EVP_MD_CTX_free(ctx);
     }
 
     void PrintState(const GameStateBlob& state) const override {

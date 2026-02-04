@@ -118,6 +118,13 @@ public:
         prediction_->Tick();
         cWindow_->setLocalState(prediction_->GetCurrentState());
 
+		HashPacket hashPacket;
+		GameStateBlob currentServerState = prediction_->GetLatestServerState();
+		hashPacket.frame = currentServerState.frame;
+		prediction_->GetGameLogic()->HashState(currentServerState, hashPacket.hash);
+
+		net_.SendHashPacket(serverConnection_, hashPacket, hashPacket.frame);
+
         // ===== Debug output every 30 frames =====
         if (frameToSubmit % 30 == 0) {
             GameStateBlob s = prediction_->GetCurrentState();

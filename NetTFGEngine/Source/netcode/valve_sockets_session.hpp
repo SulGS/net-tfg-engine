@@ -413,7 +413,7 @@ public:
         std::memcpy(&buf[offset], &numDeltas, 4);
         offset += 4;
 
-        for (DeltaStateBlob delta : deltas) 
+        for (const DeltaStateBlob& delta : deltas) 
         {
             uint32_t type = hostToBigEndian32(delta.delta_type);
             std::memcpy(&buf[offset], &type, 4);
@@ -486,6 +486,33 @@ public:
             deltas.push_back(d);
         }
     }
+
+    void SendHashPacket(HSteamNetConnection conn, const HashPacket packet, const int frame) {
+        if (!sockets || conn == k_HSteamNetConnection_Invalid) return;
+
+		uint8_t buf[1 + 4 + SHA256_DIGEST_LENGTH];
+
+		buf[0] = PACKET_HASH;
+		uint32_t f = hostToBigEndian32(frame);
+		std::memcpy(buf + 1, &f, sizeof(uint32_t));
+		std::memcpy(buf + 5, packet.hash, SHA256_DIGEST_LENGTH);
+		sockets->SendMessageToConnection(conn, buf, sizeof(buf), k_nSteamNetworkingSend_Reliable, nullptr);
+    }
+
+	HashPacket ParseHashPacket(const uint8_t* buf, size_t len) {
+		HashPacket packet;
+
+		size_t offset = 0;
+		offset += 1;
+		uint32_t f = 0;
+		std::memcpy(&f, buf + offset, 4);
+		packet.frame = bigEndianToHost32(f);
+		offset += 4;
+		std::memcpy(packet.hash, buf + offset, SHA256_DIGEST_LENGTH);
+		offset += SHA256_DIGEST_LENGTH;
+
+		return packet;
+	}
 
 
     void BroadcastGameStart(HSteamNetConnection conn, int playerId) {

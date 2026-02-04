@@ -13,6 +13,25 @@
 #include <chrono>
 #include <iomanip>
 
+#include <string>
+#include <sstream>
+#include <cstdint>
+
+std::string HashToString(const uint8_t hash[SHA256_DIGEST_LENGTH]) {
+    static const char hexDigits[] = "0123456789abcdef";
+    std::string str;
+    str.reserve(SHA256_DIGEST_LENGTH * 2); // 64 chars for SHA-256
+
+    for (int i = 0; i < SHA256_DIGEST_LENGTH; ++i) {
+        uint8_t byte = hash[i];
+        str.push_back(hexDigits[byte >> 4]);      // high nibble
+        str.push_back(hexDigits[byte & 0x0F]);    // low nibble
+    }
+
+    return str;
+}
+
+
 struct ServerConfig {
     uint16_t port;
     size_t minPlayers;
@@ -285,6 +304,30 @@ private:
 
             return;
         }
+
+		if (type == PACKET_HASH) 
+        {
+			HashPacket packet = net_.ParseHashPacket(data, len);
+
+			GameStateBlob state = server_.GetStateAtFrame(packet.frame);
+			uint8_t computedHash[SHA256_DIGEST_LENGTH];
+
+			server_.GetGameLogic()->HashState(state, computedHash);
+
+			// Compare hashes
+			bool match = (std::memcmp(packet.hash, computedHash, SHA256_DIGEST_LENGTH) == 0);
+
+            if (!match) 
+            {
+				peerInfo_[conn].pendingReceiveFullState = true;
+				Debug::Info("Server") << "[SERVER] Hash mismatch from player "
+					<< peerInfo_[conn].playerId << " at frame " << packet.frame << "\n";
+
+				Debug::Info("Server") << "Received hash: " << HashToString(packet.hash) << " Server hash: " << HashToString(computedHash) << "\n";
+            }
+
+			return;
+		}
 
         Debug::Info("Server") << "[SERVER] Received unknown packet type " << (int)type << ", len=" << len << "\n";
     }
