@@ -124,7 +124,6 @@ public:
 		
 
         if (state.frame > CurrentServerState.frame) {
-            Debug::Info("ClientWindow") << "Received server state for frame " << state.frame << "\n";
             PreviousServerState = CurrentServerState;
             CurrentServerState = state;
             lastStateUpdate = std::chrono::steady_clock::now();

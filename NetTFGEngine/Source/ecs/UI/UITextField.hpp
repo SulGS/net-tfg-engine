@@ -172,8 +172,6 @@ public:
 
     void Backspace() {
 
-        Debug::Info("UITextField") << "Backspace at position " << cursorPosition << "\n";
-
         if (!isInteractable || state == TextFieldState::DISABLED) return;
 
 
