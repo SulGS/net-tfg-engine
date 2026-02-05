@@ -141,18 +141,13 @@ public:
 	void Tick()
 	{
 		std::lock_guard<std::mutex> lock(mtx);
-		// Store local input in the current snapshot
-		Snapshot& currentSnapshot = GetSnapshot(currentFrame);
-		currentSnapshot.frame = currentFrame;
-
-		//std::cout << "Frame " << currentFrame << "\n";
-		//gameLogic->PrintState(currentSnapshot.state);
 
 		SimulateFrame(currentFrame, false);
 		currentFrame++;
 
 		Snapshot& predictedSnapshot = GetSnapshot(currentFrame);
 		currentState = predictedSnapshot.state;
+		currentState.frame = currentFrame;
 
 		
 	}

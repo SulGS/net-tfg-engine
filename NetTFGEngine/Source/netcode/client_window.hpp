@@ -132,9 +132,12 @@ public:
 
     void setLocalState(GameStateBlob state) {
         std::lock_guard<std::mutex> lock(gStateMutex);
-        PreviousLocalState = CurrentLocalState;
-        CurrentLocalState = state;
-        lastLocalUpdate = std::chrono::steady_clock::now();
+
+        if (state.frame > CurrentLocalState.frame) {  // ← ADD THIS CHECK
+            PreviousLocalState = CurrentLocalState;
+            CurrentLocalState = state;
+            lastLocalUpdate = std::chrono::steady_clock::now();
+        }
     }
 
     GameStateBlob getLocalState() {
