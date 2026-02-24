@@ -61,6 +61,16 @@ void Mesh::draw() const
     glBindVertexArray(0);
 }
 
+void Mesh::drawGeometryOnly() const
+{
+    if (!buffer) return;
+    glBindVertexArray(buffer->VAO);
+    for (const auto& sm : buffer->subMeshes)
+        glDrawElements(GL_TRIANGLES, sm.indexCount, GL_UNSIGNED_INT,
+            (void*)(size_t)(sm.indexOffset * sizeof(uint32_t)));
+    glBindVertexArray(0);
+}
+
 void Mesh::render(const glm::mat4& model,
     const glm::mat4& view,
     const glm::mat4& projection) const

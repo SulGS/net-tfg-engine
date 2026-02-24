@@ -17,6 +17,7 @@ public:
         const glm::mat4& projection) const;
 
     void draw() const;
+    void drawGeometryOnly() const;
 
     // Keep render() as a convenience wrapper for other use cases
     void render(const glm::mat4& model,

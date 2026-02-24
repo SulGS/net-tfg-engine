@@ -26,6 +26,16 @@ struct GPUTileData {
     uint32_t count;
 };
 
+// Reemplaza GPUShadowData anterior
+struct GPUShadowData {
+    glm::mat4 lightSpaceMatrices[6]; // una por cara del cubo
+    int       lightIndex;
+    float     farPlane;
+    int       pad[2];
+};
+
+
+
 // -------------------------------------------------------
 //  Forward+ RenderSystem
 //
@@ -53,8 +63,10 @@ public:
 
         InitDepthFBO();
         InitSSBOs();
+        InitShadowCubeArray();
         CompileDepthShader();
         CompileLightCullShader();
+        CompileShadowShader();
     }
 
     // ---------------------------------------------------
@@ -115,6 +127,8 @@ public:
         // ---- Pass 1: upload lights to SSBO ----
         UploadLights(entityManager);
 
+        ShadowPass(entityManager, meshQuery);
+
         // ---- Pass 2: depth pre-pass ----
         DepthPrePass(meshQuery, view, projection);
 
@@ -136,6 +150,12 @@ public:
         glDeleteBuffers(1, &m_tileGridSSBO);
         glDeleteProgram(m_depthShader);
         glDeleteProgram(m_lightCullShader);
+
+        // AÑADIR:
+        glDeleteFramebuffers(1, &m_shadowFBO);
+        glDeleteTextures(1, &m_shadowCubeArray);
+        glDeleteBuffers(1, &m_shadowDataSSBO);
+        glDeleteProgram(m_shadowShader);
     }
 
 private:
@@ -145,6 +165,7 @@ private:
     static constexpr int     TILE_SIZE = 16;
     static constexpr int     MAX_LIGHTS = 1024;
     static constexpr int     MAX_LIGHTS_TILE = 256; // per tile
+    static constexpr int MAX_SHADOW_LIGHTS = 16; // cubemaps son costosos
 
     // =====================================================
     //  GPU resource handles
@@ -160,6 +181,13 @@ private:
     int m_screenW = 0, m_screenH = 0;
     int m_tilesX = 0, m_tilesY = 0;
     int m_lightCount = 0;
+
+    GLuint m_shadowCubeArray = 0;  // GL_TEXTURE_CUBE_MAP_ARRAY
+    GLuint m_shadowFBO = 0;
+    GLuint m_shadowShader = 0;  // vert + geom + frag
+    GLuint m_shadowDataSSBO = 0;
+    int m_shadowRes = 512;
+    int    m_shadowCount = 0;
 
     // =====================================================
     //  Initialisation helpers
@@ -215,6 +243,43 @@ private:
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
     }
 
+    void InitShadowCubeArray()
+    {
+        static constexpr int SHADOW_RES = 2048;
+        m_shadowRes = SHADOW_RES;
+
+        // GL_TEXTURE_CUBE_MAP_ARRAY: profundidad = MAX_SHADOW_LIGHTS * 6
+        glGenTextures(1, &m_shadowCubeArray);
+        glBindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, m_shadowCubeArray);
+        glTexImage3D(GL_TEXTURE_CUBE_MAP_ARRAY, 0, GL_DEPTH_COMPONENT32F,
+            SHADOW_RES, SHADOW_RES,
+            MAX_SHADOW_LIGHTS * 6,  // cada cubemap ocupa 6 capas
+            0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+
+        glTexParameteri(GL_TEXTURE_CUBE_MAP_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_CUBE_MAP_ARRAY, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+
+        // Un solo FBO — cambiaremos la capa adjunta en cada draw call
+        glGenFramebuffers(1, &m_shadowFBO);
+        glBindFramebuffer(GL_FRAMEBUFFER, m_shadowFBO);
+        // Adjuntamos toda la textura; el geometry shader selecciona la capa
+        glFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, m_shadowCubeArray, 0);
+        glDrawBuffer(GL_NONE);
+        glReadBuffer(GL_NONE);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+        // SSBO para las matrices y metadatos de sombra
+        glGenBuffers(1, &m_shadowDataSSBO);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_shadowDataSSBO);
+        glBufferData(GL_SHADER_STORAGE_BUFFER,
+            sizeof(GPUShadowData) * MAX_SHADOW_LIGHTS,
+            nullptr, GL_DYNAMIC_DRAW);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    }
+
     // =====================================================
     //  Shader compilation
     // =====================================================
@@ -231,6 +296,61 @@ private:
             Debug::Error("RenderSystem::Shader") << log << "\n";
         }
         return s;
+    }
+
+    void CompileShadowShader()
+    {
+        const char* vert = R"GLSL(
+        #version 430 core
+        layout(location = 0) in vec3 aPos;
+        uniform mat4 uModel;
+        void main() {
+            gl_Position = uModel * vec4(aPos, 1.0);
+        }
+    )GLSL";
+
+        // El geometry shader emite 6 copias del triángulo, una por cara
+        const char* geom = R"GLSL(
+        #version 430 core
+        layout(triangles) in;
+        layout(triangle_strip, max_vertices = 18) out;
+
+        uniform mat4 uLightSpaceMatrices[6];
+        uniform int  uCubeArrayLayer; // índice base: lightIdx * 6
+
+        out vec4 gFragPos;
+
+        void main() {
+            for (int face = 0; face < 6; face++) {
+                gl_Layer = uCubeArrayLayer + face; // selecciona capa del array
+                for (int v = 0; v < 3; v++) {
+                    gFragPos = gl_in[v].gl_Position;
+                    gl_Position = uLightSpaceMatrices[face] * gFragPos;
+                    EmitVertex();
+                }
+                EndPrimitive();
+            }
+        }
+    )GLSL";
+
+        const char* frag = R"GLSL(
+        #version 430 core
+        in  vec4  gFragPos;
+        uniform vec3  uLightPos;
+        uniform float uFarPlane;
+
+        void main() {
+            // Almacenar distancia lineal normalizada en [0, 1]
+            float dist = length(gFragPos.xyz - uLightPos) / uFarPlane;
+            gl_FragDepth = dist;
+        }
+    )GLSL";
+
+        m_shadowShader = LinkProgram({
+            CompileStage(GL_VERTEX_SHADER,   vert),
+            CompileStage(GL_GEOMETRY_SHADER, geom),
+            CompileStage(GL_FRAGMENT_SHADER, frag)
+            });
     }
 
     static GLuint LinkProgram(std::initializer_list<GLuint> stages)
@@ -389,6 +509,86 @@ private:
             });
     }
 
+    void ShadowPass(EntityManager& em, auto& meshQuery)
+    {
+        std::vector<GPUShadowData> shadowDataVec;
+
+        glBindFramebuffer(GL_FRAMEBUFFER, m_shadowFBO);
+        glViewport(0, 0, m_shadowRes, m_shadowRes);
+        glClear(GL_DEPTH_BUFFER_BIT);
+        glEnable(GL_DEPTH_TEST);
+        glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(2.0f, 4.0f);
+
+        glUseProgram(m_shadowShader);
+
+        int shadowIdx = 0;
+        auto lightQuery = em.CreateQuery<PointLightComponent, Transform>();
+
+        for (auto [entity, light, xform] : lightQuery)
+        {
+            if (shadowIdx >= MAX_SHADOW_LIGHTS) break;
+
+            glm::vec3 pos = xform->getPosition();
+            float     farPlane = light->radius;
+
+            // Proyección igual para las 6 caras
+            glm::mat4 shadowProj = glm::perspective(
+                glm::radians(90.0f), 1.0f, 0.01f, farPlane);
+
+            // Las 6 vistas del cubemap
+            glm::mat4 views[6] = {
+                shadowProj * glm::lookAt(pos, pos + glm::vec3(1, 0, 0), glm::vec3(0,-1, 0)),
+                shadowProj * glm::lookAt(pos, pos + glm::vec3(-1, 0, 0), glm::vec3(0,-1, 0)),
+                shadowProj * glm::lookAt(pos, pos + glm::vec3(0, 1, 0), glm::vec3(0, 0, 1)),
+                shadowProj * glm::lookAt(pos, pos + glm::vec3(0,-1, 0), glm::vec3(0, 0,-1)),
+                shadowProj * glm::lookAt(pos, pos + glm::vec3(0, 0, 1), glm::vec3(0,-1, 0)),
+                shadowProj * glm::lookAt(pos, pos + glm::vec3(0, 0,-1), glm::vec3(0,-1, 0)),
+            };
+
+            // Subir las 6 matrices al geometry shader
+            for (int f = 0; f < 6; f++) {
+                std::string uni = "uLightSpaceMatrices[" + std::to_string(f) + "]";
+                glUniformMatrix4fv(glGetUniformLocation(m_shadowShader, uni.c_str()),
+                    1, GL_FALSE, glm::value_ptr(views[f]));
+            }
+            glUniform3fv(glGetUniformLocation(m_shadowShader, "uLightPos"),
+                1, glm::value_ptr(pos));
+            glUniform1f(glGetUniformLocation(m_shadowShader, "uFarPlane"), farPlane);
+            glUniform1i(glGetUniformLocation(m_shadowShader, "uCubeArrayLayer"),
+                shadowIdx * 6);
+
+            // Renderizar todos los meshes para esta luz
+            for (auto [me, meshC, xf] : meshQuery) {
+                if (!meshC->enabled || !meshC->mesh) continue;
+                glUniformMatrix4fv(glGetUniformLocation(m_shadowShader, "uModel"),
+                    1, GL_FALSE, glm::value_ptr(xf->getModelMatrix()));
+                meshC->mesh->drawDepthOnly(glm::mat4(1.0f), m_shadowShader); // MVP lo hace el geom shader
+            }
+
+            // Guardar metadatos
+            GPUShadowData sd;
+            for (int f = 0; f < 6; f++) sd.lightSpaceMatrices[f] = views[f];
+            sd.lightIndex = shadowIdx;
+            sd.farPlane = farPlane;
+            shadowDataVec.push_back(sd);
+            shadowIdx++;
+        }
+
+        m_shadowCount = shadowIdx;
+
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_shadowDataSSBO);
+        glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
+            sizeof(GPUShadowData) * m_shadowCount, shadowDataVec.data());
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+        glDisable(GL_POLYGON_OFFSET_FILL);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glViewport(0, 0, m_screenW, m_screenH);
+    }
+
     // =====================================================
     //  Per-frame passes
     // =====================================================
@@ -476,10 +676,8 @@ private:
     }
 
     // --- Pass 4: full shading — every frag reads from the tile SSBOs ---
-    void ShadingPass(auto& meshQuery,
-        const glm::mat4& view,
-        const glm::mat4& projection,
-        const glm::vec3& cameraPos)
+    void ShadingPass(auto& meshQuery, const glm::mat4& view,
+        const glm::mat4& projection, const glm::vec3& cameraPos)
     {
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -488,25 +686,26 @@ private:
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_lightSSBO);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_lightIndexSSBO);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, m_tileGridSSBO);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, m_shadowDataSSBO); // NUEVO
+
+        // Bind cube array al texture unit 1
+        glActiveTexture(GL_TEXTURE5);
+        glBindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, m_shadowCubeArray);     // NUEVO
+        
 
         for (auto [entity, meshC, transform] : meshQuery) {
-            if (!meshC->enabled) continue;
-            Mesh* mesh = meshC->mesh.get();
-            if (!mesh) continue;
+            if (!meshC->enabled || !meshC->mesh) continue;
 
             glm::mat4 model = transform->getModelMatrix();
+            meshC->mesh->bindMaterial(model, view, projection);
 
-            // 1. Bind shader + upload model/view/projection
-            mesh->bindMaterial(model, view, projection);
-
-            // 2. Now shader is bound — push Forward+ uniforms
-            if (Material* mat = mesh->getMaterial()) {
+            if (Material* mat = meshC->mesh->getMaterial()) {
                 mat->setIVec2("uScreenSize", glm::ivec2(m_screenW, m_screenH));
                 mat->setVec3("uCameraPos", cameraPos);
+                mat->setInt("uShadowCubeArray", 5);   // NUEVO
+                mat->setInt("uShadowCount", m_shadowCount); // NUEVO
             }
-
-            // 3. Draw with all uniforms already uploaded
-            mesh->draw();
+            meshC->mesh->draw();
         }
     }
 };
