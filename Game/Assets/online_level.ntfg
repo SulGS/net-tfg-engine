@@ -4,6 +4,8 @@ generic.vert
 generic.frag
 bullet.glb
 charge.glb
+ggx.vert
+ggx.frag
 ship.glb
 generic_texture.vert
 generic_texture.frag

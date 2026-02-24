@@ -417,7 +417,7 @@ public:
         };
 
 
-
+        AudioManager::SetMusicVolume(0.25f);
 		AudioManager::PlayMusic("BandaSonora.wav", true);
         //printf("[StartScreen] Renderer initialized!\n");
     }

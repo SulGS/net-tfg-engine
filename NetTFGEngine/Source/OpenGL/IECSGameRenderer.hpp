@@ -42,6 +42,8 @@ public:
         world.GetEntityManager().RegisterComponentType<UIText>();
 		world.GetEntityManager().RegisterComponentType<UITextField>();
 
+		world.GetEntityManager().RegisterComponentType<PointLightComponent>();
+
         world.GetEntityManager().RegisterComponentType<AudioSourceComponent>();
         world.GetEntityManager().RegisterComponentType<AudioListenerComponent>();
         
@@ -53,7 +55,8 @@ public:
         world.AddSystem(std::make_unique<RenderSystem>());
         world.AddSystem(std::make_unique<UIRenderSystem>(window->getWidth(), window->getHeight()));
 		
-        
+		RenderSystem* renderSys = world.GetSystem<RenderSystem>();
+		renderSys->Init(window->getWidth(), window->getHeight());
 
         UIRenderSystem* uir = world.GetSystem<UIRenderSystem>();
 

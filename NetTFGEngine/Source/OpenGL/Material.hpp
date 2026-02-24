@@ -36,6 +36,7 @@ public:
     // --- typed setters (location is looked up and cached on first call) ---
     void setFloat(const std::string& name, float value);
     void setInt(const std::string& name, int value);
+	void setIVec2(const std::string& name, const glm::ivec2& value);
     void setVec2(const std::string& name, const glm::vec2& value);
     void setVec3(const std::string& name, const glm::vec3& value);
     void setVec4(const std::string& name, const glm::vec4& value);

@@ -580,7 +580,7 @@ public:
         t1->setRotation(glm::vec3(0.0f, 0.0f, 90.0f));
         t1->setScale(glm::vec3(1.0f, 1.0f, 1.0f));
 
-        auto player1Mat = std::make_shared<Material>("generic_texture.vert", "generic_texture.frag");
+        auto player1Mat = std::make_shared<Material>("ggx.vert", "ggx.frag");
 
         world.GetEntityManager().AddComponent<Playable>(player1, Playable{ 0, MakeZeroInputBlob(), (0 == playerId ? true : false) });
         world.GetEntityManager().AddComponent<SpaceShip>(player1, SpaceShip{ 100,-1,0,0,true });
@@ -592,7 +592,7 @@ public:
         t2->setRotation(glm::vec3(0.0f, 0.0f, 270.0f));
         t2->setScale(glm::vec3(1.0f, 1.0f, 1.0f));
 
-        auto player2Mat = std::make_shared<Material>("generic_texture.vert", "generic_texture.frag");
+        auto player2Mat = std::make_shared<Material>("ggx.vert", "ggx.frag");
 
         world.GetEntityManager().AddComponent<Playable>(player2, Playable{ 1, MakeZeroInputBlob(), (1 == playerId ? true : false) });
         world.GetEntityManager().AddComponent<SpaceShip>(player2, SpaceShip{ 100,-1,0,0,true });
@@ -626,7 +626,15 @@ public:
         tesc->setRotation(glm::vec3(90.0f, 0.0f, 0.0f));
         tesc->setScale(glm::vec3(6.0f, 6.0f, 6.0f));
 
-        auto escenarioMat = std::make_shared<Material>("generic_texture.vert", "generic_texture.frag");
+		Entity light = world.GetEntityManager().CreateEntity();
+		Transform* tlight = world.GetEntityManager().AddComponent<Transform>(light, Transform{});
+		tlight->setPosition(glm::vec3(0.0f, 0.0f, 15.0f));
+		PointLightComponent* lightComp = world.GetEntityManager().AddComponent<PointLightComponent>(light, PointLightComponent{});
+		lightComp->intensity = 1000.0f;
+		lightComp->radius = 100.0f;
+		lightComp->enabled = true;
+
+        auto escenarioMat = std::make_shared<Material>("ggx.vert", "ggx.frag");
         world.GetEntityManager().AddComponent<MeshComponent>(escenario, MeshComponent(new Mesh("escenario.glb", escenarioMat)));
 
         // Add render systems

@@ -39,6 +39,11 @@ void Material::setInt(const std::string& name, int value) {
     if (loc != -1) uniforms[name] = { loc, value };
 }
 
+void Material::setIVec2(const std::string& name, const glm::ivec2& value) {
+	GLint loc = getLocation(name);
+	if (loc != -1) uniforms[name] = { loc, value };
+}
+
 void Material::setVec2(const std::string& name, const glm::vec2& value) {
     GLint loc = getLocation(name);
     if (loc != -1) uniforms[name] = { loc, value };

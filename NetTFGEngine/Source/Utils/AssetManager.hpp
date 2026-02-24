@@ -42,12 +42,17 @@ struct Vertex {
     glm::vec3 position;
     glm::vec3 normal;
     glm::vec2 uv;
+    glm::vec4 tangent;
 };
 
 struct SubMeshRange {
     uint32_t indexOffset;   // starting index in EBO
     uint32_t indexCount;    // number of indices
-    GLuint diffuseTex;      // optional texture per primitive
+    GLuint   diffuseTex = 0;  // baseColor        (RGBA)
+    GLuint   normalTex = 0;  // tangent-space     (RGB)
+    GLuint   mrTex = 0;  // G=roughness B=metallic
+    GLuint   occlusionTex = 0;  // R=AO
+    GLuint   emissiveTex = 0;  // RGB HDR emissive
 };
 
 struct MeshBuffer {

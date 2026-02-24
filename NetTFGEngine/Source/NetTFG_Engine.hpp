@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <unordered_map>
 #include <string>
 #include <iostream>
@@ -260,8 +260,8 @@ private:
             {
                 MeshBuffer buffer{};
                 tinygltf::TinyGLTF loader;
-                tinygltf::Model model;
-                std::string err, warn;
+                tinygltf::Model    model;
+                std::string        err, warn;
 
                 if (!loader.LoadBinaryFromMemory(&model, &err, &warn, data, size, "")) {
                     Debug::Error("GLTF") << err << "\n";
@@ -271,42 +271,203 @@ private:
                 if (!warn.empty())
                     Debug::Warning("GLTF") << warn << "\n";
 
-                std::vector<Vertex> vertices;
+                std::vector<Vertex>   vertices;
                 std::vector<uint32_t> indices;
 
-                // ---- We'll pack all primitives into a single VBO/EBO ----
-                for (const auto& mesh : model.meshes) {
-                    for (const auto& prim : mesh.primitives) {
-                        // --- Extract attributes ---
-                        auto getAccessorFloat = [&](const std::string& name) -> const float* {
-                            auto it = prim.attributes.find(name);
-                            if (it == prim.attributes.end()) return nullptr;
-                            const auto& acc = model.accessors[it->second];
-                            const auto& view = model.bufferViews[acc.bufferView];
-                            const auto& buf = model.buffers[view.buffer];
-                            return reinterpret_cast<const float*>(buf.data.data() + view.byteOffset + acc.byteOffset);
-                            };
+                // -------------------------------------------------------
+                // Texture cache — key = (imageSource << 1 | sRGB)
+                // Ensures the same image uploaded as sRGB and linear are
+                // stored as two separate GL textures (different internal fmt).
+                // -------------------------------------------------------
+                std::unordered_map<uint64_t, GLuint> texCache;
 
-                        const float* pos = getAccessorFloat("POSITION");
-                        const float* norm = getAccessorFloat("NORMAL");
-                        const float* uv = getAccessorFloat("TEXCOORD_0");
+                auto loadTex = [&](int texIndex, bool sRGB) -> GLuint
+                    {
+                        if (texIndex < 0 || texIndex >= (int)model.textures.size())
+                            return 0;
 
-                        if (!pos) continue; // must have positions
+                        const auto& tex = model.textures[texIndex];
+                        if (tex.source < 0 || tex.source >= (int)model.images.size())
+                            return 0;
 
-                        size_t vertOffset = vertices.size();
-                        const auto& posAcc = model.accessors[prim.attributes.at("POSITION")];
-                        vertices.resize(vertOffset + posAcc.count);
+                        uint64_t key = ((uint64_t)tex.source << 1) | (sRGB ? 1u : 0u);
+                        auto it = texCache.find(key);
+                        if (it != texCache.end())
+                            return it->second;
 
-                        for (size_t i = 0; i < posAcc.count; ++i) {
-                            Vertex& v = vertices[vertOffset + i];
-                            v.position = glm::vec3(pos[i * 3 + 0], pos[i * 3 + 1], pos[i * 3 + 2]);
-                            v.normal = norm ? glm::vec3(norm[i * 3 + 0], norm[i * 3 + 1], norm[i * 3 + 2])
-                                : glm::vec3(0.0f, 1.0f, 0.0f);
-                            v.uv = uv ? glm::vec2(uv[i * 2 + 0], uv[i * 2 + 1])
-                                : glm::vec2(0.0f, 0.0f);
+                        const auto& img = model.images[tex.source];
+
+                        GLint internalFmt, uploadFmt;
+                        if (img.component == 4) {
+                            internalFmt = sRGB ? GL_SRGB8_ALPHA8 : GL_RGBA8;
+                            uploadFmt = GL_RGBA;
+                        }
+                        else {
+                            internalFmt = sRGB ? GL_SRGB8 : GL_RGB8;
+                            uploadFmt = GL_RGB;
                         }
 
-                        // --- Extract indices ---
+                        GLuint id = 0;
+                        glGenTextures(1, &id);
+                        glBindTexture(GL_TEXTURE_2D, id);
+                        glTexImage2D(GL_TEXTURE_2D, 0, internalFmt,
+                            (GLsizei)img.width, (GLsizei)img.height,
+                            0, uploadFmt, GL_UNSIGNED_BYTE, img.image.data());
+                        glGenerateMipmap(GL_TEXTURE_2D);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                        glBindTexture(GL_TEXTURE_2D, 0);
+
+                        texCache[key] = id;
+                        return id;
+                    };
+
+                // -------------------------------------------------------
+                // Stride-aware accessor helper.
+                // Returns a per-index accessor lambda, or nullptr if the
+                // attribute doesn't exist in this primitive.
+                // Handles both tightly-packed and interleaved buffers.
+                // -------------------------------------------------------
+                auto getAccessor = [&](const tinygltf::Primitive& prim,
+                    const std::string& name)
+                    -> std::function<const float* (size_t)>
+                    {
+                        auto it = prim.attributes.find(name);
+                        if (it == prim.attributes.end())
+                            return nullptr;
+
+                        const auto& acc = model.accessors[it->second];
+                        const auto& view = model.bufferViews[acc.bufferView];
+                        const auto& buf = model.buffers[view.buffer];
+                        const uint8_t* base = buf.data.data()
+                            + view.byteOffset
+                            + acc.byteOffset;
+
+                        // byteStride == 0 means tightly packed -- compute natural stride
+                        size_t componentSize = tinygltf::GetComponentSizeInBytes(acc.componentType);
+                        size_t numComponents = tinygltf::GetNumComponentsInType(acc.type);
+                        size_t stride = (view.byteStride != 0)
+                            ? view.byteStride
+                            : componentSize * numComponents;
+
+                        return [base, stride](size_t i) -> const float* {
+                            return reinterpret_cast<const float*>(base + i * stride);
+                            };
+                    };
+
+                // ---- Pack all primitives into a single VBO/EBO ----
+                for (const auto& mesh : model.meshes) {
+                    for (const auto& prim : mesh.primitives) {
+
+                        auto getPos = getAccessor(prim, "POSITION");
+                        auto getNorm = getAccessor(prim, "NORMAL");
+                        auto getUV = getAccessor(prim, "TEXCOORD_0");
+                        auto getTan = getAccessor(prim, "TANGENT");
+
+                        if (!getPos) continue;
+
+                        const auto& posAcc = model.accessors[prim.attributes.at("POSITION")];
+                        size_t      vertOffset = vertices.size();
+                        vertices.resize(vertOffset + posAcc.count);
+
+                        // ---- STEP 1: fill position, normal, uv, tangent ----
+                        for (size_t i = 0; i < posAcc.count; ++i) {
+                            Vertex& v = vertices[vertOffset + i];
+
+                            const float* p = getPos(i);
+                            v.position = glm::vec3(p[0], p[1], p[2]);
+
+                            if (getNorm) {
+                                const float* n = getNorm(i);
+                                v.normal = glm::vec3(n[0], n[1], n[2]);
+                            }
+                            else {
+                                v.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+                            }
+
+                            if (getUV) {
+                                const float* u = getUV(i);
+                                v.uv = glm::vec2(u[0], u[1]);
+                            }
+                            else {
+                                v.uv = glm::vec2(0.0f);
+                            }
+
+                            if (getTan) {
+                                const float* t = getTan(i);
+                                v.tangent = glm::vec4(t[0], t[1], t[2], t[3]);
+                            }
+                            // if no tangents: leave uninitialized, generated in STEP 2
+                        }
+
+                        // ---- STEP 2: generate tangents if mesh didn't provide them ----
+                        if (!getTan) {
+                            std::vector<glm::vec3> tangentAccum(posAcc.count, glm::vec3(0.0f));
+
+                            if (prim.indices >= 0) {
+                                const auto& idxAcc = model.accessors[prim.indices];
+                                const auto& idxView = model.bufferViews[idxAcc.bufferView];
+                                const auto& idxBuf = model.buffers[idxView.buffer];
+
+                                auto getIdx = [&](size_t i) -> uint32_t {
+                                    if (idxAcc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT)
+                                        return reinterpret_cast<const uint16_t*>(
+                                            idxBuf.data.data() + idxView.byteOffset + idxAcc.byteOffset)[i];
+                                    return reinterpret_cast<const uint32_t*>(
+                                        idxBuf.data.data() + idxView.byteOffset + idxAcc.byteOffset)[i];
+                                    };
+
+                                for (size_t i = 0; i + 2 < idxAcc.count; i += 3) {
+                                    uint32_t i0 = getIdx(i),
+                                        i1 = getIdx(i + 1),
+                                        i2 = getIdx(i + 2);
+
+                                    Vertex& v0 = vertices[vertOffset + i0];
+                                    Vertex& v1 = vertices[vertOffset + i1];
+                                    Vertex& v2 = vertices[vertOffset + i2];
+
+                                    glm::vec3 edge1 = v1.position - v0.position;
+                                    glm::vec3 edge2 = v2.position - v0.position;
+                                    glm::vec2 dUV1 = v1.uv - v0.uv;
+                                    glm::vec2 dUV2 = v2.uv - v0.uv;
+
+                                    float det = dUV1.x * dUV2.y - dUV2.x * dUV1.y;
+                                    if (glm::abs(det) < 1e-6f) continue;
+
+                                    float     f = 1.0f / det;
+                                    glm::vec3 T = f * (dUV2.y * edge1 - dUV1.y * edge2);
+
+                                    tangentAccum[i0] += T;
+                                    tangentAccum[i1] += T;
+                                    tangentAccum[i2] += T;
+                                }
+                            }
+
+                            for (size_t i = 0; i < posAcc.count; ++i) {
+                                Vertex& v = vertices[vertOffset + i];
+                                glm::vec3 N = v.normal;
+                                glm::vec3 T = tangentAccum[i];
+
+                                if (glm::length(T) < 1e-6f) {
+                                    // Degenerate UVs — build from normal
+                                    if (glm::abs(N.x) > 0.9f)
+                                        T = glm::normalize(glm::cross(N, glm::vec3(0.0f, 1.0f, 0.0f)));
+                                    else
+                                        T = glm::normalize(glm::cross(N, glm::vec3(1.0f, 0.0f, 0.0f)));
+                                }
+                                else {
+                                    T = glm::normalize(T - glm::dot(T, N) * N); // Gram-Schmidt
+                                }
+
+                                v.tangent = glm::vec4(T, 1.0f);
+                            }
+                        }
+
+                        // -------------------------------------------------------
+                        // Index extraction
+                        // -------------------------------------------------------
                         std::vector<uint32_t> primIndices;
                         if (prim.indices >= 0) {
                             const auto& idxAcc = model.accessors[prim.indices];
@@ -316,50 +477,53 @@ private:
                             primIndices.resize(idxAcc.count);
                             for (size_t i = 0; i < idxAcc.count; ++i) {
                                 if (idxAcc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT)
-                                    primIndices[i] = static_cast<uint32_t>(reinterpret_cast<const uint16_t*>(idxBuf.data.data() + idxView.byteOffset + idxAcc.byteOffset)[i]);
+                                    primIndices[i] = static_cast<uint32_t>(
+                                        reinterpret_cast<const uint16_t*>(
+                                            idxBuf.data.data()
+                                            + idxView.byteOffset
+                                            + idxAcc.byteOffset)[i]);
                                 else
-                                    primIndices[i] = reinterpret_cast<const uint32_t*>(idxBuf.data.data() + idxView.byteOffset + idxAcc.byteOffset)[i];
-                                primIndices[i] += static_cast<uint32_t>(vertOffset); // adjust for global VBO
-                            }
+                                    primIndices[i] =
+                                    reinterpret_cast<const uint32_t*>(
+                                        idxBuf.data.data()
+                                        + idxView.byteOffset
+                                        + idxAcc.byteOffset)[i];
 
+                                primIndices[i] += static_cast<uint32_t>(vertOffset);
+                            }
                             indices.insert(indices.end(), primIndices.begin(), primIndices.end());
                         }
 
-                        // --- Load texture for this primitive ---
-                        GLuint texID = 0;
-                        if (prim.material >= 0 && prim.material < model.materials.size()) {
-                            const auto& mat = model.materials[prim.material];
-                            if (mat.pbrMetallicRoughness.baseColorTexture.index >= 0) {
-                                int texIdx = mat.pbrMetallicRoughness.baseColorTexture.index;
-                                if (texIdx >= 0 && texIdx < model.textures.size()) {
-                                    const auto& tex = model.textures[texIdx];
-                                    const auto& img = model.images[tex.source];
-
-                                    glGenTextures(1, &texID);
-                                    glBindTexture(GL_TEXTURE_2D, texID);
-                                    GLint fmt = img.component == 3 ? GL_RGB : GL_RGBA;
-                                    glTexImage2D(GL_TEXTURE_2D, 0, fmt, static_cast<GLsizei>(img.width),
-                                        static_cast<GLsizei>(img.height), 0, fmt, GL_UNSIGNED_BYTE, img.image.data());
-                                    glGenerateMipmap(GL_TEXTURE_2D);
-                                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-                                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-                                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-                                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                                    glBindTexture(GL_TEXTURE_2D, 0);
-                                }
-                            }
-                        }
-
-                        // --- Save submesh range ---
-                        SubMeshRange smr;
+                        // -------------------------------------------------------
+                        // Load all PBR textures
+                        // -------------------------------------------------------
+                        SubMeshRange smr{};
                         smr.indexOffset = static_cast<uint32_t>(indices.size() - primIndices.size());
                         smr.indexCount = static_cast<uint32_t>(primIndices.size());
-                        smr.diffuseTex = texID;
+
+                        if (prim.material >= 0 && prim.material < (int)model.materials.size()) {
+                            const auto& mat = model.materials[prim.material];
+                            const auto& pbr = mat.pbrMetallicRoughness;
+
+                            // sRGB -- gamma-encoded by artists
+                            smr.diffuseTex = loadTex(pbr.baseColorTexture.index, true);
+
+                            // Linear -- data textures, must NOT be gamma-corrected
+                            smr.normalTex = loadTex(mat.normalTexture.index, false);
+                            smr.mrTex = loadTex(pbr.metallicRoughnessTexture.index, false);
+                            smr.occlusionTex = loadTex(mat.occlusionTexture.index, false);
+
+                            // sRGB -- gamma-encoded
+                            smr.emissiveTex = loadTex(mat.emissiveTexture.index, true);
+                        }
+
                         buffer.subMeshes.push_back(smr);
                     }
                 }
 
-                // --- Upload to GPU ---
+                // -------------------------------------------------------
+                // Upload geometry to GPU
+                // -------------------------------------------------------
                 glGenVertexArrays(1, &buffer.VAO);
                 glGenBuffers(1, &buffer.VBO);
                 glGenBuffers(1, &buffer.EBO);
@@ -367,26 +531,50 @@ private:
                 glBindVertexArray(buffer.VAO);
 
                 glBindBuffer(GL_ARRAY_BUFFER, buffer.VBO);
-                glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(Vertex), vertices.data(), GL_STATIC_DRAW);
+                glBufferData(GL_ARRAY_BUFFER,
+                    vertices.size() * sizeof(Vertex),
+                    vertices.data(), GL_STATIC_DRAW);
 
                 glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, buffer.EBO);
-                glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(uint32_t), indices.data(), GL_STATIC_DRAW);
+                glBufferData(GL_ELEMENT_ARRAY_BUFFER,
+                    indices.size() * sizeof(uint32_t),
+                    indices.data(), GL_STATIC_DRAW);
 
-                glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, position));
+                // location 0 -- position
+                glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                    (void*)offsetof(Vertex, position));
                 glEnableVertexAttribArray(0);
-                glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, normal));
+
+                // location 1 -- normal
+                glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                    (void*)offsetof(Vertex, normal));
                 glEnableVertexAttribArray(1);
-                glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, uv));
+
+                // location 2 -- uv
+                glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                    (void*)offsetof(Vertex, uv));
                 glEnableVertexAttribArray(2);
+
+                // location 3 -- tangent (vec4, w = bitangent handedness)
+                glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+                    (void*)offsetof(Vertex, tangent));
+                glEnableVertexAttribArray(3);
 
                 glBindVertexArray(0);
 
                 return buffer;
             },
+
             // Destroyer
-            [](MeshBuffer buffer) {
-                for (auto& sm : buffer.subMeshes)
-                    if (sm.diffuseTex) glDeleteTextures(1, &sm.diffuseTex);
+            [](MeshBuffer buffer)
+            {
+                for (auto& sm : buffer.subMeshes) {
+                    if (sm.diffuseTex)   glDeleteTextures(1, &sm.diffuseTex);
+                    if (sm.normalTex)    glDeleteTextures(1, &sm.normalTex);
+                    if (sm.mrTex)        glDeleteTextures(1, &sm.mrTex);
+                    if (sm.occlusionTex) glDeleteTextures(1, &sm.occlusionTex);
+                    if (sm.emissiveTex)  glDeleteTextures(1, &sm.emissiveTex);
+                }
                 if (buffer.EBO) glDeleteBuffers(1, &buffer.EBO);
                 if (buffer.VBO) glDeleteBuffers(1, &buffer.VBO);
                 if (buffer.VAO) glDeleteVertexArrays(1, &buffer.VAO);

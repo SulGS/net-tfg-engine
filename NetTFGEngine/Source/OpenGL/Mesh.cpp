@@ -14,29 +14,75 @@ Mesh::Mesh(const std::string& meshName,
     }
 }
 
+// Mesh.cpp
+void Mesh::bindMaterial(const glm::mat4& model,
+    const glm::mat4& view,
+    const glm::mat4& projection) const
+{
+    if (!material) return;
+    material->bind(model, view, projection);
+}
+
+void Mesh::draw() const
+{
+    if (!buffer) return;
+
+    glBindVertexArray(buffer->VAO);
+    for (const auto& sm : buffer->subMeshes)
+    {
+        if (sm.diffuseTex) {
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, sm.diffuseTex);
+            material->setInt("uAlbedoTex", 0);
+        }
+        if (sm.normalTex) {
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, sm.normalTex);
+            material->setInt("uNormalTex", 1);
+        }
+        if (sm.mrTex) {
+            glActiveTexture(GL_TEXTURE2);
+            glBindTexture(GL_TEXTURE_2D, sm.mrTex);
+            material->setInt("uMRTex", 2);
+        }
+        if (sm.occlusionTex) {
+            glActiveTexture(GL_TEXTURE3);
+            glBindTexture(GL_TEXTURE_2D, sm.occlusionTex);
+            material->setInt("uOcclusionTex", 3);
+        }
+        if (sm.emissiveTex) {
+            glActiveTexture(GL_TEXTURE4);
+            glBindTexture(GL_TEXTURE_2D, sm.emissiveTex);
+            material->setInt("uEmissiveTex", 4);
+        }
+        glDrawElements(GL_TRIANGLES, sm.indexCount, GL_UNSIGNED_INT,
+            (void*)(size_t)(sm.indexOffset * sizeof(uint32_t)));
+    }
+    glBindVertexArray(0);
+}
 
 void Mesh::render(const glm::mat4& model,
     const glm::mat4& view,
     const glm::mat4& projection) const
 {
-    if (!buffer || !material)
+    if (!buffer || !material) return;
+    bindMaterial(model, view, projection);
+    draw();
+}
+
+void Mesh::drawDepthOnly(const glm::mat4& mvp, GLuint depthShader) const
+{
+    if (!buffer)
         return;
 
-    material->bind(model, view, projection);
-    glBindVertexArray(buffer->VAO);
+    // Caller already bound depthShader via glUseProgram
+    GLint loc = glGetUniformLocation(depthShader, "uMVP");
+    glUniformMatrix4fv(loc, 1, GL_FALSE, glm::value_ptr(mvp));
 
+    glBindVertexArray(buffer->VAO);
     for (const auto& sm : buffer->subMeshes)
-    {
-        if (sm.diffuseTex != 0) {
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(GL_TEXTURE_2D, sm.diffuseTex);
-            material->setInt("uTexture", 0);
-        }
-        glDrawElements(GL_TRIANGLES, sm.indexCount, GL_UNSIGNED_INT, (void*)(size_t)(sm.indexOffset * sizeof(uint32_t)));
-    }
+        glDrawElements(GL_TRIANGLES, sm.indexCount, GL_UNSIGNED_INT,
+            (void*)(size_t)(sm.indexOffset * sizeof(uint32_t)));
 
     glBindVertexArray(0);
 }
-
-
-

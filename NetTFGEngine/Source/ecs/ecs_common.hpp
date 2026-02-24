@@ -116,6 +116,13 @@ private:
     }
 };
 
+struct PointLightComponent : public IComponent {
+    glm::vec3 color = glm::vec3(1.0f);   // RGB, values in [0,1]
+    float     intensity = 1.0f;               // multiplier, can exceed 1 for HDR
+    float     radius = 10.0f;              // world-space cutoff distance
+    bool      enabled = true;
+};
+
 class Camera : public IComponent {
 public:
     enum class ProjectionType {
