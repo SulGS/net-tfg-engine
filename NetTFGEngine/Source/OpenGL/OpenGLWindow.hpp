@@ -23,12 +23,22 @@ public:
     float getAspectRatio() const;
     GLFWwindow* getWindow() { return window; }
 
+    
+
+    // Public
+    bool wasResized();  // returns true once, then resets the flag
+
 private:
     void initializeGLFW();
     void initializeGLEW();
     void setupOpenGL();
 
     GLFWwindow* window;
+
+    // Private members
+    int currentWidth;
+    int currentHeight;
+    bool resized = false;
 };
 
 #endif // OPENGLWINDOW_HPP

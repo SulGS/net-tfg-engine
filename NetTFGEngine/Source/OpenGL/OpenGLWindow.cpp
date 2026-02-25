@@ -19,14 +19,19 @@ OpenGLWindow::OpenGLWindow(int width, int height, const std::string& title)
     initializeGLEW();
     setupOpenGL();
 
+    glfwSetWindowUserPointer(window, this);  
     // Framebuffer resize callback
-    glfwSetFramebufferSizeCallback(window, [](GLFWwindow*, int w, int h){
+    glfwSetFramebufferSizeCallback(window, [](GLFWwindow* win, int w, int h) {
         glViewport(0, 0, w, h);
-    });
+        auto* self = static_cast<OpenGLWindow*>(glfwGetWindowUserPointer(win));
+        self->currentWidth = w;
+        self->currentHeight = h;
+        self->resized = true;
+        });
 
     int w, h;
-    glfwGetFramebufferSize(window, &w, &h);
-    glViewport(0, 0, w, h);
+    glfwGetFramebufferSize(window, &currentWidth, &currentHeight);
+    glViewport(0, 0, currentWidth, currentHeight);
 }
 
 OpenGLWindow::~OpenGLWindow() {
@@ -62,17 +67,13 @@ void OpenGLWindow::close() {
 }
 
 // -------------------- Window Info --------------------
+int OpenGLWindow::getWidth()  const { return currentWidth; }
+int OpenGLWindow::getHeight() const { return currentHeight; }
 
-int OpenGLWindow::getWidth() const {
-    int width;
-    glfwGetFramebufferSize(window, &width, nullptr);
-    return width;
-}
-
-int OpenGLWindow::getHeight() const {
-    int height;
-    glfwGetFramebufferSize(window, nullptr, &height);
-    return height;
+bool OpenGLWindow::wasResized() {
+    bool r = resized;
+    resized = false; // consume the flag
+    return r;
 }
 
 float OpenGLWindow::getAspectRatio() const {

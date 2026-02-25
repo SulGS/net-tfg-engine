@@ -79,14 +79,30 @@ public:
         m_tilesX = (screenW + TILE_SIZE - 1) / TILE_SIZE;
         m_tilesY = (screenH + TILE_SIZE - 1) / TILE_SIZE;
 
-        // Recreate size-dependent resources
-        glDeleteFramebuffers(1, &m_depthFBO);
-        glDeleteTextures(1, &m_depthTex);
-        glDeleteBuffers(1, &m_lightIndexSSBO);
-        glDeleteBuffers(1, &m_tileGridSSBO);
-
+        // --- Depth FBO (screen-size dependent) ---
+        glDeleteFramebuffers(1, &m_depthFBO); m_depthFBO = 0;
+        glDeleteTextures(1, &m_depthTex);     m_depthTex = 0;
         InitDepthFBO();
-        InitSSBOs();
+
+        // --- Only the tile-dependent SSBOs need rebuilding ---
+        // m_lightSSBO is MAX_LIGHTS fixed size — do NOT touch it
+        int totalTiles = m_tilesX * m_tilesY;
+
+        glDeleteBuffers(1, &m_lightIndexSSBO); m_lightIndexSSBO = 0;
+        glGenBuffers(1, &m_lightIndexSSBO);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_lightIndexSSBO);
+        glBufferData(GL_SHADER_STORAGE_BUFFER,
+            sizeof(uint32_t) * totalTiles * MAX_LIGHTS_TILE,
+            nullptr, GL_DYNAMIC_DRAW);
+
+        glDeleteBuffers(1, &m_tileGridSSBO); m_tileGridSSBO = 0;
+        glGenBuffers(1, &m_tileGridSSBO);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_tileGridSSBO);
+        glBufferData(GL_SHADER_STORAGE_BUFFER,
+            sizeof(GPUTileData) * totalTiles,
+            nullptr, GL_DYNAMIC_DRAW);
+
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
     }
 
     void Update(EntityManager& entityManager,

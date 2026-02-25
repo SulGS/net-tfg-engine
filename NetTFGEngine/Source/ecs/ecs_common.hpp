@@ -223,7 +223,12 @@ public:
     float getFarPlane() const { return farPlane; }
     ProjectionType getProjectionType() const { return projectionType; }
 
+	bool getIsResized() const { return isResized; }
+	void setIsResized(bool resized) { isResized = resized; }
+
 private:
+
+    bool isResized;
     // Projection parameters
     float fov;
     float aspectRatio;

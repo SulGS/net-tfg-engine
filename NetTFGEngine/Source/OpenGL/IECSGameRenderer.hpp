@@ -68,6 +68,20 @@ public:
     void Render(const GameStateBlob& state, OpenGLWindow* window) override {
         GameState_To_ECSWorld(state);
 
+		RenderSystem* renderSys = world.GetSystem<RenderSystem>();
+
+        if (window->wasResized()) 
+        {
+			renderSys->Resize(window->getWidth(), window->getHeight());
+        }
+
+		auto activeCamera = world.GetEntityManager().CreateQuery<Camera, Transform>();
+
+		for (auto [entity, camera, transform] : activeCamera) {
+			camera->updateAspectRatio(static_cast<float>(window->getWidth()) / window->getHeight());
+			break; // Only one camera supported for now
+		}
+
         UIRenderSystem* ui_system = world.GetSystem<UIRenderSystem>();
         ui_system->UpdateScreenSize(window->getWidth(),window->getHeight());
         
