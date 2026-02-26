@@ -7,6 +7,7 @@
 #include "Mesh.hpp"
 #include "Material.hpp"
 #include "OpenGLIncludes.hpp"
+#include "RenderSettings.hpp"
 #include <glm/gtc/type_ptr.hpp>
 #include <vector>
 #include <string>
@@ -26,15 +27,12 @@ struct GPUTileData {
     uint32_t count;
 };
 
-// Reemplaza GPUShadowData anterior
 struct GPUShadowData {
     glm::mat4 lightSpaceMatrices[6]; // una por cara del cubo
     int       lightIndex;
     float     farPlane;
     int       pad[2];
 };
-
-
 
 // -------------------------------------------------------
 //  Forward+ RenderSystem
@@ -52,10 +50,18 @@ public:
 
     // ---------------------------------------------------
     //  Call once after the OpenGL context is ready.
+    //  Reads init-time constants from RenderSettings.
     //  screenW / screenH must match your actual viewport.
     // ---------------------------------------------------
     void Init(int screenW, int screenH)
     {
+        // ---- Read init-time settings once ----
+        const auto& rs = RenderSettings::instance();
+        MAX_LIGHTS = rs.getMaxLights();
+        MAX_LIGHTS_TILE = rs.getMaxLightsPerTile();
+        TILE_SIZE = rs.getTileSize();
+        MAX_SHADOW_LIGHTS = rs.getMaxShadowLights();
+
         m_screenW = screenW;
         m_screenH = screenH;
         m_tilesX = (screenW + TILE_SIZE - 1) / TILE_SIZE;
@@ -105,6 +111,19 @@ public:
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
     }
 
+    // ---------------------------------------------------
+    //  Re-creates the shadow cubemap array using the
+    //  current RenderSettings::getShadowResolution().
+    //  Call this after changing shadow resolution at runtime.
+    // ---------------------------------------------------
+    void ReInitShadows()
+    {
+        glDeleteFramebuffers(1, &m_shadowFBO);       m_shadowFBO = 0;
+        glDeleteTextures(1, &m_shadowCubeArray);     m_shadowCubeArray = 0;
+        glDeleteBuffers(1, &m_shadowDataSSBO);        m_shadowDataSSBO = 0;
+        InitShadowCubeArray();
+    }
+
     void Update(EntityManager& entityManager,
         std::vector<EventEntry>& events,
         bool isServer,
@@ -143,15 +162,19 @@ public:
         // ---- Pass 1: upload lights to SSBO ----
         UploadLights(entityManager);
 
-        ShadowPass(entityManager, meshQuery);
+        // ---- Pass 2 (optional): shadow pass ----
+        if (RenderSettings::instance().getShadowsEnabled())
+            ShadowPass(entityManager, meshQuery);
+        else
+            m_shadowCount = 0;
 
-        // ---- Pass 2: depth pre-pass ----
+        // ---- Pass 3: depth pre-pass ----
         DepthPrePass(meshQuery, view, projection);
 
-        // ---- Pass 3: light culling compute ----
+        // ---- Pass 4: light culling compute ----
         LightCullPass(view, projection);
 
-        // ---- Pass 4: full shading ----
+        // ---- Pass 5: full shading ----
         ShadingPass(meshQuery, view, projection, cameraPos);
 
         entityManager.releaseMutex();
@@ -166,8 +189,6 @@ public:
         glDeleteBuffers(1, &m_tileGridSSBO);
         glDeleteProgram(m_depthShader);
         glDeleteProgram(m_lightCullShader);
-
-        // AÑADIR:
         glDeleteFramebuffers(1, &m_shadowFBO);
         glDeleteTextures(1, &m_shadowCubeArray);
         glDeleteBuffers(1, &m_shadowDataSSBO);
@@ -176,12 +197,12 @@ public:
 
 private:
     // =====================================================
-    //  Constants
+    //  Init-time constants — set from RenderSettings in Init()
     // =====================================================
-    static constexpr int     TILE_SIZE = 16;
-    static constexpr int     MAX_LIGHTS = 1024;
-    static constexpr int     MAX_LIGHTS_TILE = 256; // per tile
-    static constexpr int MAX_SHADOW_LIGHTS = 16; // cubemaps son costosos
+    int TILE_SIZE = 16;
+    int MAX_LIGHTS = 512;
+    int MAX_LIGHTS_TILE = 256;
+    int MAX_SHADOW_LIGHTS = 8;
 
     // =====================================================
     //  GPU resource handles
@@ -191,18 +212,18 @@ private:
     GLuint m_lightSSBO = 0; // binding 0 — PointLight array
     GLuint m_lightIndexSSBO = 0; // binding 1 — flat uint index list
     GLuint m_tileGridSSBO = 0; // binding 2 — (offset, count) per tile
-    GLuint m_depthShader = 0; // simple MVP-only program
-    GLuint m_lightCullShader = 0; // compute program
+    GLuint m_depthShader = 0;
+    GLuint m_lightCullShader = 0;
 
     int m_screenW = 0, m_screenH = 0;
     int m_tilesX = 0, m_tilesY = 0;
     int m_lightCount = 0;
 
-    GLuint m_shadowCubeArray = 0;  // GL_TEXTURE_CUBE_MAP_ARRAY
+    GLuint m_shadowCubeArray = 0;
     GLuint m_shadowFBO = 0;
-    GLuint m_shadowShader = 0;  // vert + geom + frag
+    GLuint m_shadowShader = 0;
     GLuint m_shadowDataSSBO = 0;
-    int m_shadowRes = 512;
+    int    m_shadowRes = 512;
     int    m_shadowCount = 0;
 
     // =====================================================
@@ -235,21 +256,18 @@ private:
     {
         int totalTiles = m_tilesX * m_tilesY;
 
-        // Binding 0 — light data (fixed size, updated every frame)
         glGenBuffers(1, &m_lightSSBO);
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_lightSSBO);
         glBufferData(GL_SHADER_STORAGE_BUFFER,
             sizeof(GPUPointLight) * MAX_LIGHTS,
             nullptr, GL_DYNAMIC_DRAW);
 
-        // Binding 1 — flat list of light indices visible per tile
         glGenBuffers(1, &m_lightIndexSSBO);
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_lightIndexSSBO);
         glBufferData(GL_SHADER_STORAGE_BUFFER,
             sizeof(uint32_t) * totalTiles * MAX_LIGHTS_TILE,
             nullptr, GL_DYNAMIC_DRAW);
 
-        // Binding 2 — per-tile (offset, count) into the index list
         glGenBuffers(1, &m_tileGridSSBO);
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_tileGridSSBO);
         glBufferData(GL_SHADER_STORAGE_BUFFER,
@@ -261,15 +279,14 @@ private:
 
     void InitShadowCubeArray()
     {
-        static constexpr int SHADOW_RES = 2048;
-        m_shadowRes = SHADOW_RES;
+        // Read shadow resolution from RenderSettings
+        m_shadowRes = RenderSettings::instance().getShadowResolution();
 
-        // GL_TEXTURE_CUBE_MAP_ARRAY: profundidad = MAX_SHADOW_LIGHTS * 6
         glGenTextures(1, &m_shadowCubeArray);
         glBindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, m_shadowCubeArray);
         glTexImage3D(GL_TEXTURE_CUBE_MAP_ARRAY, 0, GL_DEPTH_COMPONENT32F,
-            SHADOW_RES, SHADOW_RES,
-            MAX_SHADOW_LIGHTS * 6,  // cada cubemap ocupa 6 capas
+            m_shadowRes, m_shadowRes,
+            MAX_SHADOW_LIGHTS * 6,
             0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
 
         glTexParameteri(GL_TEXTURE_CUBE_MAP_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -278,16 +295,13 @@ private:
         glTexParameteri(GL_TEXTURE_CUBE_MAP_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_CUBE_MAP_ARRAY, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
 
-        // Un solo FBO — cambiaremos la capa adjunta en cada draw call
         glGenFramebuffers(1, &m_shadowFBO);
         glBindFramebuffer(GL_FRAMEBUFFER, m_shadowFBO);
-        // Adjuntamos toda la textura; el geometry shader selecciona la capa
         glFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, m_shadowCubeArray, 0);
         glDrawBuffer(GL_NONE);
         glReadBuffer(GL_NONE);
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-        // SSBO para las matrices y metadatos de sombra
         glGenBuffers(1, &m_shadowDataSSBO);
         glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_shadowDataSSBO);
         glBufferData(GL_SHADER_STORAGE_BUFFER,
@@ -312,61 +326,6 @@ private:
             Debug::Error("RenderSystem::Shader") << log << "\n";
         }
         return s;
-    }
-
-    void CompileShadowShader()
-    {
-        const char* vert = R"GLSL(
-        #version 430 core
-        layout(location = 0) in vec3 aPos;
-        uniform mat4 uModel;
-        void main() {
-            gl_Position = uModel * vec4(aPos, 1.0);
-        }
-    )GLSL";
-
-        // El geometry shader emite 6 copias del triángulo, una por cara
-        const char* geom = R"GLSL(
-        #version 430 core
-        layout(triangles) in;
-        layout(triangle_strip, max_vertices = 18) out;
-
-        uniform mat4 uLightSpaceMatrices[6];
-        uniform int  uCubeArrayLayer; // índice base: lightIdx * 6
-
-        out vec4 gFragPos;
-
-        void main() {
-            for (int face = 0; face < 6; face++) {
-                gl_Layer = uCubeArrayLayer + face; // selecciona capa del array
-                for (int v = 0; v < 3; v++) {
-                    gFragPos = gl_in[v].gl_Position;
-                    gl_Position = uLightSpaceMatrices[face] * gFragPos;
-                    EmitVertex();
-                }
-                EndPrimitive();
-            }
-        }
-    )GLSL";
-
-        const char* frag = R"GLSL(
-        #version 430 core
-        in  vec4  gFragPos;
-        uniform vec3  uLightPos;
-        uniform float uFarPlane;
-
-        void main() {
-            // Almacenar distancia lineal normalizada en [0, 1]
-            float dist = length(gFragPos.xyz - uLightPos) / uFarPlane;
-            gl_FragDepth = dist;
-        }
-    )GLSL";
-
-        m_shadowShader = LinkProgram({
-            CompileStage(GL_VERTEX_SHADER,   vert),
-            CompileStage(GL_GEOMETRY_SHADER, geom),
-            CompileStage(GL_FRAGMENT_SHADER, frag)
-            });
     }
 
     static GLuint LinkProgram(std::initializer_list<GLuint> stages)
@@ -407,7 +366,6 @@ private:
 
     void CompileLightCullShader()
     {
-        // One workgroup = one tile (16×16 threads)
         const char* comp = R"GLSL(
             #version 430 core
             layout(local_size_x = 16, local_size_y = 16) in;
@@ -430,7 +388,6 @@ private:
             shared uint s_tileLightCount;
             shared uint s_tileLightIndices[256];
 
-            // Reconstruct a view-space frustum plane from two NDC edge points
             vec4 CreatePlane(vec3 p0, vec3 p1, vec3 p2) {
                 vec3 n = normalize(cross(p1 - p0, p2 - p0));
                 return vec4(n, -dot(n, p0));
@@ -442,7 +399,6 @@ private:
                 int   tileIndex = tileID.y * tileCount.x + tileID.x;
                 ivec2 pixel     = ivec2(gl_GlobalInvocationID.xy);
 
-                // ---- init shared memory ----
                 if (gl_LocalInvocationIndex == 0u) {
                     s_minDepthInt    = 0xFFFFFFFFu;
                     s_maxDepthInt    = 0u;
@@ -450,7 +406,6 @@ private:
                 }
                 barrier();
 
-                // ---- gather min/max depth for this tile ----
                 vec2 uv = (vec2(pixel) + 0.5) / vec2(uScreenSize);
                 if (pixel.x < uScreenSize.x && pixel.y < uScreenSize.y) {
                     float depth = texture(uDepthMap, uv).r;
@@ -459,17 +414,13 @@ private:
                 }
                 barrier();
 
-                // Convert depth to view-space Z  (depth buffer is [0,1])
                 float minDepthVS = uintBitsToFloat(s_minDepthInt);
                 float maxDepthVS = uintBitsToFloat(s_maxDepthInt);
 
-                // ---- build 4 side frustum planes in view space ----
-                // Tile corners in NDC
                 vec2 step  = 2.0 / vec2(tileCount);
-                vec2 ndcLB = vec2(tileID) * step - 1.0;           // left-bottom
-                vec2 ndcRT = ndcLB + step;                         // right-top
+                vec2 ndcLB = vec2(tileID) * step - 1.0;
+                vec2 ndcRT = ndcLB + step;
 
-                // Unproject to view space on the near plane (z = -1 NDC → -near)
                 mat4 invProj = inverse(uProjection);
                 vec3 lb = vec3((invProj * vec4(ndcLB.x, ndcLB.y, -1.0, 1.0)).xyz);
                 vec3 rb = vec3((invProj * vec4(ndcRT.x, ndcLB.y, -1.0, 1.0)).xyz);
@@ -478,27 +429,23 @@ private:
                 vec3 origin = vec3(0.0);
 
                 vec4 planes[4];
-                planes[0] = CreatePlane(origin, lb, lt); // left
-                planes[1] = CreatePlane(origin, rt, rb); // right
-                planes[2] = CreatePlane(origin, rb, lb); // bottom
-                planes[3] = CreatePlane(origin, lt, rt); // top
+                planes[0] = CreatePlane(origin, lb, lt);
+                planes[1] = CreatePlane(origin, rt, rb);
+                planes[2] = CreatePlane(origin, rb, lb);
+                planes[3] = CreatePlane(origin, lt, rt);
 
-                // ---- cull lights against this tile ----
-                // Each thread handles a strided subset of lights
                 for (int i = int(gl_LocalInvocationIndex); i < uLightCount; i += 256) {
-                    vec4 lightViewPos = uView * vec4(lights[i].posRadius.xyz, 1.0);
-                    float radius = lights[i].posRadius.w;
+                    vec4  lightViewPos = uView * vec4(lights[i].posRadius.xyz, 1.0);
+                    float radius       = lights[i].posRadius.w;
 
-                    // Depth range test (view-space Z is negative in OpenGL)
                     float lightMinZ = -lightViewPos.z - radius;
                     float lightMaxZ = -lightViewPos.z + radius;
                     if (lightMaxZ < minDepthVS || lightMinZ > maxDepthVS) continue;
 
-                    // Frustum plane test (sphere vs 4 planes)
                     bool inside = true;
                     for (int p = 0; p < 4; p++) {
-                        float dist = dot(planes[p], vec4(lightViewPos.xyz, 1.0));
-                        if (dist < -radius) { inside = false; break; }
+                        if (dot(planes[p], vec4(lightViewPos.xyz, 1.0)) < -radius)
+                            { inside = false; break; }
                     }
 
                     if (inside) {
@@ -509,7 +456,6 @@ private:
                 }
                 barrier();
 
-                // ---- write results to SSBOs (one thread per tile) ----
                 if (gl_LocalInvocationIndex == 0u) {
                     uint offset = uint(tileIndex) * 256u;
                     grid[tileIndex].offset = offset;
@@ -525,8 +471,85 @@ private:
             });
     }
 
+    void CompileShadowShader()
+    {
+        const char* vert = R"GLSL(
+            #version 430 core
+            layout(location = 0) in vec3 aPos;
+            uniform mat4 uModel;
+            void main() { gl_Position = uModel * vec4(aPos, 1.0); }
+        )GLSL";
+
+        const char* geom = R"GLSL(
+            #version 430 core
+            layout(triangles) in;
+            layout(triangle_strip, max_vertices = 18) out;
+
+            uniform mat4 uLightSpaceMatrices[6];
+            uniform int  uCubeArrayLayer;
+
+            out vec4 gFragPos;
+
+            void main() {
+                for (int face = 0; face < 6; face++) {
+                    gl_Layer = uCubeArrayLayer + face;
+                    for (int v = 0; v < 3; v++) {
+                        gFragPos    = gl_in[v].gl_Position;
+                        gl_Position = uLightSpaceMatrices[face] * gFragPos;
+                        EmitVertex();
+                    }
+                    EndPrimitive();
+                }
+            }
+        )GLSL";
+
+        const char* frag = R"GLSL(
+            #version 430 core
+            in  vec4  gFragPos;
+            uniform vec3  uLightPos;
+            uniform float uFarPlane;
+            void main() {
+                gl_FragDepth = length(gFragPos.xyz - uLightPos) / uFarPlane;
+            }
+        )GLSL";
+
+        m_shadowShader = LinkProgram({
+            CompileStage(GL_VERTEX_SHADER,   vert),
+            CompileStage(GL_GEOMETRY_SHADER, geom),
+            CompileStage(GL_FRAGMENT_SHADER, frag)
+            });
+    }
+
+    // =====================================================
+    //  Per-frame passes
+    // =====================================================
+
+    void UploadLights(EntityManager& em)
+    {
+        std::vector<GPUPointLight> lights;
+        lights.reserve(MAX_LIGHTS);
+
+        auto q = em.CreateQuery<PointLightComponent, Transform>();
+        for (auto [entity, light, xform] : q) {
+            if ((int)lights.size() >= MAX_LIGHTS) break;
+            GPUPointLight gl;
+            gl.posRadius = glm::vec4(xform->getPosition(), light->radius);
+            gl.colorIntensity = glm::vec4(light->color, light->intensity);
+            lights.push_back(gl);
+        }
+
+        m_lightCount = (int)lights.size();
+
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_lightSSBO);
+        glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
+            sizeof(GPUPointLight) * m_lightCount, lights.data());
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    }
+
     void ShadowPass(EntityManager& em, auto& meshQuery)
     {
+        const auto& rs = RenderSettings::instance();
+
         std::vector<GPUShadowData> shadowDataVec;
 
         glBindFramebuffer(GL_FRAMEBUFFER, m_shadowFBO);
@@ -535,11 +558,11 @@ private:
         glEnable(GL_DEPTH_TEST);
         glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
         glEnable(GL_POLYGON_OFFSET_FILL);
-        glPolygonOffset(2.0f, 4.0f);
+        glPolygonOffset(rs.getShadowBiasFactor(), rs.getShadowBiasUnits()); // runtime setting
 
         glUseProgram(m_shadowShader);
 
-        int shadowIdx = 0;
+        int  shadowIdx = 0;
         auto lightQuery = em.CreateQuery<PointLightComponent, Transform>();
 
         for (auto [entity, light, xform] : lightQuery)
@@ -549,11 +572,9 @@ private:
             glm::vec3 pos = xform->getPosition();
             float     farPlane = light->radius;
 
-            // Proyección igual para las 6 caras
-            glm::mat4 shadowProj = glm::perspective(
-                glm::radians(90.0f), 1.0f, 0.01f, farPlane);
+            glm::mat4 shadowProj = glm::perspective(glm::radians(90.0f), 1.0f,
+                rs.getShadowNearPlane(), farPlane);
 
-            // Las 6 vistas del cubemap
             glm::mat4 views[6] = {
                 shadowProj * glm::lookAt(pos, pos + glm::vec3(1, 0, 0), glm::vec3(0,-1, 0)),
                 shadowProj * glm::lookAt(pos, pos + glm::vec3(-1, 0, 0), glm::vec3(0,-1, 0)),
@@ -563,7 +584,6 @@ private:
                 shadowProj * glm::lookAt(pos, pos + glm::vec3(0, 0,-1), glm::vec3(0,-1, 0)),
             };
 
-            // Subir las 6 matrices al geometry shader
             for (int f = 0; f < 6; f++) {
                 std::string uni = "uLightSpaceMatrices[" + std::to_string(f) + "]";
                 glUniformMatrix4fv(glGetUniformLocation(m_shadowShader, uni.c_str()),
@@ -572,18 +592,15 @@ private:
             glUniform3fv(glGetUniformLocation(m_shadowShader, "uLightPos"),
                 1, glm::value_ptr(pos));
             glUniform1f(glGetUniformLocation(m_shadowShader, "uFarPlane"), farPlane);
-            glUniform1i(glGetUniformLocation(m_shadowShader, "uCubeArrayLayer"),
-                shadowIdx * 6);
+            glUniform1i(glGetUniformLocation(m_shadowShader, "uCubeArrayLayer"), shadowIdx * 6);
 
-            // Renderizar todos los meshes para esta luz
             for (auto [me, meshC, xf] : meshQuery) {
                 if (!meshC->enabled || !meshC->mesh) continue;
                 glUniformMatrix4fv(glGetUniformLocation(m_shadowShader, "uModel"),
                     1, GL_FALSE, glm::value_ptr(xf->getModelMatrix()));
-                meshC->mesh->drawDepthOnly(glm::mat4(1.0f), m_shadowShader); // MVP lo hace el geom shader
+                meshC->mesh->drawDepthOnly(glm::mat4(1.0f), m_shadowShader);
             }
 
-            // Guardar metadatos
             GPUShadowData sd;
             for (int f = 0; f < 6; f++) sd.lightSpaceMatrices[f] = views[f];
             sd.lightIndex = shadowIdx;
@@ -605,37 +622,6 @@ private:
         glViewport(0, 0, m_screenW, m_screenH);
     }
 
-    // =====================================================
-    //  Per-frame passes
-    // =====================================================
-
-    // --- Pass 1: stream PointLightComponent data to SSBO ---
-    void UploadLights(EntityManager& em)
-    {
-        std::vector<GPUPointLight> lights;
-        lights.reserve(MAX_LIGHTS);
-
-        auto q = em.CreateQuery<PointLightComponent, Transform>();
-        for (auto [entity, light, xform] : q) {
-            if (lights.size() >= (size_t)MAX_LIGHTS) break;
-            GPUPointLight gl;
-            gl.posRadius = glm::vec4(xform->getPosition(), light->radius);
-            gl.colorIntensity = glm::vec4(light->color, light->intensity);
-            lights.push_back(gl);
-        }
-
-        m_lightCount = (int)lights.size();
-
-        //Debug::Info("RenderSystem") << "Uploading " << m_lightCount << " lights\n";
-
-        glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_lightSSBO);
-        glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
-            sizeof(GPUPointLight) * m_lightCount,
-            lights.data());
-        glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
-    }
-
-    // --- Pass 2: render depth only into m_depthFBO ---
     void DepthPrePass(auto& meshQuery,
         const glm::mat4& view,
         const glm::mat4& projection)
@@ -660,12 +646,10 @@ private:
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
 
-    // --- Pass 3: dispatch compute shader to cull lights per tile ---
     void LightCullPass(const glm::mat4& view, const glm::mat4& projection)
     {
         glUseProgram(m_lightCullShader);
 
-        // Depth texture — compute shader samples it to get min/max per tile
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, m_depthTex);
         glUniform1i(glGetUniformLocation(m_lightCullShader, "uDepthMap"), 0);
@@ -674,24 +658,17 @@ private:
             1, GL_FALSE, glm::value_ptr(projection));
         glUniformMatrix4fv(glGetUniformLocation(m_lightCullShader, "uView"),
             1, GL_FALSE, glm::value_ptr(view));
-        glUniform1i(glGetUniformLocation(m_lightCullShader, "uLightCount"),
-            m_lightCount);
-        glUniform2i(glGetUniformLocation(m_lightCullShader, "uScreenSize"),
-            m_screenW, m_screenH);
+        glUniform1i(glGetUniformLocation(m_lightCullShader, "uLightCount"), m_lightCount);
+        glUniform2i(glGetUniformLocation(m_lightCullShader, "uScreenSize"), m_screenW, m_screenH);
 
-        // Bind SSBOs for the compute shader
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_lightSSBO);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_lightIndexSSBO);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, m_tileGridSSBO);
 
-        // One workgroup per tile — each workgroup is 16×16 threads
         glDispatchCompute((GLuint)m_tilesX, (GLuint)m_tilesY, 1);
-
-        // Ensure SSBO writes are visible to the fragment stage
         glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
     }
 
-    // --- Pass 4: full shading — every frag reads from the tile SSBOs ---
     void ShadingPass(auto& meshQuery, const glm::mat4& view,
         const glm::mat4& projection, const glm::vec3& cameraPos)
     {
@@ -702,12 +679,10 @@ private:
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_lightSSBO);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_lightIndexSSBO);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, m_tileGridSSBO);
-        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, m_shadowDataSSBO); // NUEVO
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 3, m_shadowDataSSBO);
 
-        // Bind cube array al texture unit 1
         glActiveTexture(GL_TEXTURE5);
-        glBindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, m_shadowCubeArray);     // NUEVO
-        
+        glBindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, m_shadowCubeArray);
 
         for (auto [entity, meshC, transform] : meshQuery) {
             if (!meshC->enabled || !meshC->mesh) continue;
@@ -718,8 +693,8 @@ private:
             if (Material* mat = meshC->mesh->getMaterial()) {
                 mat->setIVec2("uScreenSize", glm::ivec2(m_screenW, m_screenH));
                 mat->setVec3("uCameraPos", cameraPos);
-                mat->setInt("uShadowCubeArray", 5);   // NUEVO
-                mat->setInt("uShadowCount", m_shadowCount); // NUEVO
+                mat->setInt("uShadowCubeArray", 5);
+                mat->setInt("uShadowCount", m_shadowCount);
             }
             meshC->mesh->draw();
         }

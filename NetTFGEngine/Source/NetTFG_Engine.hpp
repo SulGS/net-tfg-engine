@@ -20,6 +20,8 @@
 
 #include <tiny_gltf.h>
 
+#include "OpenGL/RenderSettings.hpp"
+
 
 class NetTFG_Engine {
 public:
@@ -275,6 +277,13 @@ private:
                 std::vector<uint32_t> indices;
 
                 // -------------------------------------------------------
+                // Read quality settings once for the whole load
+                // -------------------------------------------------------
+                const auto& rs = RenderSettings::instance();
+                const int    baseMip = rs.texBaseMip();
+                const bool   useCompression = rs.texCompression();
+
+                // -------------------------------------------------------
                 // Texture cache — key = (imageSource << 1 | sRGB)
                 // Ensures the same image uploaded as sRGB and linear are
                 // stored as two separate GL textures (different internal fmt).
@@ -297,27 +306,102 @@ private:
 
                         const auto& img = model.images[tex.source];
 
-                        GLint internalFmt, uploadFmt;
-                        if (img.component == 4) {
-                            internalFmt = sRGB ? GL_SRGB8_ALPHA8 : GL_RGBA8;
-                            uploadFmt = GL_RGBA;
+                        // -------------------------------------------------------
+                        // Select internal format based on compression + sRGB flags
+                        // -------------------------------------------------------
+                        GLint     internalFmt, uploadFmt;
+                        if (useCompression) {
+                            // BC7/BPTC — driver compresses at upload time
+                            internalFmt = sRGB ? GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM
+                                : GL_COMPRESSED_RGBA_BPTC_UNORM;
+                            uploadFmt = GL_RGBA; // BC7 requires RGBA input
                         }
                         else {
-                            internalFmt = sRGB ? GL_SRGB8 : GL_RGB8;
-                            uploadFmt = GL_RGB;
+                            if (img.component == 4) {
+                                internalFmt = sRGB ? GL_SRGB8_ALPHA8 : GL_RGBA8;
+                                uploadFmt = GL_RGBA;
+                            }
+                            else {
+                                internalFmt = sRGB ? GL_SRGB8 : GL_RGB8;
+                                uploadFmt = GL_RGB;
+                            }
                         }
 
+                        // -------------------------------------------------------
+                        // If compression is on or the source is RGB, pad to RGBA.
+                        // BC7 always needs 4 channels; we also need it when
+                        // useCompression is true regardless of component count.
+                        // -------------------------------------------------------
+                        std::vector<uint8_t> paddedRGBA;
+                        const uint8_t* uploadData = img.image.data();
+
+                        if ((useCompression || uploadFmt == GL_RGBA) && img.component == 3)
+                        {
+                            paddedRGBA.resize(img.width * img.height * 4);
+                            for (int i = 0; i < img.width * img.height; ++i)
+                            {
+                                paddedRGBA[i * 4 + 0] = img.image[i * 3 + 0];
+                                paddedRGBA[i * 4 + 1] = img.image[i * 3 + 1];
+                                paddedRGBA[i * 4 + 2] = img.image[i * 3 + 2];
+                                paddedRGBA[i * 4 + 3] = 255;
+                            }
+                            uploadData = paddedRGBA.data();
+                        }
+
+                        // -------------------------------------------------------
+                        // Resolution reduction — downsample on CPU by skipping
+                        // `baseMip` mip levels (each level halves each dimension).
+                        // The downsampled image is then uploaded as mip 0 so the
+                        // driver only allocates memory for the reduced size.
+                        // -------------------------------------------------------
+                        std::vector<uint8_t> downsampled;
+                        int uploadW = img.width;
+                        int uploadH = img.height;
+
+                        if (baseMip > 0)
+                        {
+                            uploadW = std::max(1, img.width >> baseMip);
+                            uploadH = std::max(1, img.height >> baseMip);
+
+                            int        scale = 1 << baseMip;
+                            int        components = 4; // we always work in RGBA at this point
+                            downsampled.resize(uploadW * uploadH * components);
+
+                            for (int y = 0; y < uploadH; ++y)
+                                for (int x = 0; x < uploadW; ++x)
+                                    for (int c = 0; c < components; ++c)
+                                    {
+                                        uint32_t sum = 0;
+                                        for (int dy = 0; dy < scale; ++dy)
+                                            for (int dx = 0; dx < scale; ++dx)
+                                            {
+                                                int sx = std::min(x * scale + dx, img.width - 1);
+                                                int sy = std::min(y * scale + dy, img.height - 1);
+                                                sum += uploadData[(sy * img.width + sx) * components + c];
+                                            }
+                                        downsampled[(y * uploadW + x) * components + c] =
+                                            static_cast<uint8_t>(sum / (scale * scale));
+                                    }
+
+                            uploadData = downsampled.data();
+                        }
+
+                        // -------------------------------------------------------
+                        // Upload to GPU
+                        // -------------------------------------------------------
                         GLuint id = 0;
                         glGenTextures(1, &id);
                         glBindTexture(GL_TEXTURE_2D, id);
                         glTexImage2D(GL_TEXTURE_2D, 0, internalFmt,
-                            (GLsizei)img.width, (GLsizei)img.height,
-                            0, uploadFmt, GL_UNSIGNED_BYTE, img.image.data());
+                            (GLsizei)uploadW, (GLsizei)uploadH,
+                            0, uploadFmt, GL_UNSIGNED_BYTE, uploadData);
                         glGenerateMipmap(GL_TEXTURE_2D);
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY,
+                            RenderSettings::instance().getAnisotropy());
                         glBindTexture(GL_TEXTURE_2D, 0);
 
                         texCache[key] = id;
@@ -451,7 +535,6 @@ private:
                                 glm::vec3 T = tangentAccum[i];
 
                                 if (glm::length(T) < 1e-6f) {
-                                    // Degenerate UVs — build from normal
                                     if (glm::abs(N.x) > 0.9f)
                                         T = glm::normalize(glm::cross(N, glm::vec3(0.0f, 1.0f, 0.0f)));
                                     else
