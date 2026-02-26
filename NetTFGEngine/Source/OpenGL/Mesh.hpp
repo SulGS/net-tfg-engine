@@ -32,6 +32,11 @@ public:
 private:
     std::optional<MeshBuffer> buffer;
     std::shared_ptr<Material> material;
+
+    GLuint m_fallbackWhite;
+    GLuint m_fallbackBlack;
+    GLuint m_fallbackNormal;
+    GLuint m_fallbackMR;
 };
 
 #endif // MESH_HPP

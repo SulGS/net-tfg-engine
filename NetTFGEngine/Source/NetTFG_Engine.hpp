@@ -309,7 +309,7 @@ private:
                         // -------------------------------------------------------
                         // Select internal format based on compression + sRGB flags
                         // -------------------------------------------------------
-                        GLint     internalFmt, uploadFmt;
+                        GLint internalFmt, uploadFmt;
                         if (useCompression) {
                             // BC7/BPTC — driver compresses at upload time
                             internalFmt = sRGB ? GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM
@@ -329,8 +329,7 @@ private:
 
                         // -------------------------------------------------------
                         // If compression is on or the source is RGB, pad to RGBA.
-                        // BC7 always needs 4 channels; we also need it when
-                        // useCompression is true regardless of component count.
+                        // BC7 always needs 4 channels.
                         // -------------------------------------------------------
                         std::vector<uint8_t> paddedRGBA;
                         const uint8_t* uploadData = img.image.data();
@@ -349,10 +348,18 @@ private:
                         }
 
                         // -------------------------------------------------------
-                        // Resolution reduction — downsample on CPU by skipping
-                        // `baseMip` mip levels (each level halves each dimension).
-                        // The downsampled image is then uploaded as mip 0 so the
-                        // driver only allocates memory for the reduced size.
+                        // Resolution reduction — box-filter downsample on CPU by
+                        // skipping `baseMip` mip levels.
+                        //
+                        // sRGB textures (albedo) must be linearised before
+                        // averaging and re-encoded afterwards, otherwise the
+                        // non-linear encoding makes the result too dark.
+                        // Linear textures (normal, MR, AO, emissive) are averaged
+                        // directly in encoded space, which is correct.
+                        //
+                        // We use a gamma-2.0 approximation (square / sqrt) which
+                        // is fast, avoids the pow(x,2.2) expense, and is accurate
+                        // enough for mip generation purposes.
                         // -------------------------------------------------------
                         std::vector<uint8_t> downsampled;
                         int uploadW = img.width;
@@ -363,25 +370,62 @@ private:
                             uploadW = std::max(1, img.width >> baseMip);
                             uploadH = std::max(1, img.height >> baseMip);
 
-                            int        scale = 1 << baseMip;
-                            int        components = 4; // we always work in RGBA at this point
+                            int scale = 1 << baseMip;
+                            int components = 4; // always RGBA at this point
+                            int sampleArea = scale * scale;
                             downsampled.resize(uploadW * uploadH * components);
 
+                            // Gamma-2.0 encode/decode helpers (fast, good enough for mips)
+                            auto toLinear = [](uint8_t v) -> float {
+                                float f = v / 255.0f;
+                                return f * f;                        // gamma ~2.0 decode
+                                };
+                            auto toSRGB = [](float v) -> uint8_t {
+                                v = glm::clamp(v, 0.0f, 1.0f);
+                                return static_cast<uint8_t>(sqrtf(v) * 255.0f + 0.5f); // gamma ~2.0 encode
+                                };
+
                             for (int y = 0; y < uploadH; ++y)
+                            {
                                 for (int x = 0; x < uploadW; ++x)
+                                {
                                     for (int c = 0; c < components; ++c)
                                     {
-                                        uint32_t sum = 0;
-                                        for (int dy = 0; dy < scale; ++dy)
-                                            for (int dx = 0; dx < scale; ++dx)
-                                            {
-                                                int sx = std::min(x * scale + dx, img.width - 1);
-                                                int sy = std::min(y * scale + dy, img.height - 1);
-                                                sum += uploadData[(sy * img.width + sx) * components + c];
-                                            }
-                                        downsampled[(y * uploadW + x) * components + c] =
-                                            static_cast<uint8_t>(sum / (scale * scale));
+                                        // Alpha is never gamma-encoded regardless of sRGB flag
+                                        bool isAlpha = (c == 3);
+                                        bool doGamma = sRGB && !isAlpha;
+
+                                        if (doGamma)
+                                        {
+                                            // Linearise → average → re-encode
+                                            float sum = 0.0f;
+                                            for (int dy = 0; dy < scale; ++dy)
+                                                for (int dx = 0; dx < scale; ++dx)
+                                                {
+                                                    int sx = std::min(x * scale + dx, img.width - 1);
+                                                    int sy = std::min(y * scale + dy, img.height - 1);
+                                                    sum += toLinear(uploadData[(sy * img.width + sx) * components + c]);
+                                                }
+                                            downsampled[(y * uploadW + x) * components + c] =
+                                                toSRGB(sum / sampleArea);
+                                        }
+                                        else
+                                        {
+                                            // Linear / alpha — average encoded values directly
+                                            uint32_t sum = 0;
+                                            for (int dy = 0; dy < scale; ++dy)
+                                                for (int dx = 0; dx < scale; ++dx)
+                                                {
+                                                    int sx = std::min(x * scale + dx, img.width - 1);
+                                                    int sy = std::min(y * scale + dy, img.height - 1);
+                                                    sum += uploadData[(sy * img.width + sx) * components + c];
+                                                }
+                                            downsampled[(y * uploadW + x) * components + c] =
+                                                static_cast<uint8_t>(sum / sampleArea);
+                                        }
                                     }
+                                }
+                            }
 
                             uploadData = downsampled.data();
                         }
@@ -429,7 +473,7 @@ private:
                             + view.byteOffset
                             + acc.byteOffset;
 
-                        // byteStride == 0 means tightly packed -- compute natural stride
+                        // byteStride == 0 means tightly packed — compute natural stride
                         size_t componentSize = tinygltf::GetComponentSizeInBytes(acc.componentType);
                         size_t numComponents = tinygltf::GetNumComponentsInType(acc.type);
                         size_t stride = (view.byteStride != 0)
@@ -579,6 +623,20 @@ private:
 
                         // -------------------------------------------------------
                         // Load all PBR textures
+                        //
+                        // sRGB  = true  → loader uses GL_SRGB8_ALPHA8 /
+                        //                 GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM.
+                        //                 Hardware decodes to linear on sample.
+                        //                 Do NOT call SRGBToLinear() in the shader.
+                        //
+                        // sRGB  = false → linear data, no gamma decode.
+                        //
+                        // glTF spec:
+                        //   baseColorTexture   — sRGB  ✓
+                        //   normalTexture      — linear ✓
+                        //   metallicRoughness  — linear ✓
+                        //   occlusionTexture   — linear ✓
+                        //   emissiveTexture    — linear ✓  (NOT sRGB — spec §5.19)
                         // -------------------------------------------------------
                         SubMeshRange smr{};
                         smr.indexOffset = static_cast<uint32_t>(indices.size() - primIndices.size());
@@ -588,16 +646,11 @@ private:
                             const auto& mat = model.materials[prim.material];
                             const auto& pbr = mat.pbrMetallicRoughness;
 
-                            // sRGB -- gamma-encoded by artists
-                            smr.diffuseTex = loadTex(pbr.baseColorTexture.index, true);
-
-                            // Linear -- data textures, must NOT be gamma-corrected
-                            smr.normalTex = loadTex(mat.normalTexture.index, false);
-                            smr.mrTex = loadTex(pbr.metallicRoughnessTexture.index, false);
-                            smr.occlusionTex = loadTex(mat.occlusionTexture.index, false);
-
-                            // sRGB -- gamma-encoded
-                            smr.emissiveTex = loadTex(mat.emissiveTexture.index, true);
+                            smr.diffuseTex = loadTex(pbr.baseColorTexture.index, true);  // sRGB
+                            smr.normalTex = loadTex(mat.normalTexture.index, false); // linear
+                            smr.mrTex = loadTex(pbr.metallicRoughnessTexture.index, false); // linear
+                            smr.occlusionTex = loadTex(mat.occlusionTexture.index, false); // linear
+                            smr.emissiveTex = loadTex(mat.emissiveTexture.index, false); // linear (glTF spec §5.19)
                         }
 
                         buffer.subMeshes.push_back(smr);
@@ -623,22 +676,22 @@ private:
                     indices.size() * sizeof(uint32_t),
                     indices.data(), GL_STATIC_DRAW);
 
-                // location 0 -- position
+                // location 0 — position
                 glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
                     (void*)offsetof(Vertex, position));
                 glEnableVertexAttribArray(0);
 
-                // location 1 -- normal
+                // location 1 — normal
                 glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
                     (void*)offsetof(Vertex, normal));
                 glEnableVertexAttribArray(1);
 
-                // location 2 -- uv
+                // location 2 — uv
                 glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
                     (void*)offsetof(Vertex, uv));
                 glEnableVertexAttribArray(2);
 
-                // location 3 -- tangent (vec4, w = bitangent handedness)
+                // location 3 — tangent (vec4, w = bitangent handedness)
                 glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, sizeof(Vertex),
                     (void*)offsetof(Vertex, tangent));
                 glEnableVertexAttribArray(3);

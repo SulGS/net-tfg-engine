@@ -122,19 +122,6 @@ vec3 CookTorranceBRDF(vec3 N, vec3 V, vec3 L,
 }
 
 // -------------------------------------------------------
-// ACES filmic tonemapping
-// -------------------------------------------------------
-vec3 ACESFilmic(vec3 x)
-{
-    const float a = 2.51;
-    const float b = 0.03;
-    const float c = 2.43;
-    const float d = 0.59;
-    const float e = 0.14;
-    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
-}
-
-// -------------------------------------------------------
 // PCF soft shadows — manual comparison against LINEAR depth.
 //
 // The shadow pass fragment shader writes:
@@ -234,12 +221,14 @@ vec3 CalcPointLights(vec3 N, vec3 V,
 // -------------------------------------------------------
 void main()
 {
+    // Albedo is already linear — loader uploads as GL_SRGB8_ALPHA8 /
+    // GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM so the hardware decodes on sample.
     vec3  albedo              = texture(uAlbedoTex,    vUV).rgb;
     vec2  mr                  = texture(uMRTex,        vUV).gb;
     float perceptualRoughness = clamp(mr.x, 0.045, 1.0);
-    float metallic            = clamp(mr.y, 0.0, 1.0);
+    float metallic            = clamp(mr.y, 0.0,   1.0);
     float ao                  = texture(uOcclusionTex, vUV).r;
-    ao                        = (ao < 0.001) ? 1.0 : ao;
+          ao                  = (ao < 0.001) ? 1.0 : ao;
 
     float alpha = perceptualRoughness * perceptualRoughness;
 
@@ -247,9 +236,13 @@ void main()
     vec3 V  = normalize(uCameraPos - vWorldPos);
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
 
-    vec3 lit   = CalcPointLights(N, V, albedo, F0, alpha, metallic, ao);
-    vec3 color = ACESFilmic(lit);
-    color      = pow(color, vec3(1.0 / 2.2));
+    // Accumulate HDR lighting — values may freely exceed 1.0
+    vec3 color = CalcPointLights(N, V, albedo, F0, alpha, metallic, ao);
 
+    // Add emissive contribution — linear, HDR-friendly, loaded without sRGB decode
+    color += texture(uEmissiveTex, vUV).rgb;
+
+    // Write raw HDR radiance — TonemapPass resolves this to LDR
+    // (no ACESFilmic, no gamma here)
     FragColor = vec4(color, 1.0);
 }
