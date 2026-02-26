@@ -164,14 +164,14 @@ private:
     // The persistent render loop running on the dedicated thread
     static void renderLoop() {
         auto nextTick = std::chrono::high_resolution_clock::now();
-        auto sampleStart = std::chrono::high_resolution_clock::now();
+        auto frameStart = std::chrono::high_resolution_clock::now();
 
         int tickCount = 0;
         std::vector<long long> tickDurations;
         const size_t MAX_SAMPLES = 30;
 
         while (threadRunning && !(window->shouldClose())) {
-            sampleStart = std::chrono::high_resolution_clock::now();
+            frameStart = std::chrono::high_resolution_clock::now();
 
             window->pollEvents();
 
@@ -250,24 +250,34 @@ private:
 
             tickCount++;
             if (tickCount == RENDER_TICKS_PER_SECOND) {
-                auto now = std::chrono::high_resolution_clock::now();
-                auto duration = now - sampleStart;
-                sampleStart = now;
+				tickCount = 0;
 
-                auto durationUs = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
-                tickDurations.push_back(durationUs);
-                if (tickDurations.size() > MAX_SAMPLES) tickDurations.erase(tickDurations.begin());
+                auto frameEnd = std::chrono::high_resolution_clock::now();
+                auto frameDurationUs =
+                    std::chrono::duration_cast<std::chrono::microseconds>(frameEnd - frameStart).count();
 
+                // Store sample
+                tickDurations.push_back(frameDurationUs);
+                if (tickDurations.size() > MAX_SAMPLES)
+                    tickDurations.erase(tickDurations.begin());
+
+                // Compute rolling average
                 long long sum = 0;
-                for (auto d : tickDurations) sum += d;
-                double mean = static_cast<double>(sum) / tickDurations.size();
+                for (auto d : tickDurations)
+                    sum += d;
 
-                double currentMs = (durationUs / 1000.0) / RENDER_TICKS_PER_SECOND;
-                double meanMs = (mean / 1000.0) / RENDER_TICKS_PER_SECOND;
+                double currentMs = frameDurationUs / 1000.0;
+				double currentFps = 1000.0 / currentMs;
+                double meanMs = (sum / static_cast<double>(tickDurations.size())) / 1000.0;
+                double meanFps = 1000.0 / meanMs;
 
-                Debug::Info("ClientWindow") << "Current: " << currentMs << " ms | Mean: " << meanMs << " ms | Active: " << instances.size() << "\n";
-
-                tickCount = 0;
+                Debug::Info("ClientWindow")
+                    << "Frame: " << currentMs << " ms | "
+                    << "Avg: " << meanMs << " ms | "
+                    << "FPS: " << currentFps << " | "
+					<< "Avg FPS: " << meanFps << " | "
+                    << "Active: " << instances.size()
+                    << "\n";
             }
 
             Input::Update();
