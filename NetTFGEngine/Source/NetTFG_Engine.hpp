@@ -20,7 +20,7 @@
 
 #include <tiny_gltf.h>
 
-#include "OpenGL/RenderSettings.hpp"
+#include "OpenGL/Render pipeline/RenderSettings.hpp"
 
 
 class NetTFG_Engine {

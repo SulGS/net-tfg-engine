@@ -347,6 +347,17 @@ public:
     void  setSSRFadeDistance(float v) { m_ssrFadeDistance = v; }
     float getSSRFadeDistance()  const { return m_ssrFadeDistance; }
 
+    // =======================================================
+    //  Meshlet culling  [Runtime]
+    //
+    //  The task shader skips meshlets whose bounding sphere
+    //  projects to fewer pixels than this threshold.
+    //  1.0 is a good default — raises it to aggressively cull
+    //  distant detail, lower it (toward 0) to disable.
+    // =======================================================
+    void  setSmallMeshletPixelThreshold(float v) { m_smallMeshletPixels = v; }
+    float getSmallMeshletPixelThreshold()  const { return m_smallMeshletPixels; }
+
     // Save the current preset index back to the cfg file.
     void savePreset() const
     {
@@ -443,6 +454,8 @@ private:
             m_ssrBinarySteps = 4;
             m_ssrRoughnessCutoff = 0.4f;
             m_ssrFadeDistance = 0.1f;
+            // Meshlet culling — aggressively skip tiny meshlets at this tier
+            m_smallMeshletPixels = 4.0f;
             break;
 
         case QualityPreset::Low:
@@ -487,6 +500,8 @@ private:
             m_ssrBinarySteps = 4;
             m_ssrRoughnessCutoff = 0.4f;
             m_ssrFadeDistance = 0.1f;
+            // Meshlet culling
+            m_smallMeshletPixels = 2.0f;
             break;
 
         case QualityPreset::Medium:
@@ -538,6 +553,8 @@ private:
             m_ssrBinarySteps = 4;
             m_ssrRoughnessCutoff = 0.4f;
             m_ssrFadeDistance = 0.1f;
+            // Meshlet culling — default threshold
+            m_smallMeshletPixels = 1.0f;
             break;
 
         case QualityPreset::High:
@@ -589,6 +606,8 @@ private:
             m_ssrBinarySteps = 8;
             m_ssrRoughnessCutoff = 0.4f;
             m_ssrFadeDistance = 0.1f;
+            // Meshlet culling
+            m_smallMeshletPixels = 0.5f;
             break;
 
         case QualityPreset::Ultra:
@@ -640,6 +659,8 @@ private:
             m_ssrBinarySteps = 16;
             m_ssrRoughnessCutoff = 0.4f;
             m_ssrFadeDistance = 0.1f;
+            // Meshlet culling — no culling at Ultra, preserve all detail
+            m_smallMeshletPixels = 0.0f;
             break;
         }
     }
@@ -703,4 +724,7 @@ private:
     int   m_ssrBinarySteps = 8;
     float m_ssrRoughnessCutoff = 0.4f;
     float m_ssrFadeDistance = 0.1f;
+
+    // ---- Meshlet culling ----
+    float m_smallMeshletPixels = 1.0f;
 };
