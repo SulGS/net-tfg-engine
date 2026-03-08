@@ -127,17 +127,6 @@ private:
     GLuint m_quadVBO = 0;
 
     // =====================================================
-    //  SSAO resources
-    // =====================================================
-    GLuint m_ssaoFBO = 0;  // raw occlusion render target
-    GLuint m_ssaoBlurFBO = 0;  // blurred occlusion render target
-    GLuint m_ssaoTex = 0;  // R8  -- raw SSAO output
-    GLuint m_ssaoBlurTex = 0;  // R8  -- blurred SSAO (used in tonemap)
-    GLuint m_ssaoNoiseTex = 0;  // 4x4 RGB16F rotation noise tile
-    GLuint m_ssaoShader = 0;  // SSAO generation program
-    GLuint m_ssaoBlurShader = 0;  // separable Gaussian blur program
-
-    // =====================================================
     //  Bloom resources
     // =====================================================
     GLuint m_bloomThreshFBO = 0;
@@ -149,14 +138,6 @@ private:
     GLuint m_bloomThreshShader = 0;
     GLuint m_bloomKawaseShader = 0;
     GLuint m_bloomResultTex = 0;  // points to ping or pong after BloomPass
-
-    // =====================================================
-    //  SSR resources
-    // =====================================================
-    GLuint m_ssrFBO = 0;  // SSR output render target
-    GLuint m_ssrTex = 0;  // RGBA16F -- reflection colour
-    GLuint m_ssrShader = 0;
-
 
     // =====================================================
     //  FXAA resources
@@ -173,9 +154,7 @@ private:
     void InitShadowCubeArray();
     void InitHDRFBO();
     void InitScreenQuad();
-    void InitSSAO();
     void InitBloom();
-    void InitSSR();
     void InitFXAA();
 
     // =====================================================
@@ -188,9 +167,7 @@ private:
     void CompileLightCullShader();
     void CompileShadowShader();
     void CompileTonemapShader();
-    void CompileSSAOShaders();
     void CompileBloomShaders();
-    void CompileSSRShader();
     void CompileFXAAShader();
 
     // =====================================================
@@ -202,9 +179,7 @@ private:
     void LightCullPass(const glm::mat4& view, const glm::mat4& projection);
     void ShadingPass(EntityManager::Query<MeshComponent, Transform>& meshQuery, const glm::mat4& view,
         const glm::mat4& projection, const glm::vec3& cameraPos);
-    void SSAOPass(const glm::mat4& projection);
     void BloomPass();
-    void SSRPass(const glm::mat4& view, const glm::mat4& projection);
     void TonemapPass();
     void FXAAPass();
     void BlitLDRToScreen();

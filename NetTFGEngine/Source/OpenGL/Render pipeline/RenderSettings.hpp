@@ -203,43 +203,6 @@ public:
     float getGamma()  const { return m_gamma; }
 
     // =======================================================
-    //  SSAO — Screen-Space Ambient Occlusion  [Runtime]
-    //
-    //  Samples the depth buffer in a hemisphere around each
-    //  fragment to estimate local occlusion.  The result is
-    //  an R8 occlusion texture that multiplies the ambient
-    //  term inside the tonemap composite pass.
-    //
-    //  All parameters are read every frame — no GPU resource
-    //  recreation required when changing them.
-    // =======================================================
-
-    // Master toggle.
-    void setSSAOEnabled(bool v) { m_ssaoEnabled = v; }
-    bool getSSAOEnabled()  const { return m_ssaoEnabled; }
-
-    // Number of hemisphere samples per pixel.
-    // Higher = better quality, more ALU.  Must be <= 64.
-    void setSSAOSamples(int v) { m_ssaoSamples = v; }
-    int  getSSAOSamples()  const { return m_ssaoSamples; }
-
-    // Hemisphere radius in view-space units.
-    // Too large -> samples escape geometry, miss occlusion.
-    // Too small -> captures only micro-detail.
-    void  setSSAORadius(float v) { m_ssaoRadius = v; }
-    float getSSAORadius()  const { return m_ssaoRadius; }
-
-    // Occlusion bias prevents self-occlusion acne on flat
-    // surfaces.  Default 0.025.
-    void  setSSAOBias(float v) { m_ssaoBias = v; }
-    float getSSAOBias()  const { return m_ssaoBias; }
-
-    // Power curve on the raw occlusion factor.
-    // Values > 1.0 darken occluded areas more aggressively.
-    void  setSSAOPower(float v) { m_ssaoPower = v; }
-    float getSSAOPower()  const { return m_ssaoPower; }
-
-    // =======================================================
     //  Bloom  [Runtime]
     //
     //  Extracts pixels above a luminance threshold from the
@@ -299,53 +262,6 @@ public:
     // Default 0.75.
     void  setFXAASubpixel(float v) { m_fxaaSubpixel = v; }
     float getFXAASubpixel()  const { return m_fxaaSubpixel; }
-
-    // =======================================================
-    //  SSR — Screen-Space Reflections  [Runtime]
-    //
-    //  Ray-marches the reflection vector in screen space using
-    //  the HDR depth buffer written by ShadingPass.  Blends onto
-    //  metallic surfaces (weighted by metallic * (1-roughness)).
-    //  Runs before tonemapping so reflections are in HDR range.
-    //
-    //  No extra G-buffer needed — uses m_hdrDepthTex and
-    //  m_hdrColorTex already present in the pipeline.
-    // =======================================================
-
-    void setSSREnabled(bool v) { m_ssrEnabled = v; }
-    bool getSSREnabled()  const { return m_ssrEnabled; }
-
-    // Maximum number of ray-march iterations per pixel.
-    // More steps = longer reflection rays but higher ALU cost.
-    void setSSRMaxSteps(int v) { m_ssrMaxSteps = v; }
-    int  getSSRMaxSteps()  const { return m_ssrMaxSteps; }
-
-    // Maximum reflection ray distance in view-space units.
-    // Rays that travel further are faded out and discarded.
-    void  setSSRMaxDistance(float v) { m_ssrMaxDistance = v; }
-    float getSSRMaxDistance()  const { return m_ssrMaxDistance; }
-
-    // Size of each ray-march step in view-space units.
-    // Smaller = sharper intersections, more cost.
-    void  setSSRStepSize(float v) { m_ssrStepSize = v; }
-    float getSSRStepSize()  const { return m_ssrStepSize; }
-
-    // Binary search refinement steps after a hit is found.
-    // More steps = crisper reflection edges.  Range [0, 16].
-    void setSSRBinarySteps(int v) { m_ssrBinarySteps = v; }
-    int  getSSRBinarySteps()  const { return m_ssrBinarySteps; }
-
-    // Surfaces with perceptualRoughness above this cutoff receive
-    // no SSR (reflections would be too blurry to be meaningful).
-    // Default 0.4.
-    void  setSSRRoughnessCutoff(float v) { m_ssrRoughnessCutoff = v; }
-    float getSSRRoughnessCutoff()  const { return m_ssrRoughnessCutoff; }
-
-    // Screen-edge fade width as a fraction of screen size [0, 0.5].
-    // Reflections fade to zero near the edge to avoid hard cutoffs.
-    // Default 0.1.
-    void  setSSRFadeDistance(float v) { m_ssrFadeDistance = v; }
-    float getSSRFadeDistance()  const { return m_ssrFadeDistance; }
 
     // =======================================================
     //  Meshlet culling  [Runtime]
@@ -430,12 +346,6 @@ private:
             m_exposure = 1.0f;
             m_filmicEnabled = false;
             m_gamma = 2.2f;
-            // SSAO — disabled at VeryLow
-            m_ssaoEnabled = false;
-            m_ssaoSamples = 8;
-            m_ssaoRadius = 0.5f;
-            m_ssaoBias = 0.025f;
-            m_ssaoPower = 2.0f;
             // Bloom — disabled at VeryLow
             m_bloomEnabled = false;
             m_bloomThreshold = 1.0f;
@@ -446,14 +356,6 @@ private:
             m_fxaaEdgeThresholdMin = 0.0312f;
             m_fxaaEdgeThreshold = 0.25f;   // looser at low quality
             m_fxaaSubpixel = 0.75f;
-            // SSR — disabled at VeryLow/Low (too expensive without depth prepass)
-            m_ssrEnabled = false;
-            m_ssrMaxSteps = 16;
-            m_ssrMaxDistance = 50.0f;
-            m_ssrStepSize = 0.2f;
-            m_ssrBinarySteps = 4;
-            m_ssrRoughnessCutoff = 0.4f;
-            m_ssrFadeDistance = 0.1f;
             // Meshlet culling — aggressively skip tiny meshlets at this tier
             m_smallMeshletPixels = 4.0f;
             break;
@@ -476,12 +378,6 @@ private:
             m_exposure = 1.0f;
             m_filmicEnabled = false;
             m_gamma = 2.2f;
-            // SSAO — minimal quality
-            m_ssaoEnabled = true;
-            m_ssaoSamples = 8;
-            m_ssaoRadius = 0.5f;
-            m_ssaoBias = 0.025f;
-            m_ssaoPower = 2.0f;
             // Bloom — minimal passes
             m_bloomEnabled = true;
             m_bloomThreshold = 1.0f;
@@ -492,14 +388,6 @@ private:
             m_fxaaEdgeThresholdMin = 0.0312f;
             m_fxaaEdgeThreshold = 0.25f;
             m_fxaaSubpixel = 0.75f;
-            // SSR — disabled at Low
-            m_ssrEnabled = false;
-            m_ssrMaxSteps = 16;
-            m_ssrMaxDistance = 50.0f;
-            m_ssrStepSize = 0.2f;
-            m_ssrBinarySteps = 4;
-            m_ssrRoughnessCutoff = 0.4f;
-            m_ssrFadeDistance = 0.1f;
             // Meshlet culling
             m_smallMeshletPixels = 2.0f;
             break;
@@ -529,12 +417,6 @@ private:
             m_filmicToeDenominator = 0.30f;
             m_filmicLinearWhite = 11.2f;
             m_gamma = 2.2f;
-            // SSAO — medium quality
-            m_ssaoEnabled = true;
-            m_ssaoSamples = 16;
-            m_ssaoRadius = 0.5f;
-            m_ssaoBias = 0.025f;
-            m_ssaoPower = 2.0f;
             // Bloom — moderate passes
             m_bloomEnabled = true;
             m_bloomThreshold = 1.0f;
@@ -545,14 +427,6 @@ private:
             m_fxaaEdgeThresholdMin = 0.0312f;
             m_fxaaEdgeThreshold = 0.125f;
             m_fxaaSubpixel = 0.75f;
-            // SSR — enabled from Medium up, conservative quality
-            m_ssrEnabled = true;
-            m_ssrMaxSteps = 32;
-            m_ssrMaxDistance = 50.0f;
-            m_ssrStepSize = 0.2f;
-            m_ssrBinarySteps = 4;
-            m_ssrRoughnessCutoff = 0.4f;
-            m_ssrFadeDistance = 0.1f;
             // Meshlet culling — default threshold
             m_smallMeshletPixels = 1.0f;
             break;
@@ -582,12 +456,6 @@ private:
             m_filmicToeDenominator = 0.30f;
             m_filmicLinearWhite = 11.2f;
             m_gamma = 2.2f;
-            // SSAO — high quality
-            m_ssaoEnabled = true;
-            m_ssaoSamples = 32;
-            m_ssaoRadius = 0.5f;
-            m_ssaoBias = 0.025f;
-            m_ssaoPower = 2.0f;
             // Bloom — full passes
             m_bloomEnabled = true;
             m_bloomThreshold = 1.0f;
@@ -598,14 +466,6 @@ private:
             m_fxaaEdgeThresholdMin = 0.0312f;
             m_fxaaEdgeThreshold = 0.125f;
             m_fxaaSubpixel = 0.75f;
-            // SSR — high quality
-            m_ssrEnabled = true;
-            m_ssrMaxSteps = 64;
-            m_ssrMaxDistance = 100.0f;
-            m_ssrStepSize = 0.15f;
-            m_ssrBinarySteps = 8;
-            m_ssrRoughnessCutoff = 0.4f;
-            m_ssrFadeDistance = 0.1f;
             // Meshlet culling
             m_smallMeshletPixels = 0.5f;
             break;
@@ -635,12 +495,6 @@ private:
             m_filmicToeDenominator = 0.30f;
             m_filmicLinearWhite = 11.2f;
             m_gamma = 2.2f;
-            // SSAO — maximum quality
-            m_ssaoEnabled = true;
-            m_ssaoSamples = 64;
-            m_ssaoRadius = 0.5f;
-            m_ssaoBias = 0.025f;
-            m_ssaoPower = 2.0f;
             // Bloom — maximum passes, slightly more strength
             m_bloomEnabled = true;
             m_bloomThreshold = 0.9f;
@@ -651,14 +505,6 @@ private:
             m_fxaaEdgeThresholdMin = 0.0312f;
             m_fxaaEdgeThreshold = 0.063f;
             m_fxaaSubpixel = 1.0f;
-            // SSR — maximum quality
-            m_ssrEnabled = true;
-            m_ssrMaxSteps = 128;
-            m_ssrMaxDistance = 150.0f;
-            m_ssrStepSize = 0.1f;
-            m_ssrBinarySteps = 16;
-            m_ssrRoughnessCutoff = 0.4f;
-            m_ssrFadeDistance = 0.1f;
             // Meshlet culling — no culling at Ultra, preserve all detail
             m_smallMeshletPixels = 0.0f;
             break;
@@ -697,13 +543,6 @@ private:
     float m_filmicLinearWhite = 11.2f;
     float m_gamma = 2.2f;
 
-    // ---- SSAO ----
-    bool  m_ssaoEnabled = true;
-    int   m_ssaoSamples = 32;
-    float m_ssaoRadius = 0.5f;
-    float m_ssaoBias = 0.025f;
-    float m_ssaoPower = 2.0f;
-
     // ---- Bloom ----
     bool  m_bloomEnabled = true;
     float m_bloomThreshold = 1.0f;
@@ -715,15 +554,6 @@ private:
     float m_fxaaEdgeThresholdMin = 0.0312f;
     float m_fxaaEdgeThreshold = 0.125f;
     float m_fxaaSubpixel = 0.75f;
-
-    // ---- SSR ----
-    bool  m_ssrEnabled = true;
-    int   m_ssrMaxSteps = 64;
-    float m_ssrMaxDistance = 100.0f;
-    float m_ssrStepSize = 0.15f;
-    int   m_ssrBinarySteps = 8;
-    float m_ssrRoughnessCutoff = 0.4f;
-    float m_ssrFadeDistance = 0.1f;
 
     // ---- Meshlet culling ----
     float m_smallMeshletPixels = 1.0f;

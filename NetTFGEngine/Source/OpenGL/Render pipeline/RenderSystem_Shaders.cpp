@@ -204,18 +204,14 @@ void RenderSystem::CompileTonemapShader()
         out vec4 FragColor;
 
         uniform sampler2D uHDRBuffer;
-        uniform sampler2D uSSAOTex;
         uniform sampler2D uBloomTex;
-        uniform sampler2D uSSRTex;
 
         uniform float uExposure;
         uniform bool  uFilmicEnabled;
         uniform float uGamma;
 
-        uniform bool  uSSAOEnabled;
         uniform bool  uBloomEnabled;
         uniform float uBloomStrength;
-        uniform bool  uSSREnabled;
 
         uniform float uA, uB, uC, uD, uE, uF, uW;
 
@@ -229,14 +225,6 @@ void RenderSystem::CompileTonemapShader()
         void main()
         {
             vec3 hdrColor = texture(uHDRBuffer, vUV).rgb;
-
-            if (uSSREnabled)
-                hdrColor += texture(uSSRTex, vUV).rgb;
-
-            if (uSSAOEnabled)
-                hdrColor += vec3(0.03) * texture(uSSAOTex, vUV).r;
-            else
-                hdrColor += vec3(0.03);
 
             if (uBloomEnabled)
                 hdrColor += texture(uBloomTex, vUV).rgb * uBloomStrength;

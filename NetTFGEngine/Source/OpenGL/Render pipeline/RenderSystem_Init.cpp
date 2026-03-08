@@ -1,4 +1,4 @@
-#include "RenderSystem.hpp"
+ï»¿#include "RenderSystem.hpp"
 
 // =====================================================
 //  Shader compilation helpers (static)
@@ -152,7 +152,7 @@ void RenderSystem::InitHDRFBO()
 }
 
 // =====================================================
-//  InitScreenQuad  — single large triangle covering NDC
+//  InitScreenQuad  ï¿½ single large triangle covering NDC
 // =====================================================
 void RenderSystem::InitScreenQuad()
 {
@@ -179,71 +179,6 @@ void RenderSystem::InitScreenQuad()
 
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
-}
-
-// =====================================================
-//  InitSSAO
-// =====================================================
-void RenderSystem::InitSSAO()
-{
-    // Raw SSAO FBO (R8, full resolution)
-    glGenTextures(1, &m_ssaoTex);
-    glBindTexture(GL_TEXTURE_2D, m_ssaoTex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, m_screenW, m_screenH,
-        0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-    glGenFramebuffers(1, &m_ssaoFBO);
-    glBindFramebuffer(GL_FRAMEBUFFER, m_ssaoFBO);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-        GL_TEXTURE_2D, m_ssaoTex, 0);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-        Debug::Error("RenderSystem") << "SSAO FBO incomplete\n";
-
-    // Blur FBO (R8, full resolution)
-    glGenTextures(1, &m_ssaoBlurTex);
-    glBindTexture(GL_TEXTURE_2D, m_ssaoBlurTex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, m_screenW, m_screenH,
-        0, GL_RED, GL_UNSIGNED_BYTE, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-    glGenFramebuffers(1, &m_ssaoBlurFBO);
-    glBindFramebuffer(GL_FRAMEBUFFER, m_ssaoBlurFBO);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-        GL_TEXTURE_2D, m_ssaoBlurTex, 0);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-        Debug::Error("RenderSystem") << "SSAO blur FBO incomplete\n";
-
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-
-    // 4x4 noise texture (only created once; skip on resize)
-    if (m_ssaoNoiseTex != 0) return;
-
-    std::vector<glm::vec3> ssaoNoise;
-    ssaoNoise.reserve(16);
-    srand(42);
-    for (int i = 0; i < 16; ++i) {
-        ssaoNoise.push_back(glm::vec3(
-            (float)rand() / RAND_MAX * 2.0f - 1.0f,
-            (float)rand() / RAND_MAX * 2.0f - 1.0f,
-            0.0f));
-    }
-
-    glGenTextures(1, &m_ssaoNoiseTex);
-    glBindTexture(GL_TEXTURE_2D, m_ssaoNoiseTex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB16F, 4, 4, 0,
-        GL_RGB, GL_FLOAT, ssaoNoise.data());
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 // =====================================================
@@ -275,31 +210,6 @@ void RenderSystem::InitBloom()
     makeBloomTex(m_bloomThreshTex, m_bloomThreshFBO, m_screenW, m_screenH);
     makeBloomTex(m_bloomPingTex, m_bloomPingFBO, bW, bH);
     makeBloomTex(m_bloomPongTex, m_bloomPongFBO, bW, bH);
-
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glBindTexture(GL_TEXTURE_2D, 0);
-}
-
-// =====================================================
-//  InitSSR
-// =====================================================
-void RenderSystem::InitSSR()
-{
-    glGenTextures(1, &m_ssrTex);
-    glBindTexture(GL_TEXTURE_2D, m_ssrTex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F,
-        m_screenW, m_screenH, 0, GL_RGBA, GL_FLOAT, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-    glGenFramebuffers(1, &m_ssrFBO);
-    glBindFramebuffer(GL_FRAMEBUFFER, m_ssrFBO);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-        GL_TEXTURE_2D, m_ssrTex, 0);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-        Debug::Error("RenderSystem") << "SSR FBO incomplete\n";
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glBindTexture(GL_TEXTURE_2D, 0);

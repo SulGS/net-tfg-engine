@@ -1,60 +1,4 @@
-#include "RenderSystem.hpp"
-
-// =====================================================
-//  SSAOPass
-//  1. Render raw occlusion into m_ssaoFBO
-//  2. Box-blur into m_ssaoBlurFBO
-//  TonemapPass reads m_ssaoBlurTex.
-// =====================================================
-void RenderSystem::SSAOPass(const glm::mat4& projection)
-{
-    const auto& rs = RenderSettings::instance();
-    glm::mat4 invProj = glm::inverse(projection);
-
-    // Step 1: generate raw SSAO
-    glBindFramebuffer(GL_FRAMEBUFFER, m_ssaoFBO);
-    glViewport(0, 0, m_screenW, m_screenH);
-    glDisable(GL_DEPTH_TEST);
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    glUseProgram(m_ssaoShader);
-
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, m_hdrDepthTex);
-    glUniform1i(glGetUniformLocation(m_ssaoShader, "uDepthTex"), 0);
-
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, m_ssaoNoiseTex);
-    glUniform1i(glGetUniformLocation(m_ssaoShader, "uNoiseTex"), 1);
-
-    glUniformMatrix4fv(glGetUniformLocation(m_ssaoShader, "uProjection"),
-        1, GL_FALSE, glm::value_ptr(projection));
-    glUniformMatrix4fv(glGetUniformLocation(m_ssaoShader, "uInvProj"),
-        1, GL_FALSE, glm::value_ptr(invProj));
-    glUniform1i(glGetUniformLocation(m_ssaoShader, "uKernelSize"), rs.getSSAOSamples());
-    glUniform1f(glGetUniformLocation(m_ssaoShader, "uRadius"), rs.getSSAORadius());
-    glUniform1f(glGetUniformLocation(m_ssaoShader, "uBias"), rs.getSSAOBias());
-    glUniform1f(glGetUniformLocation(m_ssaoShader, "uPower"), rs.getSSAOPower());
-    glUniform2i(glGetUniformLocation(m_ssaoShader, "uScreenSize"), m_screenW, m_screenH);
-
-    glBindVertexArray(m_quadVAO);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
-
-    // Step 2: blur SSAO
-    glBindFramebuffer(GL_FRAMEBUFFER, m_ssaoBlurFBO);
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    glUseProgram(m_ssaoBlurShader);
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, m_ssaoTex);
-    glUniform1i(glGetUniformLocation(m_ssaoBlurShader, "uSSAOTex"), 0);
-
-    glDrawArrays(GL_TRIANGLES, 0, 3);
-
-    glBindVertexArray(0);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glEnable(GL_DEPTH_TEST);
-}
+ï»¿#include "RenderSystem.hpp"
 
 // =====================================================
 //  BloomPass
@@ -125,61 +69,6 @@ void RenderSystem::BloomPass()
 }
 
 // =====================================================
-//  SSRPass
-// =====================================================
-void RenderSystem::SSRPass(const glm::mat4& view, const glm::mat4& projection)
-{
-    const auto& rs = RenderSettings::instance();
-
-    glBindFramebuffer(GL_FRAMEBUFFER, m_ssrFBO);
-    glViewport(0, 0, m_screenW, m_screenH);
-    glDisable(GL_DEPTH_TEST);
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    glUseProgram(m_ssrShader);
-
-    glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, m_hdrDepthTex);
-    glUniform1i(glGetUniformLocation(m_ssrShader, "uDepthTex"), 0);
-
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, m_hdrColorTex);
-    glUniform1i(glGetUniformLocation(m_ssrShader, "uHDRColor"), 1);
-
-    glm::mat4 invProj = glm::inverse(projection);
-    glm::mat4 invView = glm::inverse(view);
-
-    glUniformMatrix4fv(glGetUniformLocation(m_ssrShader, "uProjection"),
-        1, GL_FALSE, glm::value_ptr(projection));
-    glUniformMatrix4fv(glGetUniformLocation(m_ssrShader, "uInvProj"),
-        1, GL_FALSE, glm::value_ptr(invProj));
-    glUniformMatrix4fv(glGetUniformLocation(m_ssrShader, "uView"),
-        1, GL_FALSE, glm::value_ptr(view));
-    glUniformMatrix4fv(glGetUniformLocation(m_ssrShader, "uInvView"),
-        1, GL_FALSE, glm::value_ptr(invView));
-
-    glUniform1i(glGetUniformLocation(m_ssrShader, "uMaxSteps"),
-        rs.getSSRMaxSteps());
-    glUniform1f(glGetUniformLocation(m_ssrShader, "uMaxDistance"),
-        rs.getSSRMaxDistance());
-    glUniform1f(glGetUniformLocation(m_ssrShader, "uStepSize"),
-        rs.getSSRStepSize());
-    glUniform1i(glGetUniformLocation(m_ssrShader, "uBinarySteps"),
-        rs.getSSRBinarySteps());
-    glUniform1f(glGetUniformLocation(m_ssrShader, "uRoughnessCutoff"),
-        rs.getSSRRoughnessCutoff());
-    glUniform1f(glGetUniformLocation(m_ssrShader, "uFadeDistance"),
-        rs.getSSRFadeDistance());
-
-    glBindVertexArray(m_quadVAO);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
-    glBindVertexArray(0);
-
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glEnable(GL_DEPTH_TEST);
-}
-
-// =====================================================
 //  TonemapPass
 //  Composites SSAO + SSR + Bloom onto HDR, then
 //  tonemaps + gamma-corrects to LDR (-> fxaaFBO or FB 0).
@@ -201,26 +90,14 @@ void RenderSystem::TonemapPass()
     glUniform1i(glGetUniformLocation(m_tonemapShader, "uHDRBuffer"), 0);
 
     glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, rs.getSSAOEnabled() ? m_ssaoBlurTex : 0);
-    glUniform1i(glGetUniformLocation(m_tonemapShader, "uSSAOTex"), 1);
-
-    glActiveTexture(GL_TEXTURE2);
     glBindTexture(GL_TEXTURE_2D,
         (rs.getBloomEnabled() && m_bloomResultTex) ? m_bloomResultTex : 0);
-    glUniform1i(glGetUniformLocation(m_tonemapShader, "uBloomTex"), 2);
+    glUniform1i(glGetUniformLocation(m_tonemapShader, "uBloomTex"), 1);
 
-    glActiveTexture(GL_TEXTURE3);
-    glBindTexture(GL_TEXTURE_2D, rs.getSSREnabled() ? m_ssrTex : 0);
-    glUniform1i(glGetUniformLocation(m_tonemapShader, "uSSRTex"), 3);
-
-    glUniform1i(glGetUniformLocation(m_tonemapShader, "uSSAOEnabled"),
-        rs.getSSAOEnabled() ? 1 : 0);
     glUniform1i(glGetUniformLocation(m_tonemapShader, "uBloomEnabled"),
         rs.getBloomEnabled() ? 1 : 0);
     glUniform1f(glGetUniformLocation(m_tonemapShader, "uBloomStrength"),
         rs.getBloomStrength());
-    glUniform1i(glGetUniformLocation(m_tonemapShader, "uSSREnabled"),
-        rs.getSSREnabled() ? 1 : 0);
 
     glUniform1f(glGetUniformLocation(m_tonemapShader, "uExposure"), rs.getExposure());
     glUniform1i(glGetUniformLocation(m_tonemapShader, "uFilmicEnabled"), rs.getFilmicEnabled() ? 1 : 0);
@@ -276,7 +153,7 @@ void RenderSystem::FXAAPass()
 }
 
 // =====================================================
-//  BlitLDRToScreen  — no-op: TonemapPass already
+//  BlitLDRToScreen  ï¿½ no-op: TonemapPass already
 //  wrote to FB 0 when FXAA is disabled.
 // =====================================================
 void RenderSystem::BlitLDRToScreen() { /* TonemapPass already wrote to FB 0 */ }

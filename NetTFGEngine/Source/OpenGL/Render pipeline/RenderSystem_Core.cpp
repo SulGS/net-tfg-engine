@@ -17,17 +17,13 @@ void RenderSystem::Init(int screenW, int screenH)
     InitSSBOs();
     InitShadowCubeArray();
     InitHDRFBO();
-    InitSSAO();
     InitBloom();
-    InitSSR();
     InitFXAA();
     CompileDepthShader();
     CompileLightCullShader();
     CompileShadowShader();
     CompileTonemapShader();
-    CompileSSAOShaders();
     CompileBloomShaders();
-    CompileSSRShader();
     CompileFXAAShader();
     InitScreenQuad();
 }
@@ -48,12 +44,6 @@ void RenderSystem::Resize(int screenW, int screenH)
     glDeleteTextures(1, &m_hdrDepthTex); m_hdrDepthTex = 0;
     InitHDRFBO();
 
-    glDeleteFramebuffers(1, &m_ssaoFBO);     m_ssaoFBO = 0;
-    glDeleteFramebuffers(1, &m_ssaoBlurFBO); m_ssaoBlurFBO = 0;
-    glDeleteTextures(1, &m_ssaoTex);         m_ssaoTex = 0;
-    glDeleteTextures(1, &m_ssaoBlurTex);     m_ssaoBlurTex = 0;
-    InitSSAO();
-
     glDeleteFramebuffers(1, &m_bloomThreshFBO); m_bloomThreshFBO = 0;
     glDeleteFramebuffers(1, &m_bloomPingFBO);   m_bloomPingFBO = 0;
     glDeleteFramebuffers(1, &m_bloomPongFBO);   m_bloomPongFBO = 0;
@@ -61,10 +51,6 @@ void RenderSystem::Resize(int screenW, int screenH)
     glDeleteTextures(1, &m_bloomPingTex);       m_bloomPingTex = 0;
     glDeleteTextures(1, &m_bloomPongTex);       m_bloomPongTex = 0;
     InitBloom();
-
-    glDeleteFramebuffers(1, &m_ssrFBO); m_ssrFBO = 0;
-    glDeleteTextures(1, &m_ssrTex);     m_ssrTex = 0;
-    InitSSR();
 
     glDeleteFramebuffers(1, &m_fxaaFBO); m_fxaaFBO = 0;
     glDeleteTextures(1, &m_fxaaTex);     m_fxaaTex = 0;
@@ -137,17 +123,11 @@ void RenderSystem::Update(EntityManager& entityManager,
     else
         m_shadowCount = 0;
 
-	DepthPrePass(meshQuery, view, projection);
+    DepthPrePass(meshQuery, view, projection);
 
     LightCullPass(view, projection);
 
-	ShadingPass(meshQuery, view, projection, cameraPos);
-
-    if (RenderSettings::instance().getSSAOEnabled())
-        SSAOPass(projection);
-
-    if (RenderSettings::instance().getSSREnabled())
-        SSRPass(view, projection);
+    ShadingPass(meshQuery, view, projection, cameraPos);
 
     if (RenderSettings::instance().getBloomEnabled())
         BloomPass();
@@ -181,13 +161,6 @@ RenderSystem::~RenderSystem()
     glDeleteProgram(m_tonemapShader);
     glDeleteVertexArrays(1, &m_quadVAO);
     glDeleteBuffers(1, &m_quadVBO);
-    glDeleteFramebuffers(1, &m_ssaoFBO);
-    glDeleteFramebuffers(1, &m_ssaoBlurFBO);
-    glDeleteTextures(1, &m_ssaoTex);
-    glDeleteTextures(1, &m_ssaoBlurTex);
-    glDeleteTextures(1, &m_ssaoNoiseTex);
-    glDeleteProgram(m_ssaoShader);
-    glDeleteProgram(m_ssaoBlurShader);
     glDeleteFramebuffers(1, &m_bloomThreshFBO);
     glDeleteFramebuffers(1, &m_bloomPingFBO);
     glDeleteFramebuffers(1, &m_bloomPongFBO);
@@ -196,9 +169,6 @@ RenderSystem::~RenderSystem()
     glDeleteTextures(1, &m_bloomPongTex);
     glDeleteProgram(m_bloomThreshShader);
     glDeleteProgram(m_bloomKawaseShader);
-    glDeleteFramebuffers(1, &m_ssrFBO);
-    glDeleteTextures(1, &m_ssrTex);
-    glDeleteProgram(m_ssrShader);
     glDeleteFramebuffers(1, &m_fxaaFBO);
     glDeleteTextures(1, &m_fxaaTex);
     glDeleteProgram(m_fxaaShader);
