@@ -13,11 +13,12 @@ void RenderSystem::Init(int screenW, int screenH)
     m_tilesX = (screenW + TILE_SIZE - 1) / TILE_SIZE;
     m_tilesY = (screenH + TILE_SIZE - 1) / TILE_SIZE;
 
-    InitDepthFBO();
+    InitHDRFBO();
+    InitDepthFBO(); // must come after InitHDRFBO — attaches m_hdrDepthTex
     InitSSBOs();
     InitShadowCubeArray();
-    InitHDRFBO();
     InitBloom();
+    InitBloomBlackTex();
     InitFXAA();
     CompileDepthShader();
     CompileLightCullShader();
@@ -36,13 +37,12 @@ void RenderSystem::Resize(int screenW, int screenH)
     m_tilesY = (screenH + TILE_SIZE - 1) / TILE_SIZE;
 
     glDeleteFramebuffers(1, &m_depthFBO); m_depthFBO = 0;
-    glDeleteTextures(1, &m_depthTex);     m_depthTex = 0;
-    InitDepthFBO();
-
+    // m_hdrDepthTex is the shared depth surface — recreate hdrFBO first
     glDeleteFramebuffers(1, &m_hdrFBO);  m_hdrFBO = 0;
     glDeleteTextures(1, &m_hdrColorTex); m_hdrColorTex = 0;
     glDeleteTextures(1, &m_hdrDepthTex); m_hdrDepthTex = 0;
     InitHDRFBO();
+    InitDepthFBO(); // re-attaches new m_hdrDepthTex
 
     glDeleteFramebuffers(1, &m_bloomThreshFBO); m_bloomThreshFBO = 0;
     glDeleteFramebuffers(1, &m_bloomPingFBO);   m_bloomPingFBO = 0;
@@ -145,7 +145,7 @@ void RenderSystem::Update(EntityManager& entityManager,
 RenderSystem::~RenderSystem()
 {
     glDeleteFramebuffers(1, &m_depthFBO);
-    glDeleteTextures(1, &m_depthTex);
+    // m_depthTex removed — depth surface is m_hdrDepthTex, deleted below with hdrFBO
     glDeleteBuffers(1, &m_lightSSBO);
     glDeleteBuffers(1, &m_lightIndexSSBO);
     glDeleteBuffers(1, &m_tileGridSSBO);
@@ -169,6 +169,7 @@ RenderSystem::~RenderSystem()
     glDeleteTextures(1, &m_bloomPongTex);
     glDeleteProgram(m_bloomThreshShader);
     glDeleteProgram(m_bloomKawaseShader);
+    glDeleteTextures(1, &m_bloomBlackTex);
     glDeleteFramebuffers(1, &m_fxaaFBO);
     glDeleteTextures(1, &m_fxaaTex);
     glDeleteProgram(m_fxaaShader);

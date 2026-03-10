@@ -1,4 +1,5 @@
 #include "RenderSystem.hpp"
+#include <sstream>
 
 // =====================================================
 //  CompileDepthShader
@@ -28,9 +29,15 @@ void RenderSystem::CompileDepthShader()
 // =====================================================
 void RenderSystem::CompileLightCullShader()
 {
-    const char* comp = R"GLSL(
-        #version 430 core
-        layout(local_size_x = 16, local_size_y = 16) in;
+    // Inject C++ constants as #defines so the shader always agrees with
+    // CPU-side SSBO sizes and dispatch dimensions.
+    std::ostringstream header;
+    header << "#version 430 core\n";
+    header << "#define TILE_SIZE " << TILE_SIZE << "\n";
+    header << "#define MAX_LIGHTS_TILE " << MAX_LIGHTS_TILE << "\n";
+
+    const std::string body = R"GLSL(
+        layout(local_size_x = TILE_SIZE, local_size_y = TILE_SIZE) in;
 
         struct PointLight { vec4 posRadius; vec4 colorIntensity; };
         struct TileData   { uint offset; uint count; };
@@ -41,6 +48,7 @@ void RenderSystem::CompileLightCullShader()
 
         uniform sampler2D uDepthMap;
         uniform mat4      uProjection;
+        uniform mat4      uInvProjection; // pre-inverted on CPU, no per-workgroup inverse()
         uniform mat4      uView;
         uniform int       uLightCount;
         uniform ivec2     uScreenSize;
@@ -48,11 +56,20 @@ void RenderSystem::CompileLightCullShader()
         shared uint s_minDepthInt;
         shared uint s_maxDepthInt;
         shared uint s_tileLightCount;
-        shared uint s_tileLightIndices[256];
+        shared uint s_tileLightIndices[MAX_LIGHTS_TILE];
 
         vec4 CreatePlane(vec3 p0, vec3 p1, vec3 p2) {
             vec3 n = normalize(cross(p1 - p0, p2 - p0));
             return vec4(n, -dot(n, p0));
+        }
+
+        // Convert a hardware depth buffer value [0,1] to a positive view-space depth.
+        // GL perspective matrix (column-major): C = proj[2][2], D = proj[3][2]
+        // Derivation: ndcZ = C + D/viewZ  =>  viewZ = -D / (ndcZ - C)
+        // We return positive depth so comparisons are intuitive (near < far).
+        float ndcDepthToViewZ(float d) {
+            float ndcZ = d * 2.0 - 1.0;
+            return -uProjection[3][2] / (ndcZ - uProjection[2][2]);
         }
 
         void main() {
@@ -68,14 +85,18 @@ void RenderSystem::CompileLightCullShader()
             }
             barrier();
 
-            vec2 uv = (vec2(pixel) + 0.5) / vec2(uScreenSize);
             if (pixel.x < uScreenSize.x && pixel.y < uScreenSize.y) {
-                float depth = texture(uDepthMap, uv).r;
-                atomicMin(s_minDepthInt, floatBitsToUint(depth));
-                atomicMax(s_maxDepthInt, floatBitsToUint(depth));
+                vec2  uv    = (vec2(pixel) + 0.5) / vec2(uScreenSize);
+                float d     = texture(uDepthMap, uv).r;
+                // Convert to view-space depth BEFORE the atomics so that
+                // min/max are in the same space as the light Z comparisons below.
+                float viewZ = ndcDepthToViewZ(d);
+                atomicMin(s_minDepthInt, floatBitsToUint(viewZ));
+                atomicMax(s_maxDepthInt, floatBitsToUint(viewZ));
             }
             barrier();
 
+            // These are now positive view-space depths (same space as lightMinZ/lightMaxZ).
             float minDepthVS = uintBitsToFloat(s_minDepthInt);
             float maxDepthVS = uintBitsToFloat(s_maxDepthInt);
 
@@ -83,11 +104,10 @@ void RenderSystem::CompileLightCullShader()
             vec2 ndcLB = vec2(tileID) * step - 1.0;
             vec2 ndcRT = ndcLB + step;
 
-            mat4 invProj = inverse(uProjection);
-            vec3 lb = vec3((invProj * vec4(ndcLB.x, ndcLB.y, -1.0, 1.0)).xyz);
-            vec3 rb = vec3((invProj * vec4(ndcRT.x, ndcLB.y, -1.0, 1.0)).xyz);
-            vec3 lt = vec3((invProj * vec4(ndcLB.x, ndcRT.y, -1.0, 1.0)).xyz);
-            vec3 rt = vec3((invProj * vec4(ndcRT.x, ndcRT.y, -1.0, 1.0)).xyz);
+            vec3 lb = (uInvProjection * vec4(ndcLB.x, ndcLB.y, -1.0, 1.0)).xyz;
+            vec3 rb = (uInvProjection * vec4(ndcRT.x, ndcLB.y, -1.0, 1.0)).xyz;
+            vec3 lt = (uInvProjection * vec4(ndcLB.x, ndcRT.y, -1.0, 1.0)).xyz;
+            vec3 rt = (uInvProjection * vec4(ndcRT.x, ndcRT.y, -1.0, 1.0)).xyz;
             vec3 origin = vec3(0.0);
 
             vec4 planes[4];
@@ -96,7 +116,7 @@ void RenderSystem::CompileLightCullShader()
             planes[2] = CreatePlane(origin, rb, lb);
             planes[3] = CreatePlane(origin, lt, rt);
 
-            for (int i = int(gl_LocalInvocationIndex); i < uLightCount; i += 256) {
+            for (int i = int(gl_LocalInvocationIndex); i < uLightCount; i += MAX_LIGHTS_TILE) {
                 vec4  lightViewPos = uView * vec4(lights[i].posRadius.xyz, 1.0);
                 float radius       = lights[i].posRadius.w;
 
@@ -112,23 +132,26 @@ void RenderSystem::CompileLightCullShader()
 
                 if (inside) {
                     uint slot = atomicAdd(s_tileLightCount, 1u);
-                    if (slot < 256u)
+                    if (slot < uint(MAX_LIGHTS_TILE))
                         s_tileLightIndices[slot] = uint(i);
                 }
             }
             barrier();
 
             if (gl_LocalInvocationIndex == 0u) {
-                uint offset = uint(tileIndex) * 256u;
+                uint maxSlot = uint(MAX_LIGHTS_TILE);
+                uint offset  = uint(tileIndex) * maxSlot;
                 grid[tileIndex].offset = offset;
-                grid[tileIndex].count  = min(s_tileLightCount, 256u);
+                grid[tileIndex].count  = min(s_tileLightCount, maxSlot);
                 for (uint j = 0u; j < grid[tileIndex].count; j++)
                     lightIndices[offset + j] = s_tileLightIndices[j];
             }
         }
     )GLSL";
 
-    m_lightCullShader = LinkProgram({ CompileStage(GL_COMPUTE_SHADER, comp) });
+    std::string src = header.str() + body;
+    const char* ptr = src.c_str();
+    m_lightCullShader = LinkProgram({ CompileStage(GL_COMPUTE_SHADER, ptr) });
 }
 
 // =====================================================

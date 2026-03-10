@@ -98,7 +98,7 @@ private:
     //  GPU resource handles
     // =====================================================
     GLuint m_depthFBO = 0;
-    GLuint m_depthTex = 0;
+    // m_depthTex removed: DepthPrePass and ShadingPass share m_hdrDepthTex
     GLuint m_lightSSBO = 0; // binding 0 -- PointLight array
     GLuint m_lightIndexSSBO = 0; // binding 1 -- flat uint index list
     GLuint m_tileGridSSBO = 0; // binding 2 -- (offset, count) per tile
@@ -138,6 +138,7 @@ private:
     GLuint m_bloomThreshShader = 0;
     GLuint m_bloomKawaseShader = 0;
     GLuint m_bloomResultTex = 0;  // points to ping or pong after BloomPass
+    GLuint m_bloomBlackTex = 0;  // 1x1 black fallback when bloom is disabled
 
     // =====================================================
     //  FXAA resources
@@ -156,6 +157,7 @@ private:
     void InitScreenQuad();
     void InitBloom();
     void InitFXAA();
+    void InitBloomBlackTex();
 
     // =====================================================
     //  Shader compilation helpers

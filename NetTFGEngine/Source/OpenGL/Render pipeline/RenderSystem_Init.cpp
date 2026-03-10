@@ -36,20 +36,16 @@ GLuint RenderSystem::LinkProgram(std::initializer_list<GLuint> stages)
 
 // =====================================================
 //  InitDepthFBO
+//  Attaches m_hdrDepthTex (created in InitHDRFBO) so
+//  the depth pre-pass and shading pass share one surface.
+//  Call AFTER InitHDRFBO.
 // =====================================================
 void RenderSystem::InitDepthFBO()
 {
-    glGenTextures(1, &m_depthTex);
-    glBindTexture(GL_TEXTURE_2D, m_depthTex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F,
-        m_screenW, m_screenH, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-
     glGenFramebuffers(1, &m_depthFBO);
     glBindFramebuffer(GL_FRAMEBUFFER, m_depthFBO);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-        GL_TEXTURE_2D, m_depthTex, 0);
+        GL_TEXTURE_2D, m_hdrDepthTex, 0);
     glDrawBuffer(GL_NONE);
     glReadBuffer(GL_NONE);
 
@@ -136,6 +132,9 @@ void RenderSystem::InitHDRFBO()
         m_screenW, m_screenH, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    // GL_NONE: sampler2D in the compute shader reads raw [0,1] depth.
+    // Default (GL_COMPARE_REF_TO_TEXTURE) would return 0 or 1 only.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NONE);
 
     glGenFramebuffers(1, &m_hdrFBO);
     glBindFramebuffer(GL_FRAMEBUFFER, m_hdrFBO);
@@ -237,5 +236,22 @@ void RenderSystem::InitFXAA()
         Debug::Error("RenderSystem") << "FXAA FBO incomplete\n";
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+// =====================================================
+//  InitBloomBlackTex
+//  1x1 black RGBA16F used as the bloom texture when
+//  bloom is disabled so the tonemap shader never samples
+//  texture name 0 (which is not a valid bound texture).
+// =====================================================
+void RenderSystem::InitBloomBlackTex()
+{
+    const float black[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+    glGenTextures(1, &m_bloomBlackTex);
+    glBindTexture(GL_TEXTURE_2D, m_bloomBlackTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, 1, 1,
+        0, GL_RGBA, GL_FLOAT, black);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glBindTexture(GL_TEXTURE_2D, 0);
 }

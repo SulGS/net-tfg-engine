@@ -36,8 +36,8 @@ void RenderSystem::ShadowPass(EntityManager& em, EntityManager::Query<MeshCompon
 
     glBindFramebuffer(GL_FRAMEBUFFER, m_shadowFBO);
     glViewport(0, 0, m_shadowRes, m_shadowRes);
-    glClear(GL_DEPTH_BUFFER_BIT);
     glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
     glEnable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(rs.getShadowBiasFactor(), rs.getShadowBiasUnits());
@@ -49,6 +49,8 @@ void RenderSystem::ShadowPass(EntityManager& em, EntityManager::Query<MeshCompon
 
     for (auto [entity, light, xform] : lightQuery) {
         if (shadowIdx >= MAX_SHADOW_LIGHTS) break;
+
+        glClear(GL_DEPTH_BUFFER_BIT); // must clear per light
 
         glm::vec3 pos = xform->getPosition();
         float     farPlane = light->radius;
@@ -110,10 +112,13 @@ void RenderSystem::DepthPrePass(EntityManager::Query<MeshComponent, Transform>& 
     const glm::mat4& view,
     const glm::mat4& projection)
 {
+    glViewport(0, 0, m_screenW, m_screenH); // restore after shadow pass
     glBindFramebuffer(GL_FRAMEBUFFER, m_depthFBO);
     glClear(GL_DEPTH_BUFFER_BIT);
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
     glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_TRUE);
     glUseProgram(m_depthShader);
 
     for (auto [entity, meshC, transform] : meshQuery) {
@@ -127,6 +132,9 @@ void RenderSystem::DepthPrePass(EntityManager::Query<MeshComponent, Transform>& 
 
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    // Ensure depth writes are visible to the compute shader that samples m_depthTex.
+    glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
 }
 
 // =====================================================
@@ -138,11 +146,14 @@ void RenderSystem::LightCullPass(const glm::mat4& view,
     glUseProgram(m_lightCullShader);
 
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, m_depthTex);
+    glBindTexture(GL_TEXTURE_2D, m_hdrDepthTex); // shared with depthFBO and hdrFBO
     glUniform1i(glGetUniformLocation(m_lightCullShader, "uDepthMap"), 0);
 
+    glm::mat4 invProj = glm::inverse(projection); // pre-invert once on CPU
     glUniformMatrix4fv(glGetUniformLocation(m_lightCullShader, "uProjection"),
         1, GL_FALSE, glm::value_ptr(projection));
+    glUniformMatrix4fv(glGetUniformLocation(m_lightCullShader, "uInvProjection"),
+        1, GL_FALSE, glm::value_ptr(invProj));
     glUniformMatrix4fv(glGetUniformLocation(m_lightCullShader, "uView"),
         1, GL_FALSE, glm::value_ptr(view));
     glUniform1i(glGetUniformLocation(m_lightCullShader, "uLightCount"), m_lightCount);
@@ -168,6 +179,8 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_TRUE);
 
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_lightSSBO);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_lightIndexSSBO);

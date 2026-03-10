@@ -91,7 +91,7 @@ void RenderSystem::TonemapPass()
 
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D,
-        (rs.getBloomEnabled() && m_bloomResultTex) ? m_bloomResultTex : 0);
+        (rs.getBloomEnabled() && m_bloomResultTex) ? m_bloomResultTex : m_bloomBlackTex);
     glUniform1i(glGetUniformLocation(m_tonemapShader, "uBloomTex"), 1);
 
     glUniform1i(glGetUniformLocation(m_tonemapShader, "uBloomEnabled"),
