@@ -35,48 +35,14 @@ GLuint RenderSystem::LinkProgram(std::initializer_list<GLuint> stages)
 }
 
 // =====================================================
-//  InitDepthFBO
-//  Attaches m_hdrDepthTex (created in InitHDRFBO) so
-//  the depth pre-pass and shading pass share one surface.
-//  Call AFTER InitHDRFBO.
+//  InitLightSSBO
 // =====================================================
-void RenderSystem::InitDepthFBO()
+void RenderSystem::InitLightSSBO()
 {
-    glGenFramebuffers(1, &m_depthFBO);
-    glBindFramebuffer(GL_FRAMEBUFFER, m_depthFBO);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-        GL_TEXTURE_2D, m_hdrDepthTex, 0);
-    glDrawBuffer(GL_NONE);
-    glReadBuffer(GL_NONE);
-
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-        Debug::Error("RenderSystem") << "Depth FBO incomplete\n";
-
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-}
-
-// =====================================================
-//  InitSSBOs
-// =====================================================
-void RenderSystem::InitSSBOs()
-{
-    int totalTiles = m_tilesX * m_tilesY;
-
     glGenBuffers(1, &m_lightSSBO);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_lightSSBO);
     glBufferData(GL_SHADER_STORAGE_BUFFER,
         sizeof(GPUPointLight) * MAX_LIGHTS, nullptr, GL_DYNAMIC_DRAW);
-
-    glGenBuffers(1, &m_lightIndexSSBO);
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_lightIndexSSBO);
-    glBufferData(GL_SHADER_STORAGE_BUFFER,
-        sizeof(uint32_t) * totalTiles * MAX_LIGHTS_TILE, nullptr, GL_DYNAMIC_DRAW);
-
-    glGenBuffers(1, &m_tileGridSSBO);
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_tileGridSSBO);
-    glBufferData(GL_SHADER_STORAGE_BUFFER,
-        sizeof(GPUTileData) * totalTiles, nullptr, GL_DYNAMIC_DRAW);
-
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 }
 

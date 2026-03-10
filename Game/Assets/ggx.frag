@@ -27,29 +27,22 @@ uniform samplerCubeArray uShadowCubeArray;
 // -------------------------------------------------------
 // Per-frame uniforms
 // -------------------------------------------------------
-uniform ivec2 uScreenSize;
-uniform vec3  uCameraPos;
-uniform int   uShadowCount;
+uniform vec3 uCameraPos;
+uniform int  uShadowCount;
+uniform int  uLightCount;
 
 // -------------------------------------------------------
-// Forward+ SSBOs
+// Light SSBO  (binding 0)
 // -------------------------------------------------------
 struct PointLight {
-    vec4 posRadius;       // xyz = world pos,  w = radius (culling only)
+    vec4 posRadius;       // xyz = world pos,  w = radius
     vec4 colorIntensity;  // rgb = color,       a = intensity (candelas)
 };
 
-struct TileData {
-    uint offset;
-    uint count;
-};
-
 layout(std430, binding = 0) readonly buffer LightBuffer { PointLight lights[]; };
-layout(std430, binding = 1) readonly buffer LightIdx    { uint lightIndices[]; };
-layout(std430, binding = 2) readonly buffer TileGrid    { TileData grid[]; };
 
 // -------------------------------------------------------
-// Shadow SSBO  (binding 3)
+// Shadow SSBO  (binding 1)
 // -------------------------------------------------------
 struct ShadowData {
     mat4  lightSpaceMatrices[6];
@@ -58,13 +51,12 @@ struct ShadowData {
     int   pad[2];
 };
 
-layout(std430, binding = 3) readonly buffer ShadowBuf { ShadowData shadows[]; };
+layout(std430, binding = 1) readonly buffer ShadowBuf { ShadowData shadows[]; };
 
 // -------------------------------------------------------
 // Constants
 // -------------------------------------------------------
-const int   TILE_SIZE = 16;
-const float PI        = 3.14159265358979;
+const float PI = 3.14159265358979;
 
 // -------------------------------------------------------
 // Normal map decode -> world-space N
@@ -168,11 +160,11 @@ float ShadowPCF(int shadowIdx, vec3 fragToLight, float currentDist, float farPla
 // Returns PCF shadow factor for a given light, or 1.0 if
 // the light has no shadow map.
 // -------------------------------------------------------
-float GetShadowFactor(uint lightBufIndex, vec3 lightPos, float currentDist)
+float GetShadowFactor(int lightBufIndex, vec3 lightPos, float currentDist)
 {
     for (int s = 0; s < uShadowCount; s++)
     {
-        if (shadows[s].lightIndex == int(lightBufIndex))
+        if (shadows[s].lightIndex == lightBufIndex)
         {
             vec3 fragToLight = vWorldPos - lightPos;
             return ShadowPCF(s, fragToLight, currentDist, shadows[s].farPlane);
@@ -182,22 +174,17 @@ float GetShadowFactor(uint lightBufIndex, vec3 lightPos, float currentDist)
 }
 
 // -------------------------------------------------------
-// Forward+ tile light accumulation
+// Point light accumulation — iterate all visible lights
 // -------------------------------------------------------
 vec3 CalcPointLights(vec3 N, vec3 V,
                      vec3 albedo, vec3 F0,
                      float alpha, float metallic, float ao)
 {
-    ivec2 tile  = ivec2(gl_FragCoord.xy) / TILE_SIZE;
-    int   tileW = (uScreenSize.x + TILE_SIZE - 1) / TILE_SIZE;
-    uint  idx   = uint(tile.y * tileW + tile.x);
-
     vec3 result = vec3(0.0);
 
-    for (uint i = grid[idx].offset; i < grid[idx].offset + grid[idx].count; i++)
+    for (int i = 0; i < uLightCount; i++)
     {
-        uint       li = lightIndices[i];
-        PointLight l  = lights[li];
+        PointLight l = lights[i];
 
         vec3  lVec = l.posRadius.xyz - vWorldPos;
         float dist = length(lVec);
@@ -208,7 +195,7 @@ vec3 CalcPointLights(vec3 N, vec3 V,
         float atten = l.colorIntensity.a / max(dist * dist, 0.0001);
         vec3  Li    = l.colorIntensity.rgb * atten;
 
-        float shadow = GetShadowFactor(li, l.posRadius.xyz, dist);
+        float shadow = GetShadowFactor(i, l.posRadius.xyz, dist);
 
         result += CookTorranceBRDF(N, V, L, albedo, F0, alpha, metallic, ao) * Li * shadow;
     }

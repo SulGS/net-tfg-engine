@@ -16,18 +16,11 @@
 #include <cmath>
 #include <algorithm>
 
-// -------------------------------------------------------
-//  GPU-side light layout — must match light_cull.comp
-//  and the SSBO declarations in every .frag shader
-// -------------------------------------------------------
+
+
 struct GPUPointLight {
     glm::vec4 posRadius;      // xyz = world pos,  w = radius
     glm::vec4 colorIntensity; // rgb = color,       a = intensity
-};
-
-struct GPUTileData {
-    uint32_t offset;
-    uint32_t count;
 };
 
 struct GPUShadowData {
@@ -46,15 +39,15 @@ using MeshQuery = decltype(
     std::declval<EntityManager>().CreateQuery<MeshComponent, Transform>());
 
 // -------------------------------------------------------
-//  Forward+ RenderSystem
+//  RenderSystem
 //
 //  Per-frame pipeline:
-//    1. UploadLights   — stream PointLightComponent data -> SSBO
-//    2. DepthPrePass   — depth-only draw to offscreen FBO
-//    3. LightCullPass  — compute shader tiles the screen,
-//                        culls lights per tile
-//    4. ShadingPass    — normal mesh draw; every frag shader
-//                        reads the tile list from SSBOs
+//    1. ShadowPass     — render depth cubemap array for
+//                        all shadow-casting point lights
+//    2. ShadingPass    — full mesh draw with shadow lookup
+//    3. BloomPass      — threshold + Kawase blur (optional)
+//    4. TonemapPass    — exposure + filmic/Reinhard + gamma
+//    5. FXAAPass       — edge-smoothing on LDR output
 // -------------------------------------------------------
 class RenderSystem : public ISystem {
 public:
@@ -89,25 +82,16 @@ private:
     // =====================================================
     //  Init-time constants — set from RenderSettings in Init()
     // =====================================================
-    int TILE_SIZE = 16;
     int MAX_LIGHTS = 512;
-    int MAX_LIGHTS_TILE = 256;
     int MAX_SHADOW_LIGHTS = 8;
 
     // =====================================================
     //  GPU resource handles
     // =====================================================
-    GLuint m_depthFBO = 0;
-    // m_depthTex removed: DepthPrePass and ShadingPass share m_hdrDepthTex
-    GLuint m_lightSSBO = 0; // binding 0 -- PointLight array
-    GLuint m_lightIndexSSBO = 0; // binding 1 -- flat uint index list
-    GLuint m_tileGridSSBO = 0; // binding 2 -- (offset, count) per tile
-    GLuint m_depthShader = 0;
-    GLuint m_lightCullShader = 0;
-
     int m_screenW = 0, m_screenH = 0;
-    int m_tilesX = 0, m_tilesY = 0;
     int m_lightCount = 0;
+
+    GLuint m_lightSSBO = 0; // binding 0 — GPUPointLight array
 
     GLuint m_shadowCubeArray = 0;
     GLuint m_shadowFBO = 0;
@@ -150,8 +134,7 @@ private:
     // =====================================================
     //  Initialisation helpers
     // =====================================================
-    void InitDepthFBO();
-    void InitSSBOs();
+    void InitLightSSBO();
     void InitShadowCubeArray();
     void InitHDRFBO();
     void InitScreenQuad();
@@ -165,8 +148,6 @@ private:
     static GLuint CompileStage(GLenum type, const char* src);
     static GLuint LinkProgram(std::initializer_list<GLuint> stages);
 
-    void CompileDepthShader();
-    void CompileLightCullShader();
     void CompileShadowShader();
     void CompileTonemapShader();
     void CompileBloomShaders();
@@ -175,10 +156,7 @@ private:
     // =====================================================
     //  Per-frame passes
     // =====================================================
-    void UploadLights(EntityManager& em);
     void ShadowPass(EntityManager& em, EntityManager::Query<MeshComponent, Transform>& meshQuery);
-    void DepthPrePass(EntityManager::Query<MeshComponent, Transform>& meshQuery, const glm::mat4& view, const glm::mat4& projection);
-    void LightCullPass(const glm::mat4& view, const glm::mat4& projection);
     void ShadingPass(EntityManager::Query<MeshComponent, Transform>& meshQuery, const glm::mat4& view,
         const glm::mat4& projection, const glm::vec3& cameraPos);
     void BloomPass();

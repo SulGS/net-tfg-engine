@@ -73,16 +73,6 @@ public:
     void setMaxLights(int v) { m_maxLights = v; }
     int  getMaxLights()        const { return m_maxLights; }
 
-    // Maximum number of lights visible in a single screen tile.
-    // Determines the light-index SSBO size.
-    void setMaxLightsPerTile(int v) { m_maxLightsPerTile = v; }
-    int  getMaxLightsPerTile() const { return m_maxLightsPerTile; }
-
-    // Screen tile size in pixels for the Forward+ light culling pass.
-    // Must match local_size_x/y in light_cull.comp.
-    void setTileSize(int v) { m_tileSize = v; }
-    int  getTileSize()         const { return m_tileSize; }
-
     // How many shadow-casting point lights are supported simultaneously.
     // Each occupies 6 layers in the cubemap array texture.
     void setMaxShadowLights(int v) { m_maxShadowLights = v; }
@@ -331,8 +321,6 @@ private:
             m_useCompression = true;
             // Init-time
             m_maxLights = 64;
-            m_maxLightsPerTile = 32;
-            m_tileSize = 32;
             m_maxShadowLights = 0;
             m_msaaSamples = 1;    // no MSAA
             m_anisotropy = 1.0f; // off
@@ -364,8 +352,6 @@ private:
             m_baseMip = 2;
             m_useCompression = true;
             m_maxLights = 128;
-            m_maxLightsPerTile = 64;
-            m_tileSize = 32;
             m_maxShadowLights = 2;
             m_msaaSamples = 1;
             m_anisotropy = 2.0f;
@@ -396,8 +382,6 @@ private:
             m_baseMip = 1;
             m_useCompression = true;
             m_maxLights = 256;
-            m_maxLightsPerTile = 128;
-            m_tileSize = 16;
             m_maxShadowLights = 4;
             m_msaaSamples = 2;
             m_anisotropy = 4.0f;
@@ -435,8 +419,6 @@ private:
             m_baseMip = 0;
             m_useCompression = true;
             m_maxLights = 512;
-            m_maxLightsPerTile = 256;
-            m_tileSize = 16;
             m_maxShadowLights = 8;
             m_msaaSamples = 4;
             m_anisotropy = 8.0f;
@@ -474,8 +456,6 @@ private:
             m_baseMip = 0;
             m_useCompression = false;
             m_maxLights = 1024;
-            m_maxLightsPerTile = 256;
-            m_tileSize = 16;
             m_maxShadowLights = 16;
             m_msaaSamples = 8;
             m_anisotropy = 16.0f;
@@ -518,8 +498,6 @@ private:
 
     // ---- Init-time ----
     int   m_maxLights = 512;
-    int   m_maxLightsPerTile = 256;
-    int   m_tileSize = 16;
     int   m_maxShadowLights = 8;
     int   m_msaaSamples = 4;
     float m_anisotropy = 8.0f;

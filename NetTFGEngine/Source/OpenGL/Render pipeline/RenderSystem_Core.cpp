@@ -4,45 +4,34 @@ void RenderSystem::Init(int screenW, int screenH)
 {
     const auto& rs = RenderSettings::instance();
     MAX_LIGHTS = rs.getMaxLights();
-    MAX_LIGHTS_TILE = rs.getMaxLightsPerTile();
-    TILE_SIZE = rs.getTileSize();
+    MAX_LIGHTS = rs.getMaxLights();
     MAX_SHADOW_LIGHTS = rs.getMaxShadowLights();
 
     m_screenW = screenW;
     m_screenH = screenH;
-    m_tilesX = (screenW + TILE_SIZE - 1) / TILE_SIZE;
-    m_tilesY = (screenH + TILE_SIZE - 1) / TILE_SIZE;
 
     InitHDRFBO();
-    InitDepthFBO(); // must come after InitHDRFBO — attaches m_hdrDepthTex
-    InitSSBOs();
+    InitLightSSBO();
+    InitLightSSBO();
     InitShadowCubeArray();
     InitBloom();
     InitBloomBlackTex();
     InitFXAA();
-    CompileDepthShader();
-    CompileLightCullShader();
     CompileShadowShader();
     CompileTonemapShader();
     CompileBloomShaders();
     CompileFXAAShader();
     InitScreenQuad();
 }
-
 void RenderSystem::Resize(int screenW, int screenH)
 {
     m_screenW = screenW;
     m_screenH = screenH;
-    m_tilesX = (screenW + TILE_SIZE - 1) / TILE_SIZE;
-    m_tilesY = (screenH + TILE_SIZE - 1) / TILE_SIZE;
 
-    glDeleteFramebuffers(1, &m_depthFBO); m_depthFBO = 0;
-    // m_hdrDepthTex is the shared depth surface — recreate hdrFBO first
     glDeleteFramebuffers(1, &m_hdrFBO);  m_hdrFBO = 0;
     glDeleteTextures(1, &m_hdrColorTex); m_hdrColorTex = 0;
     glDeleteTextures(1, &m_hdrDepthTex); m_hdrDepthTex = 0;
     InitHDRFBO();
-    InitDepthFBO(); // re-attaches new m_hdrDepthTex
 
     glDeleteFramebuffers(1, &m_bloomThreshFBO); m_bloomThreshFBO = 0;
     glDeleteFramebuffers(1, &m_bloomPingFBO);   m_bloomPingFBO = 0;
@@ -55,25 +44,7 @@ void RenderSystem::Resize(int screenW, int screenH)
     glDeleteFramebuffers(1, &m_fxaaFBO); m_fxaaFBO = 0;
     glDeleteTextures(1, &m_fxaaTex);     m_fxaaTex = 0;
     InitFXAA();
-
-    // m_lightSSBO is fixed MAX_LIGHTS size -- do NOT touch it
-    int totalTiles = m_tilesX * m_tilesY;
-
-    glDeleteBuffers(1, &m_lightIndexSSBO); m_lightIndexSSBO = 0;
-    glGenBuffers(1, &m_lightIndexSSBO);
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_lightIndexSSBO);
-    glBufferData(GL_SHADER_STORAGE_BUFFER,
-        sizeof(uint32_t) * totalTiles * MAX_LIGHTS_TILE, nullptr, GL_DYNAMIC_DRAW);
-
-    glDeleteBuffers(1, &m_tileGridSSBO); m_tileGridSSBO = 0;
-    glGenBuffers(1, &m_tileGridSSBO);
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_tileGridSSBO);
-    glBufferData(GL_SHADER_STORAGE_BUFFER,
-        sizeof(GPUTileData) * totalTiles, nullptr, GL_DYNAMIC_DRAW);
-
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 }
-
 void RenderSystem::ReInitShadows()
 {
     glDeleteFramebuffers(1, &m_shadowFBO);   m_shadowFBO = 0;
@@ -87,7 +58,7 @@ void RenderSystem::Update(EntityManager& entityManager,
     bool /*isServer*/,
     float /*deltaTime*/)
 {
-    if (m_depthFBO == 0) {
+    if (m_hdrFBO == 0) {
         Debug::Error("RenderSystem") << "Call Init() before first Update()\n";
         return;
     }
@@ -116,16 +87,10 @@ void RenderSystem::Update(EntityManager& entityManager,
 
     auto meshQuery = entityManager.CreateQuery<MeshComponent, Transform>();
 
-    UploadLights(entityManager);
-
     if (RenderSettings::instance().getShadowsEnabled())
         ShadowPass(entityManager, meshQuery);
     else
         m_shadowCount = 0;
-
-    DepthPrePass(meshQuery, view, projection);
-
-    LightCullPass(view, projection);
 
     ShadingPass(meshQuery, view, projection, cameraPos);
 
@@ -141,16 +106,10 @@ void RenderSystem::Update(EntityManager& entityManager,
 
     entityManager.releaseMutex();
 }
-
 RenderSystem::~RenderSystem()
 {
-    glDeleteFramebuffers(1, &m_depthFBO);
-    // m_depthTex removed — depth surface is m_hdrDepthTex, deleted below with hdrFBO
     glDeleteBuffers(1, &m_lightSSBO);
-    glDeleteBuffers(1, &m_lightIndexSSBO);
-    glDeleteBuffers(1, &m_tileGridSSBO);
-    glDeleteProgram(m_depthShader);
-    glDeleteProgram(m_lightCullShader);
+    glDeleteBuffers(1, &m_lightSSBO);
     glDeleteFramebuffers(1, &m_shadowFBO);
     glDeleteTextures(1, &m_shadowCubeArray);
     glDeleteBuffers(1, &m_shadowDataSSBO);
