@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <cmath>
 #include <algorithm>
+#include <filesystem>
 
 
 
@@ -45,9 +46,9 @@ using MeshQuery = decltype(
 //    1. ShadowPass     — render depth cubemap array for
 //                        all shadow-casting point lights
 //    2. ShadingPass    — full mesh draw with shadow lookup
-//    3. BloomPass      — threshold + Kawase blur (optional)
-//    4. TonemapPass    — exposure + filmic/Reinhard + gamma
-//    5. FXAAPass       — edge-smoothing on LDR output
+//    3. BloomPass      — threshold + Kawase blur
+//    4. TonemapPass    — exposure + filmic/Reinhard + bloom composite + gamma → LDR FBO
+//    5. FXAAPass       — anti-aliasing → default framebuffer
 // -------------------------------------------------------
 class RenderSystem : public ISystem {
 public:
@@ -78,6 +79,23 @@ public:
 
     ~RenderSystem();
 
+    // ---------------------------------------------------
+    //  Debug: dump every pipeline buffer to "Render/<timestamp>/".
+    //
+    //  Files written (all PNG, 8-bit RGB):
+    //    hdr_color.png          — HDR colour, Reinhard-tonemapped
+    //    depth.png              — Scene depth, auto-ranged greyscale
+    //    bloom_thresh.png       — Bloom threshold pass output
+    //    bloom_result.png       — Final blurred bloom texture
+    //    ldr_color.png          — Post-tonemap LDR colour (pre-FXAA)
+    //    final_output.png       — Exact screen pixels (post-FXAA, pre-SwapBuffers)
+    //    shadow_L{n}_F{f}.png   — Shadow cubemap face f of light n
+    //
+    //  A timestamped subfolder is created automatically.
+    //  Safe to call at any time after Init().
+    // ---------------------------------------------------
+    void DumpBuffers() const;
+
 private:
     // =====================================================
     //  Init-time constants — set from RenderSettings in Init()
@@ -103,32 +121,34 @@ private:
     // =====================================================
     //  HDR framebuffer + screen-quad resources
     // =====================================================
-    GLuint m_hdrFBO = 0;  // offscreen FBO for the shading pass
-    GLuint m_hdrColorTex = 0;  // RGBA16F HDR color attachment
-    GLuint m_hdrDepthTex = 0;  // shared depth attachment
-    GLuint m_tonemapShader = 0;  // fullscreen tonemap + gamma program
-    GLuint m_quadVAO = 0;  // screen-space triangle VAO
+    GLuint m_hdrFBO = 0; // offscreen FBO for the shading pass
+    GLuint m_hdrColorTex = 0; // RGBA16F HDR color attachment
+    GLuint m_hdrDepthTex = 0; // shared depth attachment
+    GLuint m_quadVAO = 0; // screen-space triangle VAO
     GLuint m_quadVBO = 0;
 
     // =====================================================
     //  Bloom resources
     // =====================================================
-    GLuint m_bloomThreshFBO = 0;
-    GLuint m_bloomThreshTex = 0;  // RGBA16F -- bright pixels only
-    GLuint m_bloomPingFBO = 0;
-    GLuint m_bloomPingTex = 0;  // RGBA16F -- ping buffer (half-res)
-    GLuint m_bloomPongFBO = 0;
-    GLuint m_bloomPongTex = 0;  // RGBA16F -- pong buffer (half-res)
-    GLuint m_bloomThreshShader = 0;
-    GLuint m_bloomKawaseShader = 0;
-    GLuint m_bloomResultTex = 0;  // points to ping or pong after BloomPass
-    GLuint m_bloomBlackTex = 0;  // 1x1 black fallback when bloom is disabled
+    GLuint m_bloomThreshFBO = 0; // FBO for the threshold pass
+    GLuint m_bloomThreshTex = 0; // RGBA16F — pixels above threshold
+    GLuint m_bloomPingFBO = 0; // Kawase ping buffer
+    GLuint m_bloomPingTex = 0;
+    GLuint m_bloomPongFBO = 0; // Kawase pong buffer
+    GLuint m_bloomPongTex = 0;
 
     // =====================================================
-    //  FXAA resources
+    //  LDR framebuffer (tonemap output, FXAA input)
     // =====================================================
-    GLuint m_fxaaFBO = 0;  // LDR intermediate (RGBA8)
-    GLuint m_fxaaTex = 0;  // RGBA8 -- tonemapped LDR
+    GLuint m_ldrFBO = 0;  // tonemap writes here
+    GLuint m_ldrTex = 0;  // RGBA8
+
+    // =====================================================
+    //  Shader programs
+    // =====================================================
+    GLuint m_tonemapShader = 0;
+    GLuint m_bloomThreshShader = 0;
+    GLuint m_bloomKawaseShader = 0;
     GLuint m_fxaaShader = 0;
 
     // =====================================================
@@ -137,10 +157,9 @@ private:
     void InitLightSSBO();
     void InitShadowCubeArray();
     void InitHDRFBO();
-    void InitScreenQuad();
     void InitBloom();
-    void InitFXAA();
-    void InitBloomBlackTex();
+    void InitLDRFBO();
+    void InitScreenQuad();
 
     // =====================================================
     //  Shader compilation helpers
@@ -162,7 +181,6 @@ private:
     void BloomPass();
     void TonemapPass();
     void FXAAPass();
-    void BlitLDRToScreen();
 };
 
 #endif // RENDER_SYSTEM_HPP

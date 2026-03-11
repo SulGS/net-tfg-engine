@@ -78,12 +78,6 @@ public:
     void setMaxShadowLights(int v) { m_maxShadowLights = v; }
     int  getMaxShadowLights()  const { return m_maxShadowLights; }
 
-    // MSAA sample count � must be 1, 2, 4, or 8.
-    // Requires recreating all screen-size FBOs (main color + depth).
-    // Call RenderSystem::ReInitFramebuffers() after changing.
-    void setMSAASamples(int v) { m_msaaSamples = v; }
-    int  getMSAASamples()  const { return m_msaaSamples; }
-
     // Anisotropic filtering level applied to every texture at load time.
     // Common values: 1 (off), 2, 4, 8, 16.
     // The driver silently clamps to GL_MAX_TEXTURE_MAX_ANISOTROPY if
@@ -192,77 +186,59 @@ public:
     void  setGamma(float v) { m_gamma = v; }
     float getGamma()  const { return m_gamma; }
 
+
     // =======================================================
-    //  Bloom  [Runtime]
+    //  BLOOM  [Runtime]
     //
-    //  Extracts pixels above a luminance threshold from the
-    //  HDR buffer, blurs them with a dual-pass Kawase filter,
-    //  and additively blends the result back before tonemap.
-    //  All done in the HDR domain so the tonemap curve shapes
-    //  the final glow naturally.
+    //  A threshold pass extracts bright pixels, then a
+    //  Kawase multi-pass blur spreads the glow.  The result
+    //  is additively composited in TonemapPass.
     // =======================================================
 
-    // Master toggle.
+    // Enable / disable bloom entirely.
     void setBloomEnabled(bool v) { m_bloomEnabled = v; }
     bool getBloomEnabled()  const { return m_bloomEnabled; }
 
-    // Luminance threshold — fragments below this do not
-    // contribute to the bloom buffer.  Default 1.0.
+    // Luminance threshold — pixels brighter than this feed into bloom.
+    // Typical range [0.5, 2.0].  Default 1.0.
     void  setBloomThreshold(float v) { m_bloomThreshold = v; }
     float getBloomThreshold()  const { return m_bloomThreshold; }
 
-    // Additive blend weight when compositing bloom onto
-    // the HDR buffer before tonemapping.  Default 0.04.
+    // Additive blend weight of the bloom texture in the tonemap pass.
+    // Range [0.0, 1.0].  Default 0.04.
     void  setBloomStrength(float v) { m_bloomStrength = v; }
     float getBloomStrength()  const { return m_bloomStrength; }
 
-    // Number of Kawase downsample+upsample iterations.
-    // Range [1, 8].  Each step roughly doubles the spread.
+    // Number of Kawase blur iterations.  More = wider glow, more cost.
+    // Range [1, 8].  Default 4.
     void setBloomPasses(int v) { m_bloomPasses = v; }
-    int  getBloomPasses()  const { return m_bloomPasses; }
+    int  getBloomPasses() const { return m_bloomPasses; }
 
     // =======================================================
-    //  FXAA — Fast Approximate Anti-Aliasing  [Runtime]
+    //  FXAA  [Runtime]
     //
-    //  Single fullscreen pass on the final LDR buffer (after
-    //  tonemapping).  Detects edges via local luminance contrast
-    //  and blends along them.  Complements MSAA by smoothing
-    //  shader-aliasing on specular highlights that MSAA misses.
-    //
-    //  No GPU resource recreation needed when toggling or tuning.
+    //  Fast approximate anti-aliasing applied as the last
+    //  pass before the default framebuffer.
     // =======================================================
 
+    // Enable / disable FXAA.
     void setFXAAEnabled(bool v) { m_fxaaEnabled = v; }
     bool getFXAAEnabled()  const { return m_fxaaEnabled; }
 
-    // Minimum edge threshold.  Edges below this local contrast
-    // are skipped entirely, preserving flat gradients.
-    // Sensible range [0.02, 0.1].  Default 0.0312 (NVIDIA Low).
-    void  setFXAAEdgeThresholdMin(float v) { m_fxaaEdgeThresholdMin = v; }
-    float getFXAAEdgeThresholdMin()  const { return m_fxaaEdgeThresholdMin; }
+    // Sub-pixel quality — blends aliased edges with neighbours.
+    // Range [0.0, 1.0].  0.75 is a good default.
+    void  setFXAASubpix(float v) { m_fxaaSubpix = v; }
+    float getFXAASubpix()  const { return m_fxaaSubpix; }
 
-    // Maximum edge threshold controls overall sensitivity.
-    // Lower values detect more edges but introduce more blurring.
-    // Sensible range [0.063, 0.333].  Default 0.125 (NVIDIA High).
+    // Edge threshold — minimum local contrast to trigger AA.
+    // Range [0.063, 0.333].  Lower = more edges processed.  Default 0.125.
     void  setFXAAEdgeThreshold(float v) { m_fxaaEdgeThreshold = v; }
     float getFXAAEdgeThreshold()  const { return m_fxaaEdgeThreshold; }
 
-    // Sub-pixel aliasing removal strength [0.0, 1.0].
-    // Higher = more sub-pixel smoothing but slight softening.
-    // Default 0.75.
-    void  setFXAASubpixel(float v) { m_fxaaSubpixel = v; }
-    float getFXAASubpixel()  const { return m_fxaaSubpixel; }
-
-    // =======================================================
-    //  Meshlet culling  [Runtime]
-    //
-    //  The task shader skips meshlets whose bounding sphere
-    //  projects to fewer pixels than this threshold.
-    //  1.0 is a good default — raises it to aggressively cull
-    //  distant detail, lower it (toward 0) to disable.
-    // =======================================================
-    void  setSmallMeshletPixelThreshold(float v) { m_smallMeshletPixels = v; }
-    float getSmallMeshletPixelThreshold()  const { return m_smallMeshletPixels; }
+    // Edge threshold minimum — skip very dark pixels.
+    // Range [0.0, 0.0833].  Default 0.0833.
+    void  setFXAAEdgeThresholdMin(float v) { m_fxaaEdgeThresholdMin = v; }
+    float getFXAAEdgeThresholdMin()  const { return m_fxaaEdgeThresholdMin; }
 
     // Save the current preset index back to the cfg file.
     void savePreset() const
@@ -334,18 +310,8 @@ private:
             m_exposure = 1.0f;
             m_filmicEnabled = false;
             m_gamma = 2.2f;
-            // Bloom — disabled at VeryLow
             m_bloomEnabled = false;
-            m_bloomThreshold = 1.0f;
-            m_bloomStrength = 0.03f;
-            m_bloomPasses = 2;
-            // FXAA — on at all presets (single-pass, nearly free)
-            m_fxaaEnabled = true;
-            m_fxaaEdgeThresholdMin = 0.0312f;
-            m_fxaaEdgeThreshold = 0.25f;   // looser at low quality
-            m_fxaaSubpixel = 0.75f;
-            // Meshlet culling — aggressively skip tiny meshlets at this tier
-            m_smallMeshletPixels = 4.0f;
+            m_fxaaEnabled = false;
             break;
 
         case QualityPreset::Low:
@@ -364,18 +330,8 @@ private:
             m_exposure = 1.0f;
             m_filmicEnabled = false;
             m_gamma = 2.2f;
-            // Bloom — minimal passes
-            m_bloomEnabled = true;
-            m_bloomThreshold = 1.0f;
-            m_bloomStrength = 0.03f;
-            m_bloomPasses = 3;
-            // FXAA
+            m_bloomEnabled = false;
             m_fxaaEnabled = true;
-            m_fxaaEdgeThresholdMin = 0.0312f;
-            m_fxaaEdgeThreshold = 0.25f;
-            m_fxaaSubpixel = 0.75f;
-            // Meshlet culling
-            m_smallMeshletPixels = 2.0f;
             break;
 
         case QualityPreset::Medium:
@@ -401,18 +357,11 @@ private:
             m_filmicToeDenominator = 0.30f;
             m_filmicLinearWhite = 11.2f;
             m_gamma = 2.2f;
-            // Bloom — moderate passes
             m_bloomEnabled = true;
-            m_bloomThreshold = 1.0f;
-            m_bloomStrength = 0.04f;
-            m_bloomPasses = 5;
-            // FXAA — tighter thresholds at Medium+
+            m_bloomThreshold = 1.2f;
+            m_bloomStrength = 0.03f;
+            m_bloomPasses = 3;
             m_fxaaEnabled = true;
-            m_fxaaEdgeThresholdMin = 0.0312f;
-            m_fxaaEdgeThreshold = 0.125f;
-            m_fxaaSubpixel = 0.75f;
-            // Meshlet culling — default threshold
-            m_smallMeshletPixels = 1.0f;
             break;
 
         case QualityPreset::High:
@@ -438,18 +387,11 @@ private:
             m_filmicToeDenominator = 0.30f;
             m_filmicLinearWhite = 11.2f;
             m_gamma = 2.2f;
-            // Bloom — full passes
             m_bloomEnabled = true;
             m_bloomThreshold = 1.0f;
             m_bloomStrength = 0.04f;
-            m_bloomPasses = 6;
-            // FXAA
+            m_bloomPasses = 4;
             m_fxaaEnabled = true;
-            m_fxaaEdgeThresholdMin = 0.0312f;
-            m_fxaaEdgeThreshold = 0.125f;
-            m_fxaaSubpixel = 0.75f;
-            // Meshlet culling
-            m_smallMeshletPixels = 0.5f;
             break;
 
         case QualityPreset::Ultra:
@@ -475,18 +417,11 @@ private:
             m_filmicToeDenominator = 0.30f;
             m_filmicLinearWhite = 11.2f;
             m_gamma = 2.2f;
-            // Bloom — maximum passes, slightly more strength
             m_bloomEnabled = true;
-            m_bloomThreshold = 0.9f;
+            m_bloomThreshold = 0.8f;
             m_bloomStrength = 0.05f;
-            m_bloomPasses = 8;
-            // FXAA — highest quality subpixel at Ultra
+            m_bloomPasses = 6;
             m_fxaaEnabled = true;
-            m_fxaaEdgeThresholdMin = 0.0312f;
-            m_fxaaEdgeThreshold = 0.063f;
-            m_fxaaSubpixel = 1.0f;
-            // Meshlet culling — no culling at Ultra, preserve all detail
-            m_smallMeshletPixels = 0.0f;
             break;
         }
     }
@@ -525,14 +460,11 @@ private:
     bool  m_bloomEnabled = true;
     float m_bloomThreshold = 1.0f;
     float m_bloomStrength = 0.04f;
-    int   m_bloomPasses = 5;
+    int   m_bloomPasses = 4;
 
     // ---- FXAA ----
     bool  m_fxaaEnabled = true;
-    float m_fxaaEdgeThresholdMin = 0.0312f;
+    float m_fxaaSubpix = 0.75f;
     float m_fxaaEdgeThreshold = 0.125f;
-    float m_fxaaSubpixel = 0.75f;
-
-    // ---- Meshlet culling ----
-    float m_smallMeshletPixels = 1.0f;
+    float m_fxaaEdgeThresholdMin = 0.0833f;
 };

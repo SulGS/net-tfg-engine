@@ -4,19 +4,16 @@ void RenderSystem::Init(int screenW, int screenH)
 {
     const auto& rs = RenderSettings::instance();
     MAX_LIGHTS = rs.getMaxLights();
-    MAX_LIGHTS = rs.getMaxLights();
     MAX_SHADOW_LIGHTS = rs.getMaxShadowLights();
 
     m_screenW = screenW;
     m_screenH = screenH;
 
     InitHDRFBO();
-    InitLightSSBO();
+    InitBloom();
+    InitLDRFBO();
     InitLightSSBO();
     InitShadowCubeArray();
-    InitBloom();
-    InitBloomBlackTex();
-    InitFXAA();
     CompileShadowShader();
     CompileTonemapShader();
     CompileBloomShaders();
@@ -41,9 +38,9 @@ void RenderSystem::Resize(int screenW, int screenH)
     glDeleteTextures(1, &m_bloomPongTex);       m_bloomPongTex = 0;
     InitBloom();
 
-    glDeleteFramebuffers(1, &m_fxaaFBO); m_fxaaFBO = 0;
-    glDeleteTextures(1, &m_fxaaTex);     m_fxaaTex = 0;
-    InitFXAA();
+    glDeleteFramebuffers(1, &m_ldrFBO); m_ldrFBO = 0;
+    glDeleteTextures(1, &m_ldrTex);     m_ldrTex = 0;
+    InitLDRFBO();
 }
 void RenderSystem::ReInitShadows()
 {
@@ -98,17 +95,12 @@ void RenderSystem::Update(EntityManager& entityManager,
         BloomPass();
 
     TonemapPass();
-
-    if (RenderSettings::instance().getFXAAEnabled())
-        FXAAPass();
-    else
-        BlitLDRToScreen();
+    FXAAPass();
 
     entityManager.releaseMutex();
 }
 RenderSystem::~RenderSystem()
 {
-    glDeleteBuffers(1, &m_lightSSBO);
     glDeleteBuffers(1, &m_lightSSBO);
     glDeleteFramebuffers(1, &m_shadowFBO);
     glDeleteTextures(1, &m_shadowCubeArray);
@@ -118,18 +110,17 @@ RenderSystem::~RenderSystem()
     glDeleteTextures(1, &m_hdrColorTex);
     glDeleteTextures(1, &m_hdrDepthTex);
     glDeleteProgram(m_tonemapShader);
-    glDeleteVertexArrays(1, &m_quadVAO);
-    glDeleteBuffers(1, &m_quadVBO);
+    glDeleteProgram(m_bloomThreshShader);
+    glDeleteProgram(m_bloomKawaseShader);
+    glDeleteProgram(m_fxaaShader);
     glDeleteFramebuffers(1, &m_bloomThreshFBO);
     glDeleteFramebuffers(1, &m_bloomPingFBO);
     glDeleteFramebuffers(1, &m_bloomPongFBO);
     glDeleteTextures(1, &m_bloomThreshTex);
     glDeleteTextures(1, &m_bloomPingTex);
     glDeleteTextures(1, &m_bloomPongTex);
-    glDeleteProgram(m_bloomThreshShader);
-    glDeleteProgram(m_bloomKawaseShader);
-    glDeleteTextures(1, &m_bloomBlackTex);
-    glDeleteFramebuffers(1, &m_fxaaFBO);
-    glDeleteTextures(1, &m_fxaaTex);
-    glDeleteProgram(m_fxaaShader);
+    glDeleteFramebuffers(1, &m_ldrFBO);
+    glDeleteTextures(1, &m_ldrTex);
+    glDeleteVertexArrays(1, &m_quadVAO);
+    glDeleteBuffers(1, &m_quadVBO);
 }

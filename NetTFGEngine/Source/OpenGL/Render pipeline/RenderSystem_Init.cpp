@@ -148,13 +148,11 @@ void RenderSystem::InitScreenQuad()
 
 // =====================================================
 //  InitBloom
+//  Threshold buffer at full res; ping/pong at half res.
 // =====================================================
 void RenderSystem::InitBloom()
 {
-    int bW = std::max(1, m_screenW / 2);
-    int bH = std::max(1, m_screenH / 2);
-
-    auto makeBloomTex = [&](GLuint& tex, GLuint& fbo, int w, int h) {
+    auto makeTex = [&](GLuint& tex, GLuint& fbo, int w, int h) {
         glGenTextures(1, &tex);
         glBindTexture(GL_TEXTURE_2D, tex);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h,
@@ -163,7 +161,6 @@ void RenderSystem::InitBloom()
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
         glGenFramebuffers(1, &fbo);
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
@@ -172,21 +169,24 @@ void RenderSystem::InitBloom()
             Debug::Error("RenderSystem") << "Bloom FBO incomplete\n";
         };
 
-    makeBloomTex(m_bloomThreshTex, m_bloomThreshFBO, m_screenW, m_screenH);
-    makeBloomTex(m_bloomPingTex, m_bloomPingFBO, bW, bH);
-    makeBloomTex(m_bloomPongTex, m_bloomPongFBO, bW, bH);
+    int bW = std::max(1, m_screenW / 2);
+    int bH = std::max(1, m_screenH / 2);
+    makeTex(m_bloomThreshTex, m_bloomThreshFBO, m_screenW, m_screenH);
+    makeTex(m_bloomPingTex, m_bloomPingFBO, bW, bH);
+    makeTex(m_bloomPongTex, m_bloomPongFBO, bW, bH);
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
 // =====================================================
-//  InitFXAA
+//  InitLDRFBO
+//  RGBA8 target that tonemap writes into; FXAA reads from.
 // =====================================================
-void RenderSystem::InitFXAA()
+void RenderSystem::InitLDRFBO()
 {
-    glGenTextures(1, &m_fxaaTex);
-    glBindTexture(GL_TEXTURE_2D, m_fxaaTex);
+    glGenTextures(1, &m_ldrTex);
+    glBindTexture(GL_TEXTURE_2D, m_ldrTex);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8,
         m_screenW, m_screenH, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -194,30 +194,13 @@ void RenderSystem::InitFXAA()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-    glGenFramebuffers(1, &m_fxaaFBO);
-    glBindFramebuffer(GL_FRAMEBUFFER, m_fxaaFBO);
+    glGenFramebuffers(1, &m_ldrFBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_ldrFBO);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-        GL_TEXTURE_2D, m_fxaaTex, 0);
+        GL_TEXTURE_2D, m_ldrTex, 0);
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-        Debug::Error("RenderSystem") << "FXAA FBO incomplete\n";
+        Debug::Error("RenderSystem") << "LDR FBO incomplete\n";
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glBindTexture(GL_TEXTURE_2D, 0);
-}
-// =====================================================
-//  InitBloomBlackTex
-//  1x1 black RGBA16F used as the bloom texture when
-//  bloom is disabled so the tonemap shader never samples
-//  texture name 0 (which is not a valid bound texture).
-// =====================================================
-void RenderSystem::InitBloomBlackTex()
-{
-    const float black[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
-    glGenTextures(1, &m_bloomBlackTex);
-    glBindTexture(GL_TEXTURE_2D, m_bloomBlackTex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, 1, 1,
-        0, GL_RGBA, GL_FLOAT, black);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glBindTexture(GL_TEXTURE_2D, 0);
 }

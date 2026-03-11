@@ -22,6 +22,8 @@ class IECSGameRenderer : public IGameRenderer {
 protected:
     ECSWorld world;
 
+	int frameCount = 0;
+
     std::function<void(IECSGameLogic* logic,IECSGameRenderer* renderer)> renderDataTransferToLogicCallback;
 
 public:
@@ -90,6 +92,13 @@ public:
 		if (renderDataTransferToLogicCallback) {
 			IECSGameLogic* logic = static_cast<IECSGameLogic*>(GetGameLogic());
 			renderDataTransferToLogicCallback(logic, this);
+		}
+
+		frameCount++;
+
+		if (frameCount >= RENDER_TICKS_PER_SECOND*20 ) {
+			frameCount = 0;
+            renderSys->DumpBuffers();
 		}
     }
 
