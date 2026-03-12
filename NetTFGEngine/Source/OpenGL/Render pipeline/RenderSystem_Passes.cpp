@@ -1,6 +1,57 @@
 ﻿#include "RenderSystem.hpp"
 
 // =====================================================
+//  ResolveMSAA
+//  Blits each multisampled attachment into the corresponding
+//  single-sample HDR texture so post-process passes can
+//  sample them as ordinary sampler2D inputs.
+//
+//  Attachment 0 (color):  MSAA → m_hdrColorTex
+//  Attachment 1 (normal): MSAA → m_hdrNormalTex
+//  Depth:                 MSAA → m_hdrDepthTex
+//
+//  No-op when m_msaaSamples <= 1 (single-sample path).
+// =====================================================
+void RenderSystem::ResolveMSAA()
+{
+    if (m_msaaSamples <= 1)
+        return;
+
+    // Helper: blit one attachment from m_msaaFBO into a single-attachment
+    // temporary read target backed by m_hdrFBO's named texture.
+    // We re-use m_hdrFBO as the draw framebuffer throughout.
+
+    // --- Attachment 0: HDR colour ---
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, m_msaaFBO);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_hdrFBO);
+    glDrawBuffer(GL_COLOR_ATTACHMENT0);
+    glBlitFramebuffer(0, 0, m_screenW, m_screenH,
+        0, 0, m_screenW, m_screenH,
+        GL_COLOR_BUFFER_BIT, GL_NEAREST);
+
+    // --- Attachment 1: view-space normals + roughness ---
+    glReadBuffer(GL_COLOR_ATTACHMENT1);
+    glDrawBuffer(GL_COLOR_ATTACHMENT1);
+    glBlitFramebuffer(0, 0, m_screenW, m_screenH,
+        0, 0, m_screenW, m_screenH,
+        GL_COLOR_BUFFER_BIT, GL_NEAREST);
+
+    // --- Depth ---
+    // Note: depth blits require GL_NEAREST and matching internal formats.
+    glBlitFramebuffer(0, 0, m_screenW, m_screenH,
+        0, 0, m_screenW, m_screenH,
+        GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+
+    // Restore the HDR FBO's draw buffers for subsequent passes
+    GLenum drawBufs[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
+    glBindFramebuffer(GL_FRAMEBUFFER, m_hdrFBO);
+    glDrawBuffers(2, drawBufs);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+// =====================================================
 //  ShadowPass
 // =====================================================
 void RenderSystem::ShadowPass(EntityManager& em, EntityManager::Query<MeshComponent, Transform>& meshQuery)
@@ -113,7 +164,9 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
     const glm::mat4& projection,
     const glm::vec3& cameraPos)
 {
-    glBindFramebuffer(GL_FRAMEBUFFER, m_hdrFBO);
+    // Render into the MSAA FBO when active, otherwise directly into the HDR FBO.
+    const GLuint targetFBO = (m_msaaSamples > 1) ? m_msaaFBO : m_hdrFBO;
+    glBindFramebuffer(GL_FRAMEBUFFER, targetFBO);
     // Both MRT attachments must be active for the GBuffer write in ggx.frag
     GLenum drawBufs[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
     glDrawBuffers(2, drawBufs);
@@ -148,6 +201,10 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+    // If MSAA is active, resolve the multisampled FBO into the single-sample
+    // HDR FBO so that the post-process passes can sample it as a regular texture.
+    ResolveMSAA();
 }
 
 // =====================================================

@@ -16,6 +16,7 @@
 #include <cmath>
 #include <algorithm>
 #include <filesystem>
+#include <atomic>
 
 
 
@@ -84,8 +85,10 @@ public:
     //  Debug: dump every pipeline buffer to "Render/<timestamp>/".
     //
     //  Files written (all PNG, 8-bit RGB):
-    //    hdr_color.png          — HDR colour, Reinhard-tonemapped
+    //    hdr_color.png          — HDR colour, auto-range normalised
     //    depth.png              — Scene depth, auto-ranged greyscale
+    //    gbuffer_normal.png     — View-space normals as RGB
+    //    gbuffer_roughness.png  — Roughness as greyscale
     //    bloom_thresh.png       — Bloom threshold pass output
     //    bloom_result.png       — Final blurred bloom texture
     //    ldr_color.png          — Post-tonemap LDR colour (pre-FXAA)
@@ -96,6 +99,18 @@ public:
     //  Safe to call at any time after Init().
     // ---------------------------------------------------
     void DumpBuffers() const;
+
+    // ---------------------------------------------------
+    //  Request a DumpBuffers() at the end of the next
+    //  fully-completed frame.  Safe to call from any
+    //  thread at any time — the flag is consumed once by
+    //  Update() after FXAAPass() finishes, so every buffer
+    //  is in its final state when the dump runs.
+    //
+    //  Typical use: bind to a key in your input handler.
+    //    if (key == KEY_F9) renderSystem.RequestDebugDump();
+    // ---------------------------------------------------
+    void RequestDebugDump() { m_debugDumpRequested = true; }
 
 private:
     // =====================================================
@@ -120,14 +135,29 @@ private:
     int    m_shadowCount = 0;
 
     // =====================================================
+    //  MSAA framebuffer (shading renders here when samples > 1)
+    //  Resolved into m_hdrFBO before post-processing.
+    // =====================================================
+    GLuint m_msaaFBO = 0;           // multisampled offscreen FBO
+    GLuint m_msaaColorTex = 0;      // GL_TEXTURE_2D_MULTISAMPLE  RGBA16F
+    GLuint m_msaaNormalTex = 0;     // GL_TEXTURE_2D_MULTISAMPLE  RGBA16F
+    GLuint m_msaaDepthTex = 0;      // GL_TEXTURE_2D_MULTISAMPLE  DEPTH32F
+    int    m_msaaSamples = 1;       // actual sample count in use (1 = disabled)
+
+    // =====================================================
     //  HDR framebuffer + screen-quad resources
     // =====================================================
-    GLuint m_hdrFBO = 0;        // offscreen FBO for the shading pass
+    GLuint m_hdrFBO = 0;        // resolve target / post-process source
     GLuint m_hdrColorTex = 0;   // attachment0: RGBA16F HDR color
     GLuint m_hdrNormalTex = 0;  // attachment1: RGBA16F view-space normal (xyz) + roughness (w)
     GLuint m_hdrDepthTex = 0;   // depth attachment
     GLuint m_quadVAO = 0;       // screen-space triangle VAO
     GLuint m_quadVBO = 0;
+
+    // =====================================================
+    //  Debug state
+    // =====================================================
+    mutable std::atomic<bool> m_debugDumpRequested{ false };
 
     // =====================================================
     //  Bloom resources
@@ -158,10 +188,16 @@ private:
     // =====================================================
     void InitLightSSBO();
     void InitShadowCubeArray();
+    void InitMSAAFBO();          // creates multisampled FBO (no-op when samples == 1)
     void InitHDRFBO();
     void InitBloom();
     void InitLDRFBO();
     void InitScreenQuad();
+
+    // =====================================================
+    //  MSAA resolve helper
+    // =====================================================
+    void ResolveMSAA();          // blits m_msaaFBO → m_hdrFBO; no-op when samples == 1
 
     // =====================================================
     //  Shader compilation helpers

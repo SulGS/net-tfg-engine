@@ -80,7 +80,54 @@ void RenderSystem::InitShadowCubeArray()
 }
 
 // =====================================================
-//  InitHDRFBO
+//  InitMSAAFBO
+//  Creates a multisampled FBO that mirrors the HDR FBO layout.
+//  When m_msaaSamples == 1, this is a no-op — ShadingPass will
+//  render directly into m_hdrFBO instead.
+// =====================================================
+void RenderSystem::InitMSAAFBO()
+{
+    if (m_msaaSamples <= 1)
+        return; // single-sample path; no extra FBO needed
+
+    // Multisample textures do not accept filter/wrap parameters
+    glGenTextures(1, &m_msaaColorTex);
+    glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, m_msaaColorTex);
+    glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, m_msaaSamples,
+        GL_RGBA16F, m_screenW, m_screenH, GL_TRUE);
+
+    glGenTextures(1, &m_msaaNormalTex);
+    glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, m_msaaNormalTex);
+    glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, m_msaaSamples,
+        GL_RGBA16F, m_screenW, m_screenH, GL_TRUE);
+
+    glGenTextures(1, &m_msaaDepthTex);
+    glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, m_msaaDepthTex);
+    glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, m_msaaSamples,
+        GL_DEPTH_COMPONENT32F, m_screenW, m_screenH, GL_TRUE);
+
+    glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, 0);
+
+    glGenFramebuffers(1, &m_msaaFBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_msaaFBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D_MULTISAMPLE, m_msaaColorTex, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
+        GL_TEXTURE_2D_MULTISAMPLE, m_msaaNormalTex, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+        GL_TEXTURE_2D_MULTISAMPLE, m_msaaDepthTex, 0);
+
+    GLenum drawBufs[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
+    glDrawBuffers(2, drawBufs);
+
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        Debug::Error("RenderSystem") << "MSAA FBO incomplete (samples="
+        << m_msaaSamples << ")\n";
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+
 //  MRT: attachment0 = HDR color (RGBA16F)
 //       attachment1 = view-space normal.xyz + roughness.w (RGBA16F)
 //       depth       = DEPTH32F
@@ -138,7 +185,7 @@ void RenderSystem::InitHDRFBO()
 }
 
 // =====================================================
-//  InitScreenQuad  � single large triangle covering NDC
+//  InitScreenQuad  — single large triangle covering NDC
 // =====================================================
 void RenderSystem::InitScreenQuad()
 {

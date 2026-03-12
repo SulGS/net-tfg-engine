@@ -78,6 +78,14 @@ public:
     void setMaxShadowLights(int v) { m_maxShadowLights = v; }
     int  getMaxShadowLights()  const { return m_maxShadowLights; }
 
+    // MSAA sample count for the shading pass.
+    // 1 = disabled.  Common values: 2, 4, 8.
+    // The driver clamps to GL_MAX_SAMPLES if the value exceeds
+    // hardware support.
+    // [Init-time] — call RenderSystem::Init() or Resize() to apply.
+    void setMsaaSamples(int v) { m_msaaSamples = std::max(1, v); }
+    int  getMsaaSamples()  const { return m_msaaSamples; }
+
     // Anisotropic filtering level applied to every texture at load time.
     // Common values: 1 (off), 2, 4, 8, 16.
     // The driver silently clamps to GL_MAX_TEXTURE_MAX_ANISOTROPY if
@@ -356,8 +364,8 @@ private:
             m_filmicLinearWhite = 11.2f;
             m_gamma = 2.2f;
             m_bloomEnabled = true;
-            m_bloomThreshold = 1.2f;
-            m_bloomStrength = 0.03f;
+            m_bloomThreshold = 0.8f;
+            m_bloomStrength = 0.5f;
             m_bloomPasses = 3;
             m_fxaaEnabled = true;
             break;
@@ -385,9 +393,9 @@ private:
             m_filmicLinearWhite = 11.2f;
             m_gamma = 2.2f;
             m_bloomEnabled = true;
-            m_bloomThreshold = 1.0f;
-            m_bloomStrength = 0.04f;
-            m_bloomPasses = 4;
+            m_bloomThreshold = 0.6f;
+            m_bloomStrength = 0.5f;
+            m_bloomPasses = 5;
             m_fxaaEnabled = true;
             break;
 
@@ -414,9 +422,9 @@ private:
             m_filmicLinearWhite = 11.2f;
             m_gamma = 2.2f;
             m_bloomEnabled = true;
-            m_bloomThreshold = 0.8f;
-            m_bloomStrength = 0.05f;
-            m_bloomPasses = 6;
+            m_bloomThreshold = 0.4f;
+            m_bloomStrength = 0.5f;
+            m_bloomPasses = 8;
             m_fxaaEnabled = true;
             break;
         }

@@ -5,12 +5,23 @@ void RenderSystem::Init(int screenW, int screenH)
     const auto& rs = RenderSettings::instance();
     MAX_LIGHTS = rs.getMaxLights();
     MAX_SHADOW_LIGHTS = rs.getMaxShadowLights();
+    m_msaaSamples = rs.getMsaaSamples();
+
+    // Clamp to what the driver actually supports
+    GLint maxSamples = 1;
+    glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
+    if (m_msaaSamples > maxSamples) {
+        Debug::Warning("RenderSystem") << "MSAA x" << m_msaaSamples
+            << " not supported; clamping to x" << maxSamples << "\n";
+        m_msaaSamples = maxSamples;
+    }
 
     m_screenW = screenW;
     m_screenH = screenH;
 
-    glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS); // fix cube face seam artifacts
+    glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
 
+    InitMSAAFBO();
     InitHDRFBO();
     InitBloom();
     InitLDRFBO();
@@ -27,10 +38,18 @@ void RenderSystem::Resize(int screenW, int screenH)
     m_screenW = screenW;
     m_screenH = screenH;
 
-    glDeleteFramebuffers(1, &m_hdrFBO);  m_hdrFBO = 0;
-    glDeleteTextures(1, &m_hdrColorTex); m_hdrColorTex = 0;
+    // --- MSAA FBO ---
+    glDeleteFramebuffers(1, &m_msaaFBO);   m_msaaFBO = 0;
+    glDeleteTextures(1, &m_msaaColorTex);  m_msaaColorTex = 0;
+    glDeleteTextures(1, &m_msaaNormalTex); m_msaaNormalTex = 0;
+    glDeleteTextures(1, &m_msaaDepthTex);  m_msaaDepthTex = 0;
+    InitMSAAFBO();
+
+    // --- Single-sample HDR FBO (resolve target) ---
+    glDeleteFramebuffers(1, &m_hdrFBO);   m_hdrFBO = 0;
+    glDeleteTextures(1, &m_hdrColorTex);  m_hdrColorTex = 0;
     glDeleteTextures(1, &m_hdrNormalTex); m_hdrNormalTex = 0;
-    glDeleteTextures(1, &m_hdrDepthTex); m_hdrDepthTex = 0;
+    glDeleteTextures(1, &m_hdrDepthTex);  m_hdrDepthTex = 0;
     InitHDRFBO();
 
     glDeleteFramebuffers(1, &m_bloomThreshFBO); m_bloomThreshFBO = 0;
@@ -100,6 +119,11 @@ void RenderSystem::Update(EntityManager& entityManager,
     TonemapPass();
     FXAAPass();
 
+    // Consume the debug dump request after FXAAPass so every buffer
+    // (including final_output via glReadPixels) is in its final state.
+    if (m_debugDumpRequested.exchange(false))
+        DumpBuffers();
+
     entityManager.releaseMutex();
 }
 RenderSystem::~RenderSystem()
@@ -109,6 +133,10 @@ RenderSystem::~RenderSystem()
     glDeleteTextures(1, &m_shadowCubeArray);
     glDeleteBuffers(1, &m_shadowDataSSBO);
     glDeleteProgram(m_shadowShader);
+    glDeleteFramebuffers(1, &m_msaaFBO);
+    glDeleteTextures(1, &m_msaaColorTex);
+    glDeleteTextures(1, &m_msaaNormalTex);
+    glDeleteTextures(1, &m_msaaDepthTex);
     glDeleteFramebuffers(1, &m_hdrFBO);
     glDeleteTextures(1, &m_hdrColorTex);
     glDeleteTextures(1, &m_hdrNormalTex);
