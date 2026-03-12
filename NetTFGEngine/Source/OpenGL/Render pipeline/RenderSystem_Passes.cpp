@@ -114,14 +114,18 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
     const glm::vec3& cameraPos)
 {
     glBindFramebuffer(GL_FRAMEBUFFER, m_hdrFBO);
+    // Both MRT attachments must be active for the GBuffer write in ggx.frag
+    GLenum drawBufs[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
+    glDrawBuffers(2, drawBufs);
+
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
     glDepthMask(GL_TRUE);
 
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_lightSSBO);      // binding 0 � lights[]
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_shadowDataSSBO); // binding 1 � shadows[]
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_lightSSBO);      // binding 0 — lights[]
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_shadowDataSSBO); // binding 1 — shadows[]
 
     glActiveTexture(GL_TEXTURE5);
     glBindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, m_shadowCubeArray);
@@ -137,6 +141,8 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
             mat->setInt("uShadowCubeArray", 5);
             mat->setInt("uShadowCount", m_shadowCount);
             mat->setInt("uLightCount", m_lightCount);
+            mat->setInt("uShadowRes", m_shadowRes);
+            mat->setMat4("uView", view); // needed by ggx.frag for view-space normal output
         }
         meshC->mesh->draw();
     }
@@ -146,14 +152,13 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
 
 // =====================================================
 //  TonemapPass
-//  Tonemaps HDR color buffer + gamma-corrects to LDR
-//  (writes directly to the default framebuffer).
+//  Tonemaps HDR color + composites bloom
+//  and gamma-corrects to LDR FBO.
 // =====================================================
 void RenderSystem::TonemapPass()
 {
     const auto& rs = RenderSettings::instance();
 
-    // Write into the LDR FBO so FXAAPass can read it
     glBindFramebuffer(GL_FRAMEBUFFER, m_ldrFBO);
     glViewport(0, 0, m_screenW, m_screenH);
     glDisable(GL_DEPTH_TEST);

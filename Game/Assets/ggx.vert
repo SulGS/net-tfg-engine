@@ -12,6 +12,7 @@ uniform mat4 uProjection;
 out vec3 vWorldPos;
 out vec2 vUV;
 out mat3 vTBN;
+out mat3 vViewTBN; // TBN in view space — needed for MRT normal output
 
 void main()
 {
@@ -19,7 +20,8 @@ void main()
     vWorldPos     = worldPos.xyz;
     vUV           = aUV;
 
-    mat3 normalMatrix = mat3(transpose(inverse(uModel)));
+    mat3 normalMatrix     = mat3(transpose(inverse(uModel)));
+    mat3 viewNormalMatrix = mat3(transpose(inverse(uView * uModel)));
 
     vec3 N = normalize(normalMatrix * aNormal);
     vec3 T = normalize(normalMatrix * aTangent.xyz);
@@ -27,6 +29,13 @@ void main()
     vec3 B = cross(N, T) * aTangent.w;     // w = bitangent handedness
 
     vTBN = mat3(T, B, N);
+
+    // Same TBN but in view space for the SSAO/SSR GBuffer output
+    vec3 vN = normalize(viewNormalMatrix * aNormal);
+    vec3 vT = normalize(viewNormalMatrix * aTangent.xyz);
+    vT      = normalize(vT - dot(vT, vN) * vN);
+    vec3 vB = cross(vN, vT) * aTangent.w;
+    vViewTBN = mat3(vT, vB, vN);
 
     gl_Position = uProjection * uView * worldPos;
 }

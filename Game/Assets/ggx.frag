@@ -6,8 +6,15 @@
 in vec3 vWorldPos;
 in vec2 vUV;
 in mat3 vTBN;
+in mat3 vViewTBN; // view-space TBN for GBuffer output
 
-out vec4 FragColor;
+// -------------------------------------------------------
+// MRT outputs
+//   layout 0 — HDR radiance (existing)
+//   layout 1 — view-space normal (xyz) + roughness (w)  [GBuffer for SSAO/SSR]
+// -------------------------------------------------------
+layout(location = 0) out vec4 FragColor;
+layout(location = 1) out vec4 FragNormalRoughness;
 
 // -------------------------------------------------------
 // Texture units  (bound per-submesh by Mesh::render)
@@ -30,6 +37,7 @@ uniform samplerCubeArray uShadowCubeArray;
 uniform vec3 uCameraPos;
 uniform int  uShadowCount;
 uniform int  uLightCount;
+uniform int  uShadowRes;
 
 // -------------------------------------------------------
 // Light SSBO  (binding 0)
@@ -140,8 +148,10 @@ float ShadowPCF(int shadowIdx, vec3 fragToLight, float currentDist, float farPla
     float bias       = 0.01;
     float refDepth   = normalizedDist - bias;
 
-    // Disk radius scales slightly with distance for softer far penumbra
-    float diskRadius = (1.0 + normalizedDist) * 0.015;
+    // Disk radius scales with distance AND inverse resolution —
+    // coarser shadow maps need a wider PCF kernel to hide texel boundaries
+    float texelScale = 1024.0 / float(uShadowRes);
+    float diskRadius = (1.0 + normalizedDist) * 0.015 * texelScale;
 
     float shadow = 0.0;
     for (int i = 0; i < 20; i++)
@@ -232,4 +242,11 @@ void main()
     // Write raw HDR radiance — TonemapPass resolves this to LDR
     // (no ACESFilmic, no gamma here)
     FragColor = vec4(color, 1.0);
+
+    // GBuffer attachment 1: view-space normal + perceptual roughness
+    // Used by SSAOPass and SSRPass. vViewTBN transforms the tangent-space
+    // normal map sample into view space for correct screen-space operations.
+    vec3 tangentN  = texture(uNormalTex, vUV).rgb * 2.0 - 1.0;
+    vec3 viewNormal = normalize(vViewTBN * tangentN);
+    FragNormalRoughness = vec4(viewNormal, perceptualRoughness);
 }

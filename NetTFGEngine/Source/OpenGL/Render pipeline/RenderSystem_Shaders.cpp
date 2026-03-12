@@ -1,4 +1,4 @@
-#include "RenderSystem.hpp"
+ï»¿#include "RenderSystem.hpp"
 
 // =====================================================
 //  CompileShadowShader
@@ -55,7 +55,7 @@ void RenderSystem::CompileShadowShader()
 // =====================================================
 //  CompileTonemapShader
 //  Reinhard and Filmic (Uncharted 2 / Hable) operators.
-//  Gamma correction applied after both.
+//  Gamma correction applied after both. Composites bloom.
 // =====================================================
 void RenderSystem::CompileTonemapShader()
 {
@@ -74,13 +74,12 @@ void RenderSystem::CompileTonemapShader()
 
         uniform sampler2D uHDRBuffer;
         uniform sampler2D uBloomTex;
-        uniform bool  uBloomEnabled;
-        uniform float uBloomStrength;
+        uniform bool      uBloomEnabled;
+        uniform float     uBloomStrength;
 
         uniform float uExposure;
         uniform bool  uFilmicEnabled;
         uniform float uGamma;
-
         uniform float uA, uB, uC, uD, uE, uF, uW;
 
         vec3 FilmicCurve(vec3 x)
@@ -120,8 +119,8 @@ void RenderSystem::CompileTonemapShader()
 // =====================================================
 //  CompileBloomShaders
 //  Two programs:
-//    Threshold — extracts bright regions above uThreshold
-//    Kawase    — single-pass Kawase blur; run multiple times
+//    Threshold ï¿½ extracts bright regions above uThreshold
+//    Kawase    ï¿½ single-pass Kawase blur; run multiple times
 //               with increasing uIteration offsets
 // =====================================================
 void RenderSystem::CompileBloomShaders()

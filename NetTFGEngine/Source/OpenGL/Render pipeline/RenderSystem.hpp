@@ -46,6 +46,7 @@ using MeshQuery = decltype(
 //    1. ShadowPass     — render depth cubemap array for
 //                        all shadow-casting point lights
 //    2. ShadingPass    — full mesh draw with shadow lookup
+//                        MRT: attachment0=HDR color, attachment1=view-space normals+roughness
 //    3. BloomPass      — threshold + Kawase blur
 //    4. TonemapPass    — exposure + filmic/Reinhard + bloom composite + gamma → LDR FBO
 //    5. FXAAPass       — anti-aliasing → default framebuffer
@@ -121,10 +122,11 @@ private:
     // =====================================================
     //  HDR framebuffer + screen-quad resources
     // =====================================================
-    GLuint m_hdrFBO = 0; // offscreen FBO for the shading pass
-    GLuint m_hdrColorTex = 0; // RGBA16F HDR color attachment
-    GLuint m_hdrDepthTex = 0; // shared depth attachment
-    GLuint m_quadVAO = 0; // screen-space triangle VAO
+    GLuint m_hdrFBO = 0;        // offscreen FBO for the shading pass
+    GLuint m_hdrColorTex = 0;   // attachment0: RGBA16F HDR color
+    GLuint m_hdrNormalTex = 0;  // attachment1: RGBA16F view-space normal (xyz) + roughness (w)
+    GLuint m_hdrDepthTex = 0;   // depth attachment
+    GLuint m_quadVAO = 0;       // screen-space triangle VAO
     GLuint m_quadVBO = 0;
 
     // =====================================================

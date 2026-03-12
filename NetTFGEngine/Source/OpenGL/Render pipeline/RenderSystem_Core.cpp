@@ -9,6 +9,8 @@ void RenderSystem::Init(int screenW, int screenH)
     m_screenW = screenW;
     m_screenH = screenH;
 
+    glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS); // fix cube face seam artifacts
+
     InitHDRFBO();
     InitBloom();
     InitLDRFBO();
@@ -27,6 +29,7 @@ void RenderSystem::Resize(int screenW, int screenH)
 
     glDeleteFramebuffers(1, &m_hdrFBO);  m_hdrFBO = 0;
     glDeleteTextures(1, &m_hdrColorTex); m_hdrColorTex = 0;
+    glDeleteTextures(1, &m_hdrNormalTex); m_hdrNormalTex = 0;
     glDeleteTextures(1, &m_hdrDepthTex); m_hdrDepthTex = 0;
     InitHDRFBO();
 
@@ -108,6 +111,7 @@ RenderSystem::~RenderSystem()
     glDeleteProgram(m_shadowShader);
     glDeleteFramebuffers(1, &m_hdrFBO);
     glDeleteTextures(1, &m_hdrColorTex);
+    glDeleteTextures(1, &m_hdrNormalTex);
     glDeleteTextures(1, &m_hdrDepthTex);
     glDeleteProgram(m_tonemapShader);
     glDeleteProgram(m_bloomThreshShader);

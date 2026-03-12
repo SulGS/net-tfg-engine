@@ -1,4 +1,5 @@
 ﻿#include "RenderSystem.hpp"
+#include <cmath>
 
 // =====================================================
 //  Shader compilation helpers (static)
@@ -80,9 +81,13 @@ void RenderSystem::InitShadowCubeArray()
 
 // =====================================================
 //  InitHDRFBO
+//  MRT: attachment0 = HDR color (RGBA16F)
+//       attachment1 = view-space normal.xyz + roughness.w (RGBA16F)
+//       depth       = DEPTH32F
 // =====================================================
 void RenderSystem::InitHDRFBO()
 {
+    // --- color attachment 0: HDR radiance ---
     glGenTextures(1, &m_hdrColorTex);
     glBindTexture(GL_TEXTURE_2D, m_hdrColorTex);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F,
@@ -92,22 +97,38 @@ void RenderSystem::InitHDRFBO()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
+    // --- color attachment 1: view-space normals (xyz) + roughness (w) ---
+    glGenTextures(1, &m_hdrNormalTex);
+    glBindTexture(GL_TEXTURE_2D, m_hdrNormalTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F,
+        m_screenW, m_screenH, 0, GL_RGBA, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    // --- depth ---
     glGenTextures(1, &m_hdrDepthTex);
     glBindTexture(GL_TEXTURE_2D, m_hdrDepthTex);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F,
         m_screenW, m_screenH, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    // GL_NONE: sampler2D in the compute shader reads raw [0,1] depth.
-    // Default (GL_COMPARE_REF_TO_TEXTURE) would return 0 or 1 only.
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NONE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
     glGenFramebuffers(1, &m_hdrFBO);
     glBindFramebuffer(GL_FRAMEBUFFER, m_hdrFBO);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
         GL_TEXTURE_2D, m_hdrColorTex, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
+        GL_TEXTURE_2D, m_hdrNormalTex, 0);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
         GL_TEXTURE_2D, m_hdrDepthTex, 0);
+
+    GLenum drawBufs[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
+    glDrawBuffers(2, drawBufs);
 
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
         Debug::Error("RenderSystem") << "HDR FBO incomplete\n";

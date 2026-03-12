@@ -1,4 +1,4 @@
-#include "RenderSystem.hpp"
+ï»¿#include "RenderSystem.hpp"
 
 #include "stb_image_write.h"
 
@@ -156,7 +156,7 @@ namespace {
 #endif
 
         // Visualise raw [0, 1] depth stored in the shadow map (no linearisation
-        // needed — it was already written as linear distance / farPlane).
+        // needed ï¿½ it was already written as linear distance / farPlane).
         std::vector<uint8_t> rgb(nPix * 3);
         for (int i = 0; i < nPix; ++i) {
             float v = depth[i];
@@ -175,7 +175,7 @@ namespace {
     // ------------------------------------------------------------------
     //  DumpTexture2D_RGBA8
     //  Reads an RGBA8 texture (e.g. the LDR tonemap output) and writes
-    //  it directly as a PNG — no tonemapping needed, values are [0,255].
+    //  it directly as a PNG ï¿½ no tonemapping needed, values are [0,255].
     // ------------------------------------------------------------------
     static void DumpTexture2D_RGBA8(GLuint tex,
         int w, int h,
@@ -200,7 +200,7 @@ namespace {
 
     // ------------------------------------------------------------------
     //  DumpDefaultFramebuffer
-    //  Reads the current back buffer (GL_BACK) with glReadPixels — this
+    //  Reads the current back buffer (GL_BACK) with glReadPixels ï¿½ this
     //  is the exact pixels that will be presented to the screen after
     //  FXAAPass, with no intermediate copies.
     //  Must be called AFTER FXAAPass() and BEFORE SwapBuffers().
@@ -215,6 +215,53 @@ namespace {
         glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
 
         WritePNG(path, w, h, pixels);
+    }
+
+    // ------------------------------------------------------------------
+    //  DumpTexture2D_NormalRoughness
+    //  Reads the GBuffer RGBA16F normal+roughness attachment and writes:
+    //    <base>_normal.png    â€” view-space normals remapped [-1,1]->[0,255]
+    //                           (R=X, G=Y, B=Z â€” standard normal-map colours)
+    //    <base>_roughness.png â€” roughness (w channel) as greyscale
+    // ------------------------------------------------------------------
+    static void DumpTexture2D_NormalRoughness(GLuint tex,
+        int w, int h,
+        const std::string& basePathNoExt)
+    {
+        const int nPix = w * h;
+        std::vector<float> pixels(nPix * 4);
+
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, pixels.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+
+        std::vector<uint8_t> normalRGB(nPix * 3);
+        std::vector<uint8_t> roughnessRGB(nPix * 3);
+
+        for (int i = 0; i < nPix; ++i) {
+            // Remap normal components [-1,1] -> [0,255]
+            auto remapChan = [](float v) -> uint8_t {
+                v = v * 0.5f + 0.5f;
+                if (v < 0.0f) v = 0.0f;
+                if (v > 1.0f) v = 1.0f;
+                return static_cast<uint8_t>(v * 255.0f + 0.5f);
+                };
+            normalRGB[i * 3 + 0] = remapChan(pixels[i * 4 + 0]); // X -> R
+            normalRGB[i * 3 + 1] = remapChan(pixels[i * 4 + 1]); // Y -> G
+            normalRGB[i * 3 + 2] = remapChan(pixels[i * 4 + 2]); // Z -> B
+
+            // Roughness: direct [0,1] -> [0,255] greyscale
+            float r = pixels[i * 4 + 3];
+            if (r < 0.0f) r = 0.0f;
+            if (r > 1.0f) r = 1.0f;
+            auto rb = static_cast<uint8_t>(r * 255.0f + 0.5f);
+            roughnessRGB[i * 3 + 0] = rb;
+            roughnessRGB[i * 3 + 1] = rb;
+            roughnessRGB[i * 3 + 2] = rb;
+        }
+
+        WritePNG(basePathNoExt + "_normal.png", w, h, normalRGB);
+        WritePNG(basePathNoExt + "_roughness.png", w, h, roughnessRGB);
     }
 
 } // anonymous namespace
@@ -267,14 +314,22 @@ void RenderSystem::DumpBuffers() const
         Debug::Info("RenderSystem::DumpBuffers") << "Saved depth.png\n";
     }
 
-    // ---- 3. Bloom threshold (full res, pre-blur) ----
+    // ---- 3. GBuffer: view-space normals + roughness ----
+    if (m_hdrNormalTex) {
+        // Writes gbuffer_normal.png (view normals as RGB) + gbuffer_roughness.png (greyscale)
+        DumpTexture2D_NormalRoughness(m_hdrNormalTex, m_screenW, m_screenH,
+            dumpDir + "/gbuffer");
+        Debug::Info("RenderSystem::DumpBuffers") << "Saved gbuffer_normal.png + gbuffer_roughness.png\n";
+    }
+
+    // ---- 4. Bloom threshold (full res, pre-blur) ----
     if (m_bloomThreshTex) {
         DumpTexture2D_RGBA16F(m_bloomThreshTex, m_screenW, m_screenH,
             exposure, gamma, path("bloom_thresh.png"));
         Debug::Info("RenderSystem::DumpBuffers") << "Saved bloom_thresh.png\n";
     }
 
-    // ---- 4. Bloom result (half res, post-blur, what gets composited) ----
+    // ---- 5. Bloom result (half res, post-blur, what gets composited) ----
     if (m_bloomPingTex) {
         const int bW = std::max(1, m_screenW / 2);
         const int bH = std::max(1, m_screenH / 2);
@@ -283,17 +338,17 @@ void RenderSystem::DumpBuffers() const
         Debug::Info("RenderSystem::DumpBuffers") << "Saved bloom_result.png\n";
     }
 
-    // ---- 5. LDR colour (post-tonemap, pre-FXAA) ----
+    // ---- 6. LDR colour (post-tonemap, pre-FXAA) ----
     if (m_ldrTex) {
         DumpTexture2D_RGBA8(m_ldrTex, m_screenW, m_screenH, path("ldr_color.png"));
         Debug::Info("RenderSystem::DumpBuffers") << "Saved ldr_color.png\n";
     }
 
-    // ---- 6. Final output — what the screen actually shows (post-FXAA) ----
+    // ---- 7. Final output â€” what the screen actually shows (post-FXAA) ----
     DumpDefaultFramebuffer(m_screenW, m_screenH, path("final_output.png"));
     Debug::Info("RenderSystem::DumpBuffers") << "Saved final_output.png\n";
 
-    // ---- 7. Shadow cubemap faces ----
+    // ---- 8. Shadow cubemap faces ----
     if (m_shadowCubeArray && m_shadowCount > 0) {
         static constexpr const char* kFaceNames[6] = {
             "pX", "nX", "pY", "nY", "pZ", "nZ"

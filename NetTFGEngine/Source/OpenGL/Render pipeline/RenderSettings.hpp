@@ -326,7 +326,6 @@ private:
             m_shadowNearPlane = 0.3f;
             m_shadowBiasFactor = 2.0f;
             m_shadowBiasUnits = 4.0f;
-            // HDR — Reinhard; filmic kept off to save fillrate
             m_exposure = 1.0f;
             m_filmicEnabled = false;
             m_gamma = 2.2f;
@@ -346,7 +345,6 @@ private:
             m_shadowNearPlane = 0.2f;
             m_shadowBiasFactor = 2.0f;
             m_shadowBiasUnits = 4.0f;
-            // HDR — filmic enabled with conservative exposure
             m_exposure = 1.0f;
             m_filmicEnabled = true;
             m_filmicShoulder = 0.22f;
@@ -376,7 +374,6 @@ private:
             m_shadowNearPlane = 0.1f;
             m_shadowBiasFactor = 2.0f;
             m_shadowBiasUnits = 4.0f;
-            // HDR — filmic with standard cinematic curve
             m_exposure = 1.0f;
             m_filmicEnabled = true;
             m_filmicShoulder = 0.22f;
@@ -406,7 +403,6 @@ private:
             m_shadowNearPlane = 0.05f;
             m_shadowBiasFactor = 2.0f;
             m_shadowBiasUnits = 4.0f;
-            // HDR — filmic with boosted exposure for HDR highlights
             m_exposure = 1.2f;
             m_filmicEnabled = true;
             m_filmicShoulder = 0.22f;
