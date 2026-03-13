@@ -98,7 +98,7 @@ public:
 
 		if (frameCount >= RENDER_TICKS_PER_SECOND*20 ) {
 			frameCount = 0;
-            renderSys->DumpBuffers();
+            //renderSys->DumpBuffers();
 		}
     }
 

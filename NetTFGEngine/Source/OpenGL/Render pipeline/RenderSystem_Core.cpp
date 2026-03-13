@@ -119,11 +119,6 @@ void RenderSystem::Update(EntityManager& entityManager,
     TonemapPass();
     FXAAPass();
 
-    // Consume the debug dump request after FXAAPass so every buffer
-    // (including final_output via glReadPixels) is in its final state.
-    if (m_debugDumpRequested.exchange(false))
-        DumpBuffers();
-
     entityManager.releaseMutex();
 }
 RenderSystem::~RenderSystem()
