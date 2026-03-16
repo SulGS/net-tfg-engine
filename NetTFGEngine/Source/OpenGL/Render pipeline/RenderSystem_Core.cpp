@@ -23,10 +23,12 @@ void RenderSystem::Init(int screenW, int screenH)
 
     InitMSAAFBO();
     InitHDRFBO();
+    InitGBufferFBO();   // must follow InitHDRFBO (shares m_hdrDepthTex)
     InitBloom();
     InitLDRFBO();
     InitLightSSBO();
     InitShadowCubeArray();
+    CompileGBufferShader();
     CompileShadowShader();
     CompileTonemapShader();
     CompileBloomShaders();
@@ -41,16 +43,19 @@ void RenderSystem::Resize(int screenW, int screenH)
     // --- MSAA FBO ---
     glDeleteFramebuffers(1, &m_msaaFBO);   m_msaaFBO = 0;
     glDeleteTextures(1, &m_msaaColorTex);  m_msaaColorTex = 0;
-    glDeleteTextures(1, &m_msaaNormalTex); m_msaaNormalTex = 0;
     glDeleteTextures(1, &m_msaaDepthTex);  m_msaaDepthTex = 0;
     InitMSAAFBO();
 
     // --- Single-sample HDR FBO (resolve target) ---
     glDeleteFramebuffers(1, &m_hdrFBO);   m_hdrFBO = 0;
     glDeleteTextures(1, &m_hdrColorTex);  m_hdrColorTex = 0;
-    glDeleteTextures(1, &m_hdrNormalTex); m_hdrNormalTex = 0;
     glDeleteTextures(1, &m_hdrDepthTex);  m_hdrDepthTex = 0;
     InitHDRFBO();
+
+    // --- GBuffer FBO (depends on m_hdrDepthTex from above) ---
+    glDeleteFramebuffers(1, &m_gbufferFBO);    m_gbufferFBO = 0;
+    glDeleteTextures(1, &m_gbufferNormalTex);  m_gbufferNormalTex = 0;
+    InitGBufferFBO();
 
     glDeleteFramebuffers(1, &m_bloomThreshFBO); m_bloomThreshFBO = 0;
     glDeleteFramebuffers(1, &m_bloomPingFBO);   m_bloomPingFBO = 0;
@@ -106,6 +111,8 @@ void RenderSystem::Update(EntityManager& entityManager,
 
     auto meshQuery = entityManager.CreateQuery<MeshComponent, Transform>();
 
+    GBufferPass(meshQuery, view, projection);
+
     if (RenderSettings::instance().getShadowsEnabled())
         ShadowPass(entityManager, meshQuery);
     else
@@ -128,13 +135,14 @@ RenderSystem::~RenderSystem()
     glDeleteTextures(1, &m_shadowCubeArray);
     glDeleteBuffers(1, &m_shadowDataSSBO);
     glDeleteProgram(m_shadowShader);
+    glDeleteFramebuffers(1, &m_gbufferFBO);
+    glDeleteTextures(1, &m_gbufferNormalTex);
+    glDeleteProgram(m_gbufferShader);
     glDeleteFramebuffers(1, &m_msaaFBO);
     glDeleteTextures(1, &m_msaaColorTex);
-    glDeleteTextures(1, &m_msaaNormalTex);
     glDeleteTextures(1, &m_msaaDepthTex);
     glDeleteFramebuffers(1, &m_hdrFBO);
     glDeleteTextures(1, &m_hdrColorTex);
-    glDeleteTextures(1, &m_hdrNormalTex);
     glDeleteTextures(1, &m_hdrDepthTex);
     glDeleteProgram(m_tonemapShader);
     glDeleteProgram(m_bloomThreshShader);

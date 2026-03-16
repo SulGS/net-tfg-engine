@@ -135,12 +135,21 @@ private:
     int    m_shadowCount = 0;
 
     // =====================================================
+    //  GBuffer framebuffer (geometry pre-pass)
+    //  Renders view-space normals + roughness before shading.
+    //  Shares the scene depth texture with the HDR FBO so the
+    //  shading pass reads the same depth without a copy.
+    // =====================================================
+    GLuint m_gbufferFBO = 0;        // geometry pre-pass FBO
+    GLuint m_gbufferNormalTex = 0;  // RGBA16F  view-space normal (xyz) + roughness (w)
+    // depth is shared with m_hdrDepthTex (attached to both FBOs)
+
+    // =====================================================
     //  MSAA framebuffer (shading renders here when samples > 1)
     //  Resolved into m_hdrFBO before post-processing.
     // =====================================================
     GLuint m_msaaFBO = 0;           // multisampled offscreen FBO
     GLuint m_msaaColorTex = 0;      // GL_TEXTURE_2D_MULTISAMPLE  RGBA16F
-    GLuint m_msaaNormalTex = 0;     // GL_TEXTURE_2D_MULTISAMPLE  RGBA16F
     GLuint m_msaaDepthTex = 0;      // GL_TEXTURE_2D_MULTISAMPLE  DEPTH32F
     int    m_msaaSamples = 1;       // actual sample count in use (1 = disabled)
 
@@ -149,8 +158,7 @@ private:
     // =====================================================
     GLuint m_hdrFBO = 0;        // resolve target / post-process source
     GLuint m_hdrColorTex = 0;   // attachment0: RGBA16F HDR color
-    GLuint m_hdrNormalTex = 0;  // attachment1: RGBA16F view-space normal (xyz) + roughness (w)
-    GLuint m_hdrDepthTex = 0;   // depth attachment
+    GLuint m_hdrDepthTex = 0;   // depth attachment (shared with m_gbufferFBO)
     GLuint m_quadVAO = 0;       // screen-space triangle VAO
     GLuint m_quadVBO = 0;
 
@@ -178,6 +186,7 @@ private:
     // =====================================================
     //  Shader programs
     // =====================================================
+    GLuint m_gbufferShader = 0;
     GLuint m_tonemapShader = 0;
     GLuint m_bloomThreshShader = 0;
     GLuint m_bloomKawaseShader = 0;
@@ -188,7 +197,8 @@ private:
     // =====================================================
     void InitLightSSBO();
     void InitShadowCubeArray();
-    void InitMSAAFBO();          // creates multisampled FBO (no-op when samples == 1)
+    void InitGBufferFBO();           // creates gbuffer normal+roughness texture
+    void InitMSAAFBO();              // creates multisampled FBO (no-op when samples == 1)
     void InitHDRFBO();
     void InitBloom();
     void InitLDRFBO();
@@ -205,6 +215,7 @@ private:
     static GLuint CompileStage(GLenum type, const char* src);
     static GLuint LinkProgram(std::initializer_list<GLuint> stages);
 
+    void CompileGBufferShader();
     void CompileShadowShader();
     void CompileTonemapShader();
     void CompileBloomShaders();
@@ -213,6 +224,8 @@ private:
     // =====================================================
     //  Per-frame passes
     // =====================================================
+    void GBufferPass(EntityManager::Query<MeshComponent, Transform>& meshQuery, const glm::mat4& view,
+        const glm::mat4& projection);
     void ShadowPass(EntityManager& em, EntityManager::Query<MeshComponent, Transform>& meshQuery);
     void ShadingPass(EntityManager::Query<MeshComponent, Transform>& meshQuery, const glm::mat4& view,
         const glm::mat4& projection, const glm::vec3& cameraPos);

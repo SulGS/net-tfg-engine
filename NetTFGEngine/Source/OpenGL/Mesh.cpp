@@ -1,4 +1,4 @@
-#include "Mesh.hpp"
+ï»¿#include "Mesh.hpp"
 #include "Utils/Debug/Debug.hpp"
 
 GLuint CreateFallback1x1(uint8_t r, uint8_t g, uint8_t b, uint8_t a)
@@ -46,27 +46,27 @@ void Mesh::draw() const
     glBindVertexArray(buffer->VAO);
     for (const auto& sm : buffer->subMeshes)
     {
-        // Unit 0 — albedo (fallback: white)
+        // Unit 0 ï¿½ albedo (fallback: white)
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, sm.diffuseTex ? sm.diffuseTex : m_fallbackWhite);
         material->setInt("uAlbedoTex", 0);
 
-        // Unit 1 — normal map (fallback: flat normal 0.5, 0.5, 1.0)
+        // Unit 1 ï¿½ normal map (fallback: flat normal 0.5, 0.5, 1.0)
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, sm.normalTex ? sm.normalTex : m_fallbackNormal);
         material->setInt("uNormalTex", 1);
 
-        // Unit 2 — metallic/roughness (fallback: non-metal, full rough)
+        // Unit 2 ï¿½ metallic/roughness (fallback: non-metal, full rough)
         glActiveTexture(GL_TEXTURE2);
         glBindTexture(GL_TEXTURE_2D, sm.mrTex ? sm.mrTex : m_fallbackMR);
         material->setInt("uMRTex", 2);
 
-        // Unit 3 — occlusion (fallback: full white = no occlusion)
+        // Unit 3 ï¿½ occlusion (fallback: full white = no occlusion)
         glActiveTexture(GL_TEXTURE3);
         glBindTexture(GL_TEXTURE_2D, sm.occlusionTex ? sm.occlusionTex : m_fallbackWhite);
         material->setInt("uOcclusionTex", 3);
 
-        // Unit 4 — emissive (fallback: black = no emission)
+        // Unit 4 ï¿½ emissive (fallback: black = no emission)
         glActiveTexture(GL_TEXTURE4);
         glBindTexture(GL_TEXTURE_2D, sm.emissiveTex ? sm.emissiveTex : m_fallbackBlack);
         material->setInt("uEmissiveTex", 4);
@@ -84,6 +84,28 @@ void Mesh::drawGeometryOnly() const
     for (const auto& sm : buffer->subMeshes)
         glDrawElements(GL_TRIANGLES, sm.indexCount, GL_UNSIGNED_INT,
             (void*)(size_t)(sm.indexOffset * sizeof(uint32_t)));
+    glBindVertexArray(0);
+}
+
+void Mesh::drawGBuffer(GLuint gbufferShader) const
+{
+    if (!buffer) return;
+    glBindVertexArray(buffer->VAO);
+    for (const auto& sm : buffer->subMeshes)
+    {
+        // Unit 1 â€” normal map (fallback: flat normal 0.5, 0.5, 1.0)
+        glActiveTexture(GL_TEXTURE1);
+        glBindTexture(GL_TEXTURE_2D, sm.normalTex ? sm.normalTex : m_fallbackNormal);
+        glUniform1i(glGetUniformLocation(gbufferShader, "uNormalTex"), 1);
+
+        // Unit 2 â€” metallic/roughness (fallback: non-metal, full rough)
+        glActiveTexture(GL_TEXTURE2);
+        glBindTexture(GL_TEXTURE_2D, sm.mrTex ? sm.mrTex : m_fallbackMR);
+        glUniform1i(glGetUniformLocation(gbufferShader, "uMRTex"), 2);
+
+        glDrawElements(GL_TRIANGLES, sm.indexCount, GL_UNSIGNED_INT,
+            (void*)(size_t)(sm.indexOffset * sizeof(uint32_t)));
+    }
     glBindVertexArray(0);
 }
 

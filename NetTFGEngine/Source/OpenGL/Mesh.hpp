@@ -19,6 +19,11 @@ public:
     void draw() const;
     void drawGeometryOnly() const;
 
+    // GBuffer pre-pass — binds only normal map (unit 1) and MR map (unit 2),
+    // then draws geometry. The caller must have already set uModel/uView/uProjection
+    // on the gbuffer shader via glUniform before calling this.
+    void drawGBuffer(GLuint gbufferShader) const;
+
     // Keep render() as a convenience wrapper for other use cases
     void render(const glm::mat4& model,
         const glm::mat4& view,
@@ -27,7 +32,7 @@ public:
     // Depth pre-pass — only MVP, no material/texture work
     void drawDepthOnly(const glm::mat4& mvp, GLuint depthShader) const;
 
-	Material* getMaterial() const { return material.get(); }
+    Material* getMaterial() const { return material.get(); }
 
 private:
     std::optional<MeshBuffer> buffer;

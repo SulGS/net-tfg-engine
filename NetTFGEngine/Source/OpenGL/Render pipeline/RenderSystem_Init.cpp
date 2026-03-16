@@ -80,10 +80,50 @@ void RenderSystem::InitShadowCubeArray()
 }
 
 // =====================================================
+//  InitGBufferFBO
+//  Single-sample FBO that the geometry pre-pass writes into.
+//  Attachment: RGBA16F normal+roughness.
+//  Depth: shared with m_hdrDepthTex so the shading pass can
+//  perform the early-Z test against the already-filled depth.
+//  Must be called AFTER InitHDRFBO() so m_hdrDepthTex exists.
+// =====================================================
+void RenderSystem::InitGBufferFBO()
+{
+    // Normal + roughness texture (view-space XYZ + W)
+    glGenTextures(1, &m_gbufferNormalTex);
+    glBindTexture(GL_TEXTURE_2D, m_gbufferNormalTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F,
+        m_screenW, m_screenH, 0, GL_RGBA, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glGenFramebuffers(1, &m_gbufferFBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_gbufferFBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_2D, m_gbufferNormalTex, 0);
+    // Reuse the HDR depth buffer — geometry pre-pass fills it,
+    // shading pass reads it with GL_LEQUAL for free early-Z.
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+        GL_TEXTURE_2D, m_hdrDepthTex, 0);
+
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        Debug::Error("RenderSystem") << "GBuffer FBO incomplete\n";
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+
+// =====================================================
 //  InitMSAAFBO
-//  Creates a multisampled FBO that mirrors the HDR FBO layout.
-//  When m_msaaSamples == 1, this is a no-op — ShadingPass will
-//  render directly into m_hdrFBO instead.
+//  Creates a multisampled FBO for the shading pass.
+//  Only one color attachment (HDR radiance) — the GBuffer
+//  normal/roughness is written in a separate pre-pass that
+//  does not need MSAA.
+//  When m_msaaSamples == 1, this is a no-op — ShadingPass
+//  will render directly into m_hdrFBO instead.
 // =====================================================
 void RenderSystem::InitMSAAFBO()
 {
@@ -93,11 +133,6 @@ void RenderSystem::InitMSAAFBO()
     // Multisample textures do not accept filter/wrap parameters
     glGenTextures(1, &m_msaaColorTex);
     glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, m_msaaColorTex);
-    glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, m_msaaSamples,
-        GL_RGBA16F, m_screenW, m_screenH, GL_TRUE);
-
-    glGenTextures(1, &m_msaaNormalTex);
-    glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, m_msaaNormalTex);
     glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, m_msaaSamples,
         GL_RGBA16F, m_screenW, m_screenH, GL_TRUE);
 
@@ -112,13 +147,11 @@ void RenderSystem::InitMSAAFBO()
     glBindFramebuffer(GL_FRAMEBUFFER, m_msaaFBO);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
         GL_TEXTURE_2D_MULTISAMPLE, m_msaaColorTex, 0);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
-        GL_TEXTURE_2D_MULTISAMPLE, m_msaaNormalTex, 0);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
         GL_TEXTURE_2D_MULTISAMPLE, m_msaaDepthTex, 0);
 
-    GLenum drawBufs[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
-    glDrawBuffers(2, drawBufs);
+    GLenum drawBufs[1] = { GL_COLOR_ATTACHMENT0 };
+    glDrawBuffers(1, drawBufs);
 
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
         Debug::Error("RenderSystem") << "MSAA FBO incomplete (samples="
@@ -128,9 +161,12 @@ void RenderSystem::InitMSAAFBO()
 }
 
 
+//  Single-sample HDR FBO — resolve target for MSAA and source
+//  for all post-process passes.
 //  MRT: attachment0 = HDR color (RGBA16F)
-//       attachment1 = view-space normal.xyz + roughness.w (RGBA16F)
-//       depth       = DEPTH32F
+//       depth       = DEPTH32F  (shared with GBuffer FBO)
+//  The view-space normal + roughness GBuffer lives in a separate
+//  m_gbufferFBO / m_gbufferNormalTex written by GBufferPass.
 // =====================================================
 void RenderSystem::InitHDRFBO()
 {
@@ -144,17 +180,7 @@ void RenderSystem::InitHDRFBO()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-    // --- color attachment 1: view-space normals (xyz) + roughness (w) ---
-    glGenTextures(1, &m_hdrNormalTex);
-    glBindTexture(GL_TEXTURE_2D, m_hdrNormalTex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F,
-        m_screenW, m_screenH, 0, GL_RGBA, GL_FLOAT, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-    // --- depth ---
+    // --- depth (shared with GBuffer FBO) ---
     glGenTextures(1, &m_hdrDepthTex);
     glBindTexture(GL_TEXTURE_2D, m_hdrDepthTex);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F,
@@ -169,13 +195,11 @@ void RenderSystem::InitHDRFBO()
     glBindFramebuffer(GL_FRAMEBUFFER, m_hdrFBO);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
         GL_TEXTURE_2D, m_hdrColorTex, 0);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
-        GL_TEXTURE_2D, m_hdrNormalTex, 0);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
         GL_TEXTURE_2D, m_hdrDepthTex, 0);
 
-    GLenum drawBufs[2] = { GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1 };
-    glDrawBuffers(2, drawBufs);
+    GLenum drawBufs[1] = { GL_COLOR_ATTACHMENT0 };
+    glDrawBuffers(1, drawBufs);
 
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
         Debug::Error("RenderSystem") << "HDR FBO incomplete\n";

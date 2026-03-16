@@ -259,3 +259,70 @@ void RenderSystem::CompileFXAAShader()
         CompileStage(GL_FRAGMENT_SHADER, frag)
         });
 }
+
+
+// =====================================================
+//  CompileGBufferShader
+//  Geometry pre-pass: outputs view-space normal (xyz) +
+//  perceptual roughness (w) into a single RGBA16F attachment.
+//  Reads the same vertex attributes and uniforms as ggx.vert
+//  so no extra VAO layout is needed.
+// =====================================================
+void RenderSystem::CompileGBufferShader()
+{
+    const char* vert = R"GLSL(
+        #version 430 core
+        layout(location = 0) in vec3 aPos;
+        layout(location = 1) in vec3 aNormal;
+        layout(location = 2) in vec2 aUV;
+        layout(location = 3) in vec4 aTangent; // xyz = tangent, w = bitangent sign
+
+        uniform mat4 uModel;
+        uniform mat4 uView;
+        uniform mat4 uProjection;
+
+        out vec2 vUV;
+        out mat3 vViewTBN;
+
+        void main()
+        {
+            mat3 viewNormalMatrix = mat3(transpose(inverse(uView * uModel)));
+
+            vec3 vN = normalize(viewNormalMatrix * aNormal);
+            vec3 vT = normalize(viewNormalMatrix * aTangent.xyz);
+            vT      = normalize(vT - dot(vT, vN) * vN); // Gram-Schmidt
+            vec3 vB = cross(vN, vT) * aTangent.w;
+            vViewTBN = mat3(vT, vB, vN);
+
+            vUV         = aUV;
+            gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
+        }
+    )GLSL";
+
+    const char* frag = R"GLSL(
+        #version 430 core
+        in vec2 vUV;
+        in mat3 vViewTBN;
+
+        layout(location = 0) out vec4 FragNormalRoughness;
+
+        uniform sampler2D uNormalTex; // unit 1 — tangent-space normal map
+        uniform sampler2D uMRTex;     // unit 2 — G=roughness, B=metallic (only G used here)
+
+        void main()
+        {
+            // Decode tangent-space normal and transform to view space
+            vec3 tangentN   = texture(uNormalTex, vUV).rgb * 2.0 - 1.0;
+            vec3 viewNormal = normalize(vViewTBN * tangentN);
+
+            float perceptualRoughness = clamp(texture(uMRTex, vUV).g, 0.045, 1.0);
+
+            FragNormalRoughness = vec4(viewNormal, perceptualRoughness);
+        }
+    )GLSL";
+
+    m_gbufferShader = LinkProgram({
+        CompileStage(GL_VERTEX_SHADER,   vert),
+        CompileStage(GL_FRAGMENT_SHADER, frag)
+        });
+}

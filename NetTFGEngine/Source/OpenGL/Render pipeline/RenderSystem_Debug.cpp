@@ -315,9 +315,9 @@ void RenderSystem::DumpBuffers() const
     }
 
     // ---- 3. GBuffer: view-space normals + roughness ----
-    if (m_hdrNormalTex) {
+    if (m_gbufferNormalTex) {
         // Writes gbuffer_normal.png (view normals as RGB) + gbuffer_roughness.png (greyscale)
-        DumpTexture2D_NormalRoughness(m_hdrNormalTex, m_screenW, m_screenH,
+        DumpTexture2D_NormalRoughness(m_gbufferNormalTex, m_screenW, m_screenH,
             dumpDir + "/gbuffer");
         Debug::Info("RenderSystem::DumpBuffers") << "Saved gbuffer_normal.png + gbuffer_roughness.png\n";
     }

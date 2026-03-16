@@ -6,15 +6,12 @@
 in vec3 vWorldPos;
 in vec2 vUV;
 in mat3 vTBN;
-in mat3 vViewTBN; // view-space TBN for GBuffer output
 
 // -------------------------------------------------------
 // MRT outputs
-//   layout 0 — HDR radiance (existing)
-//   layout 1 — view-space normal (xyz) + roughness (w)  [GBuffer for SSAO/SSR]
+//   layout 0 — HDR radiance
 // -------------------------------------------------------
 layout(location = 0) out vec4 FragColor;
-layout(location = 1) out vec4 FragNormalRoughness;
 
 // -------------------------------------------------------
 // Texture units  (bound per-submesh by Mesh::render)
@@ -361,11 +358,4 @@ void main()
     // Write raw HDR radiance — TonemapPass resolves this to LDR
     // (no ACESFilmic, no gamma here)
     FragColor = vec4(color, 1.0);
-
-    // GBuffer attachment 1: view-space normal + perceptual roughness
-    // Used by SSAOPass and SSRPass. vViewTBN transforms the tangent-space
-    // normal map sample into view space for correct screen-space operations.
-    vec3 tangentN  = texture(uNormalTex, vUV).rgb * 2.0 - 1.0;
-    vec3 viewNormal = normalize(vViewTBN * tangentN);
-    FragNormalRoughness = vec4(viewNormal, perceptualRoughness);
 }
