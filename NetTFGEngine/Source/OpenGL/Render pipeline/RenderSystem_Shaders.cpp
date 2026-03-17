@@ -304,20 +304,25 @@ void RenderSystem::CompileGBufferShader()
         in vec2 vUV;
         in mat3 vViewTBN;
 
-        layout(location = 0) out vec4 FragNormalRoughness;
+        layout(location = 0) out vec4 FragNormalRoughness; // xyz=normal, w=roughness (backward-compat)
+        layout(location = 1) out vec4 FragRoughness;       // r=roughness
+        layout(location = 2) out vec4 FragMetalness;       // r=metalness
 
         uniform sampler2D uNormalTex; // unit 1 — tangent-space normal map
-        uniform sampler2D uMRTex;     // unit 2 — G=roughness, B=metallic (only G used here)
+        uniform sampler2D uMRTex;     // unit 2 — G=roughness, B=metallic
 
         void main()
         {
-            // Decode tangent-space normal and transform to view space
             vec3 tangentN   = texture(uNormalTex, vUV).rgb * 2.0 - 1.0;
             vec3 viewNormal = normalize(vViewTBN * tangentN);
 
-            float perceptualRoughness = clamp(texture(uMRTex, vUV).g, 0.045, 1.0);
+            vec2 mr = texture(uMRTex, vUV).gb; // g=roughness, b=metallic
+            float perceptualRoughness = clamp(mr.x, 0.045, 1.0);
+            float metalness           = clamp(mr.y, 0.0,   1.0);
 
             FragNormalRoughness = vec4(viewNormal, perceptualRoughness);
+            FragRoughness       = vec4(perceptualRoughness, 0.0, 0.0, 1.0);
+            FragMetalness       = vec4(metalness,           0.0, 0.0, 1.0);
         }
     )GLSL";
 

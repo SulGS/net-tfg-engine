@@ -87,8 +87,9 @@ public:
     //  Files written (all PNG, 8-bit RGB):
     //    hdr_color.png          — HDR colour, auto-range normalised
     //    depth.png              — Scene depth, auto-ranged greyscale
-    //    gbuffer_normal.png     — View-space normals as RGB
-    //    gbuffer_roughness.png  — Roughness as greyscale
+    //    gbuffer_normal.png     — View-space normals as RGB (attachment 0)
+    //    gbuffer_roughness.png  — Roughness as greyscale   (attachment 1)
+    //    gbuffer_metalness.png  — Metalness as greyscale   (attachment 2)
     //    bloom_thresh.png       — Bloom threshold pass output
     //    bloom_result.png       — Final blurred bloom texture
     //    ldr_color.png          — Post-tonemap LDR colour (pre-FXAA)
@@ -140,9 +141,11 @@ private:
     //  Shares the scene depth texture with the HDR FBO so the
     //  shading pass reads the same depth without a copy.
     // =====================================================
-    GLuint m_gbufferFBO = 0;        // geometry pre-pass FBO
-    GLuint m_gbufferNormalTex = 0;  // RGBA16F  view-space normal (xyz) + roughness (w)
-    // depth is shared with m_hdrDepthTex (attached to both FBOs)
+    GLuint m_gbufferFBO = 0;             // geometry pre-pass FBO
+    GLuint m_gbufferNormalTex = 0;       // RGBA16F  attachment 0 — view-space normals (xyz) + roughness (w)
+    GLuint m_gbufferRoughnessTex = 0;    // RGBA16F  attachment 1 — perceptual roughness (r)
+    GLuint m_gbufferMetalnessTex = 0;    // RGBA16F  attachment 2 — metalness (r)
+    GLuint m_gbufferDepthRBO = 0;        // DEPTH32F renderbuffer — owned exclusively by gbufferFBO
 
     // =====================================================
     //  MSAA framebuffer (shading renders here when samples > 1)

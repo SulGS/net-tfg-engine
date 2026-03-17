@@ -218,6 +218,56 @@ namespace {
     }
 
     // ------------------------------------------------------------------
+    //  DumpTexture2D_ViewNormals
+    //  Reads a GBuffer RGBA16F normal texture and writes a PNG with
+    //  each XYZ component remapped from [-1,1] to [0,255].
+    // ------------------------------------------------------------------
+    static void DumpTexture2D_ViewNormals(GLuint tex, int w, int h,
+        const std::string& path)
+    {
+        const int nPix = w * h;
+        std::vector<float> pixels(nPix * 4);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, pixels.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+        std::vector<uint8_t> rgb(nPix * 3);
+        for (int i = 0; i < nPix; ++i) {
+            auto remap = [](float v) -> uint8_t {
+                v = v * 0.5f + 0.5f;
+                v = v < 0.f ? 0.f : (v > 1.f ? 1.f : v);
+                return static_cast<uint8_t>(v * 255.f + 0.5f);
+                };
+            rgb[i * 3 + 0] = remap(pixels[i * 4 + 0]);
+            rgb[i * 3 + 1] = remap(pixels[i * 4 + 1]);
+            rgb[i * 3 + 2] = remap(pixels[i * 4 + 2]);
+        }
+        WritePNG(path, w, h, rgb);
+    }
+
+    // ------------------------------------------------------------------
+    //  DumpTexture2D_GreyscaleR
+    //  Reads the R channel of an RGBA16F texture as greyscale [0,255].
+    //  Used for the separate roughness and metalness attachments.
+    // ------------------------------------------------------------------
+    static void DumpTexture2D_GreyscaleR(GLuint tex, int w, int h,
+        const std::string& path)
+    {
+        const int nPix = w * h;
+        std::vector<float> pixels(nPix * 4);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, pixels.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+        std::vector<uint8_t> rgb(nPix * 3);
+        for (int i = 0; i < nPix; ++i) {
+            float v = pixels[i * 4 + 0];
+            v = v < 0.f ? 0.f : (v > 1.f ? 1.f : v);
+            auto b = static_cast<uint8_t>(v * 255.f + 0.5f);
+            rgb[i * 3 + 0] = rgb[i * 3 + 1] = rgb[i * 3 + 2] = b;
+        }
+        WritePNG(path, w, h, rgb);
+    }
+
+    // ------------------------------------------------------------------
     //  DumpTexture2D_NormalRoughness
     //  Reads the GBuffer RGBA16F normal+roughness attachment and writes:
     //    <base>_normal.png    — view-space normals remapped [-1,1]->[0,255]
@@ -314,12 +364,25 @@ void RenderSystem::DumpBuffers() const
         Debug::Info("RenderSystem::DumpBuffers") << "Saved depth.png\n";
     }
 
-    // ---- 3. GBuffer: view-space normals + roughness ----
+    // ---- 3. GBuffer: view-space normals (attachment 0, xyz channels) ----
     if (m_gbufferNormalTex) {
-        // Writes gbuffer_normal.png (view normals as RGB) + gbuffer_roughness.png (greyscale)
-        DumpTexture2D_NormalRoughness(m_gbufferNormalTex, m_screenW, m_screenH,
-            dumpDir + "/gbuffer");
-        Debug::Info("RenderSystem::DumpBuffers") << "Saved gbuffer_normal.png + gbuffer_roughness.png\n";
+        DumpTexture2D_ViewNormals(m_gbufferNormalTex, m_screenW, m_screenH,
+            path("gbuffer_normal.png"));
+        Debug::Info("RenderSystem::DumpBuffers") << "Saved gbuffer_normal.png\n";
+    }
+
+    // ---- 3b. GBuffer: perceptual roughness (attachment 1, r channel) ----
+    if (m_gbufferRoughnessTex) {
+        DumpTexture2D_GreyscaleR(m_gbufferRoughnessTex, m_screenW, m_screenH,
+            path("gbuffer_roughness.png"));
+        Debug::Info("RenderSystem::DumpBuffers") << "Saved gbuffer_roughness.png\n";
+    }
+
+    // ---- 3c. GBuffer: metalness (attachment 2, r channel) ----
+    if (m_gbufferMetalnessTex) {
+        DumpTexture2D_GreyscaleR(m_gbufferMetalnessTex, m_screenW, m_screenH,
+            path("gbuffer_metalness.png"));
+        Debug::Info("RenderSystem::DumpBuffers") << "Saved gbuffer_metalness.png\n";
     }
 
     // ---- 4. Bloom threshold (full res, pre-blur) ----

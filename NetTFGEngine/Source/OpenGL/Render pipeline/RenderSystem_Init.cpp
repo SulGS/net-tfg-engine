@@ -89,24 +89,48 @@ void RenderSystem::InitShadowCubeArray()
 // =====================================================
 void RenderSystem::InitGBufferFBO()
 {
-    // Normal + roughness texture (view-space XYZ + W)
-    glGenTextures(1, &m_gbufferNormalTex);
-    glBindTexture(GL_TEXTURE_2D, m_gbufferNormalTex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F,
-        m_screenW, m_screenH, 0, GL_RGBA, GL_FLOAT, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    // Helper: one NEAREST, CLAMP_TO_EDGE RGBA16F texture
+    auto makeAttachment = [&](GLuint& tex) {
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F,
+            m_screenW, m_screenH, 0, GL_RGBA, GL_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        };
+
+    // attachment 0 — view-space normals (xyz) + roughness (w)  [same layout as before]
+    makeAttachment(m_gbufferNormalTex);
+    // attachment 1 — perceptual roughness (r channel)
+    makeAttachment(m_gbufferRoughnessTex);
+    // attachment 2 — metalness (r channel)
+    makeAttachment(m_gbufferMetalnessTex);
+
+    // Dedicated depth renderbuffer — never bound as a sampler so no
+    // feedback-loop risk with m_hdrDepthTex.
+    glGenRenderbuffers(1, &m_gbufferDepthRBO);
+    glBindRenderbuffer(GL_RENDERBUFFER, m_gbufferDepthRBO);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT32F, m_screenW, m_screenH);
+    glBindRenderbuffer(GL_RENDERBUFFER, 0);
 
     glGenFramebuffers(1, &m_gbufferFBO);
     glBindFramebuffer(GL_FRAMEBUFFER, m_gbufferFBO);
+
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
         GL_TEXTURE_2D, m_gbufferNormalTex, 0);
-    // Reuse the HDR depth buffer — geometry pre-pass fills it,
-    // shading pass reads it with GL_LEQUAL for free early-Z.
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-        GL_TEXTURE_2D, m_hdrDepthTex, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1,
+        GL_TEXTURE_2D, m_gbufferRoughnessTex, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2,
+        GL_TEXTURE_2D, m_gbufferMetalnessTex, 0);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+        GL_RENDERBUFFER, m_gbufferDepthRBO);
+
+    const GLenum drawBufs[3] = {
+        GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2
+    };
+    glDrawBuffers(3, drawBufs);
 
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
         Debug::Error("RenderSystem") << "GBuffer FBO incomplete\n";

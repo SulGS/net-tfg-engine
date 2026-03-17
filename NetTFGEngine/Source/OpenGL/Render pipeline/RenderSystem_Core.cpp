@@ -53,8 +53,11 @@ void RenderSystem::Resize(int screenW, int screenH)
     InitHDRFBO();
 
     // --- GBuffer FBO (depends on m_hdrDepthTex from above) ---
-    glDeleteFramebuffers(1, &m_gbufferFBO);    m_gbufferFBO = 0;
-    glDeleteTextures(1, &m_gbufferNormalTex);  m_gbufferNormalTex = 0;
+    glDeleteFramebuffers(1, &m_gbufferFBO);      m_gbufferFBO = 0;
+    glDeleteTextures(1, &m_gbufferNormalTex);    m_gbufferNormalTex = 0;
+    glDeleteTextures(1, &m_gbufferRoughnessTex); m_gbufferRoughnessTex = 0;
+    glDeleteTextures(1, &m_gbufferMetalnessTex); m_gbufferMetalnessTex = 0;
+    glDeleteRenderbuffers(1, &m_gbufferDepthRBO); m_gbufferDepthRBO = 0;
     InitGBufferFBO();
 
     glDeleteFramebuffers(1, &m_bloomThreshFBO); m_bloomThreshFBO = 0;
@@ -137,6 +140,9 @@ RenderSystem::~RenderSystem()
     glDeleteProgram(m_shadowShader);
     glDeleteFramebuffers(1, &m_gbufferFBO);
     glDeleteTextures(1, &m_gbufferNormalTex);
+    glDeleteTextures(1, &m_gbufferRoughnessTex);
+    glDeleteTextures(1, &m_gbufferMetalnessTex);
+    glDeleteRenderbuffers(1, &m_gbufferDepthRBO);
     glDeleteProgram(m_gbufferShader);
     glDeleteFramebuffers(1, &m_msaaFBO);
     glDeleteTextures(1, &m_msaaColorTex);
