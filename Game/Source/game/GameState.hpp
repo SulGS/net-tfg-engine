@@ -21,6 +21,8 @@ struct AsteroidShooterGameState {
 
     int health[2];
 	bool alive[2];
+
+	bool isMoving[2];
     
 
 	bool isShooting[2];

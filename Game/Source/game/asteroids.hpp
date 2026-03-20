@@ -56,6 +56,8 @@ public:
                 << state.health[i] << "\n";
             Debug::Info("GameState") << "    Alive: "
                 << (state.alive[i] ? "true" : "false") << "\n";
+			Debug::Info("GameState") << "    Is Moving: "
+				<< (state.isMoving[i] ? "true" : "false") << "\n";
             Debug::Info("GameState") << "    Remaining shoot frames: "
                 << state.remaingShootFrames[i] << "\n";
             Debug::Info("GameState") << "    Shoot Cooldown: "
@@ -126,6 +128,7 @@ public:
             ship->shootCooldown = s.shootCooldown[p];
             ship->health = s.health[p];
 			ship->isShooting = s.isShooting[p];
+			ship->isMoving = s.isMoving[p];
             ship->remainingShootFrames = s.remaingShootFrames[p];
             ship->deathCooldown = s.deathCooldown[p];
 			ship->isAlive = s.alive[p];
@@ -197,6 +200,7 @@ public:
             s.shootCooldown[p] = ship->shootCooldown;
             s.remaingShootFrames[p] = ship->remainingShootFrames;
 			s.isShooting[p] = ship->isShooting;
+			s.isMoving[p] = ship->isMoving;
             s.health[p] = ship->health;
             s.deathCooldown[p] = ship->deathCooldown;
 			s.alive[p] = ship->isAlive;
@@ -253,6 +257,9 @@ public:
 
 		s->isShooting[0] = false;
 		s->isShooting[1] = false;
+
+		s->isMoving[0] = false;
+		s->isMoving[1] = false;
         
         // Initialize cooldowns
         s->shootCooldown[0] = 0;
@@ -451,6 +458,7 @@ public:
             ship->isAlive = s.alive[p];
 
 			ship->isShooting = s.isShooting[p];
+			ship->isMoving = s.isMoving[p];
             ship->remainingShootFrames = s.remaingShootFrames[p];
 
             ship->shootCooldown = s.shootCooldown[p];
@@ -573,6 +581,7 @@ public:
         world.GetEntityManager().RegisterComponentType<ECSBullet>();
         world.GetEntityManager().RegisterComponentType<ChargingShootEffect>();
         world.GetEntityManager().RegisterComponentType<DestroyTimer>();
+		world.GetEntityManager().RegisterComponentType<ThrusterOwner>();
 
         Entity player1 = world.GetEntityManager().CreateEntity();
         Transform* t1 = world.GetEntityManager().AddComponent<Transform>(player1, Transform{});
@@ -620,27 +629,41 @@ public:
         text->SetColor(1.0f, 1.0f, 1.0f, 1.0f);
         text->SetFont("default");
 
+        Entity light = world.GetEntityManager().CreateEntity();
+        Transform* tlight = world.GetEntityManager().AddComponent<Transform>(light, Transform{});
+        tlight->setPosition(glm::vec3(0.0f, 0.0f, 15.0f));
+        PointLightComponent* lightComp = world.GetEntityManager().AddComponent<PointLightComponent>(light, PointLightComponent{});
+        lightComp->intensity = 1000.0f;
+        lightComp->radius = 100.0f;
+        lightComp->enabled = true;
+
         Entity escenario = world.GetEntityManager().CreateEntity();
         Transform* tesc = world.GetEntityManager().AddComponent<Transform>(escenario, Transform{});
         tesc->setPosition(glm::vec3(0.0f, 0.0f, -2.0f));
         tesc->setRotation(glm::vec3(90.0f, 0.0f, 0.0f));
         tesc->setScale(glm::vec3(6.0f, 6.0f, 6.0f));
 
-		Entity light = world.GetEntityManager().CreateEntity();
-		Transform* tlight = world.GetEntityManager().AddComponent<Transform>(light, Transform{});
-		tlight->setPosition(glm::vec3(0.0f, 0.0f, 15.0f));
-		PointLightComponent* lightComp = world.GetEntityManager().AddComponent<PointLightComponent>(light, PointLightComponent{});
-		lightComp->intensity = 1000.0f;
-		lightComp->radius = 100.0f;
-		lightComp->enabled = true;
-
         auto escenarioMat = std::make_shared<Material>("ggx.vert", "ggx.frag");
         world.GetEntityManager().AddComponent<MeshComponent>(escenario, MeshComponent(new Mesh("escenario.glb", escenarioMat)));
+
+		Entity thrusterEntity = world.GetEntityManager().CreateEntity();
+		Transform* tThruster = world.GetEntityManager().AddComponent<Transform>(thrusterEntity, Transform{});
+		tThruster->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
+        tThruster->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
+        tThruster->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
+
+		auto thrusterOwner = world.GetEntityManager().AddComponent<ThrusterOwner>(thrusterEntity, ThrusterOwner{ 0 });
+
+		auto thrusterParticle = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(thrusterEntity, ParticlePresets::SpaceshipThruster());
+		thrusterParticle->emissionRate = 200.0f;
+        thrusterParticle->startLifetime = 0.1f;
+
 
         // Add render systems
         world.AddSystem(std::make_unique<CameraFollowSystem>());
         world.AddSystem(std::make_unique<OnDeathRenderSystem>());
         world.AddSystem(std::make_unique<ChargingBulletRenderSystem>());
+        world.AddSystem(std::make_unique<LinkThrusterToShipSystem>());
         world.AddSystem(std::make_unique<DestroyTimerSystem>());
 
         AudioListenerComponent* listener = world.GetEntityManager().AddComponent<AudioListenerComponent>(camera, AudioListenerComponent{});
@@ -691,6 +714,7 @@ public:
             rend.health[i] = currServer.health[i];
 			rend.alive[i] = currServer.alive[i];
 			rend.remaingShootFrames[i] = currServer.remaingShootFrames[i];
+			rend.isMoving[i] = currServer.isMoving[i];
 			rend.isShooting[i] = currServer.isShooting[i];
             rend.shootCooldown[i] = currServer.shootCooldown[i];
             rend.deathCooldown[i] = currServer.deathCooldown[i];

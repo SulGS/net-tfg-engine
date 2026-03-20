@@ -244,6 +244,14 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
     // If MSAA is active, resolve the multisampled FBO into the single-sample
     // HDR FBO so that the post-process passes can sample it as a regular texture.
     ResolveMSAA();
+
+    // Re-bind the HDR FBO so subsequent passes (particle Draw(), etc.) render
+    // into m_hdrColorTex rather than the default framebuffer.
+    glBindFramebuffer(GL_FRAMEBUFFER, m_hdrFBO);
+    glDepthMask(GL_TRUE);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glViewport(0, 0, m_screenW, m_screenH);
 }
 
 // =====================================================

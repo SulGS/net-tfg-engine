@@ -96,7 +96,15 @@ public:
             if (m & INPUT_TOP) {
                 velX += cos(radians) * MOVE_SPEED;
                 velY += sin(radians) * MOVE_SPEED;
+				ship->isMoving = true;
             }
+            else 
+            {
+				ship->isMoving = false;
+            }
+
+			//Debug::Info("IsMoving") << (ship->isMoving ? "True" : "False");
+
             if (m & INPUT_DOWN) {
                 velX -= cos(radians) * MOVE_SPEED;
                 velY -= sin(radians) * MOVE_SPEED;

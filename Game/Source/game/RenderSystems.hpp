@@ -238,3 +238,49 @@ public:
         }
     }
 };
+
+
+class LinkThrusterToShipSystem : public ISystem
+{
+public:
+    void Update(
+        EntityManager& entityManager,
+        std::vector<EventEntry>& events,
+        bool isServer,
+        float deltaTime
+    ) override
+    {
+        auto thrusterQuery = entityManager.CreateQuery<Transform, ParticleEmitterComponent, ThrusterOwner>();
+        auto shipQuery = entityManager.CreateQuery<Transform, Playable, SpaceShip>();
+
+        for (auto [thrusterEntity, thrusterTransform, thrusterEmitter, thrusterOwner] : thrusterQuery)
+        {
+            for (auto [shipEntity, shipTransform, play, ship] : shipQuery)
+            {
+				if (thrusterOwner->shipEntity != play->playerId) continue;
+
+				thrusterEmitter->enabled = ship->isMoving;
+
+                // Define where the thruster sits relative to the ship origin.
+                // This is the only value you need to tune — at rotation 0,
+                // negative X = left side of ship (rear nozzle).
+                const glm::vec3 localOffset = glm::vec3(0.0f, 2.8f, 0.0f);
+
+                // Rotate the offset by the ship's world rotation.
+                // glm::mat3(model) strips translation and scale — pure rotation.
+                glm::mat4 model = shipTransform->getModelMatrix();
+                glm::vec3 worldOffset = glm::mat3(model) * localOffset;
+
+                thrusterTransform->setPosition(shipTransform->getPosition() + worldOffset);
+
+                // Exhaust fires backward along the ship's local -X axis.
+                // The particle system reads -Z, so we align Z to the ship's -X.
+                thrusterTransform->setRotation(glm::vec3(
+                    90.0f,
+                    shipTransform->getRotation().z,
+					0.0f
+                ));
+            }
+        }
+    }
+};

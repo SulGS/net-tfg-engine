@@ -3,18 +3,25 @@
 
 #include "ecs/ecs_common.hpp"
 
+class ThrusterOwner : public IComponent {
+public:
+	int shipEntity; // The ship this thruster belongs to
+	ThrusterOwner() : shipEntity(-1) {}
+	ThrusterOwner(int se) : shipEntity(se) {}
+};
 
 class SpaceShip : public IComponent {
 public:
     int health;
 	bool isShooting;
+	bool isMoving;
     int remainingShootFrames;
     int shootCooldown; // frames until can shoot again
     int deathCooldown;
     bool isAlive;
 
-    SpaceShip() : health(100), isShooting(false), remainingShootFrames(0), shootCooldown(0), deathCooldown(0), isAlive(true) {}
-    SpaceShip(int h, int rsf, int cd, int dc, bool al) : health(h), isShooting(false), remainingShootFrames(rsf), shootCooldown(cd), deathCooldown(dc), isAlive(al) {}
+    SpaceShip() : health(100), isShooting(false), remainingShootFrames(0), shootCooldown(0), deathCooldown(0), isAlive(true), isMoving(false) {}
+    SpaceShip(int h, int rsf, int cd, int dc, bool al) : health(h), isShooting(false), remainingShootFrames(rsf), shootCooldown(cd), deathCooldown(dc), isAlive(al), isMoving(false) {}
 };
 
 class ECSBullet : public IComponent {

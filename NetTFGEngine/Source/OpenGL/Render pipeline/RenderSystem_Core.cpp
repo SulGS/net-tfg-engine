@@ -123,6 +123,9 @@ void RenderSystem::Update(EntityManager& entityManager,
 
     ShadingPass(meshQuery, view, projection, cameraPos);
 
+    if (m_particleSystem)
+        m_particleSystem->Draw(view, projection);   // HDR FBO still bound here
+
     if (RenderSettings::instance().getBloomEnabled())
         BloomPass();
 

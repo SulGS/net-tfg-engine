@@ -7,6 +7,9 @@
 #include "IGameRenderer.hpp"
 #include "Mesh.hpp"
 #include "OpenGL/Render pipeline/RenderSystem.hpp"
+#include "OpenGL/Particles/ParticleSystem.hpp"
+#include "OpenGL/Particles/ParticleEmitterComponent.hpp"
+#include "OpenGL/Particles/ParticlePresets.hpp"
 #include "ecs/UI/UIButton.hpp"
 #include "ecs/UI/UIElement.hpp"
 #include "ecs/UI/UIImage.hpp"
@@ -48,17 +51,25 @@ public:
 
         world.GetEntityManager().RegisterComponentType<AudioSourceComponent>();
         world.GetEntityManager().RegisterComponentType<AudioListenerComponent>();
+
+		world.GetEntityManager().RegisterComponentType<ParticleEmitterComponent>();
         
         world.AddSystem(std::make_unique<DestroyingSystem>());
 
         InitECSRenderer(state, window);
         
         world.AddSystem(std::make_unique<CameraSystem>());
+		world.AddSystem(std::make_unique<ParticleSystem>());
         world.AddSystem(std::make_unique<RenderSystem>());
         world.AddSystem(std::make_unique<UIRenderSystem>(window->getWidth(), window->getHeight()));
+
+		ParticleSystem* particleSys = world.GetSystem<ParticleSystem>();
+        particleSys->Init();
 		
 		RenderSystem* renderSys = world.GetSystem<RenderSystem>();
 		renderSys->Init(window->getWidth(), window->getHeight());
+		renderSys->SetParticleSystem(particleSys);
+
 
         UIRenderSystem* uir = world.GetSystem<UIRenderSystem>();
 
@@ -98,7 +109,7 @@ public:
 
 		if (frameCount >= RENDER_TICKS_PER_SECOND*20 ) {
 			frameCount = 0;
-            renderSys->DumpBuffers();
+            //renderSys->DumpBuffers();
 		}
     }
 

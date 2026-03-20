@@ -18,6 +18,8 @@
 #include <filesystem>
 #include <atomic>
 
+#include "OpenGL/Particles/ParticleSystem.hpp"
+
 
 
 struct GPUPointLight {
@@ -113,6 +115,8 @@ public:
     // ---------------------------------------------------
     void RequestDebugDump() { m_debugDumpRequested = true; }
 
+    void SetParticleSystem(ParticleSystem* ps) { m_particleSystem = ps; }
+
 private:
     // =====================================================
     //  Init-time constants — set from RenderSettings in Init()
@@ -125,6 +129,8 @@ private:
     // =====================================================
     int m_screenW = 0, m_screenH = 0;
     int m_lightCount = 0;
+
+    ParticleSystem* m_particleSystem = nullptr;
 
     GLuint m_lightSSBO = 0; // binding 0 — GPUPointLight array
 
