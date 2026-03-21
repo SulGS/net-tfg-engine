@@ -81,14 +81,34 @@ public:
             // Skip input processing if charging shot
             if (ship->isShooting) continue;
 
+			bool notRotating = !(m & INPUT_LEFT) && !(m & INPUT_RIGHT);
+
             // Rotation
             if (m & INPUT_LEFT) {
                 transform->setRotation(transform->getRotation() + glm::vec3(0.0f, 0.0f, ROT_SPEED));
                 if (transform->getRotation().z >= 360) transform->setRotation(transform->getRotation() + glm::vec3(0.0f, 0.0f, -360.0f));
+
+				
+                
+                ship->shipInclination = std::min(ship->shipInclination + 5, 40); // Max inclination of 45
             }
+
             if (m & INPUT_RIGHT) {
                 transform->setRotation(transform->getRotation() + glm::vec3(0.0f, 0.0f, -ROT_SPEED));
                 if (transform->getRotation().z < 0) transform->setRotation(transform->getRotation() + glm::vec3(0.0f, 0.0f, 360.0f));
+
+                ship->shipInclination = std::max(ship->shipInclination - 5, -40); // Max inclination of -45
+            }
+
+            if (notRotating) 
+            {
+				// Gradually return to neutral inclination when not rotating
+                if (ship->shipInclination > 0) {
+                    ship->shipInclination = std::max(ship->shipInclination - 3, 0);
+				}
+                else if (ship->shipInclination < 0) {
+                    ship->shipInclination = std::min(ship->shipInclination + 3, 0);
+                }
             }
 
             // Movement
@@ -96,11 +116,11 @@ public:
             if (m & INPUT_TOP) {
                 velX += cos(radians) * MOVE_SPEED;
                 velY += sin(radians) * MOVE_SPEED;
-				ship->isMoving = true;
+				ship->isMovingForward = true;
             }
             else 
             {
-				ship->isMoving = false;
+				ship->isMovingForward = false;
             }
 
 			//Debug::Info("IsMoving") << (ship->isMoving ? "True" : "False");

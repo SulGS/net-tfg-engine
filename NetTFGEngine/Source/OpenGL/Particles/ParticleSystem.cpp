@@ -19,7 +19,7 @@ static const char* kParticleVert = R"GLSL(
         vec4 positionSize; // xyz = world pos, w = size
         vec4 color;
     };
-    layout(std430, binding = 2) readonly buffer ParticleBuffer {
+    layout(std430, binding = 1) readonly buffer ParticleBuffer {
         GPUParticle particles[];
     };
 
@@ -113,7 +113,6 @@ void ParticleSystem::Update(EntityManager& entityManager,
 
     for (auto [entity, emitter, transform] : query)
     {
-        //if (!emitter->enabled) continue;
 
         glm::vec3 worldPos = transform->getPosition();
 
@@ -150,7 +149,7 @@ void ParticleSystem::Draw(const glm::mat4& view, const glm::mat4& projection)
     glDepthMask(GL_FALSE);   // don't write depth; particles are transparent
 
     glBindVertexArray(m_quadVAO);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 2, m_ssbo);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_ssbo);
 
     // We need access to every emitter again — store results from Update.
     // Simple approach: re-iterate (entityManager not available here, so
@@ -184,6 +183,9 @@ void ParticleSystem::Draw(const glm::mat4& view, const glm::mat4& projection)
     glUseProgram(0);
 }
 
+// =====================================================
+//  SimulateEmitter
+// =====================================================
 void ParticleSystem::SimulateEmitter(ParticleEmitterComponent& e,
     const glm::vec3& emitterWorldPos,
     const glm::vec3& emitterWorldDir,
@@ -191,13 +193,20 @@ void ParticleSystem::SimulateEmitter(ParticleEmitterComponent& e,
     float dt)
 {
     static const glm::vec3 kGravity(0.0f, -9.81f, 0.0f);
+    auto randF = []() { return static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX); };
 
     e.elapsedTime += dt;
 
-    // ---- Spawn new particles (only when enabled) ----
+    // ---- Spawn new particles ----
     if (e.enabled && (e.looping || e.elapsedTime <= e.duration))
     {
-        e.emissionAccum += e.emissionRate * dt;
+        // Flicker: jitter emission rate +/- emissionVariance each frame
+        float flickeredRate = e.emissionRate * e.speedScale;
+        if (e.emissionVariance > 0.0f)
+            flickeredRate += (randF() * 2.0f - 1.0f) * e.emissionVariance;
+        flickeredRate = std::max(0.0f, flickeredRate);
+
+        e.emissionAccum += flickeredRate * dt;
         int toSpawn = static_cast<int>(e.emissionAccum);
         e.emissionAccum -= static_cast<float>(toSpawn);
 
@@ -205,7 +214,7 @@ void ParticleSystem::SimulateEmitter(ParticleEmitterComponent& e,
             SpawnParticle(e, emitterWorldPos, emitterWorldDir, uniformScale);
     }
 
-    // ---- Integrate alive particles (always runs) ----
+    // ---- Integrate alive particles ----
     e.aliveCount = 0;
     for (auto& p : e.pool)
     {
@@ -214,13 +223,28 @@ void ParticleSystem::SimulateEmitter(ParticleEmitterComponent& e,
         p.age += dt;
         if (p.age >= p.lifetime) { p.alive = false; continue; }
 
+        // Physics integration
         p.velocity += kGravity * e.gravityModifier * dt;
+
+        // Turbulence: small random impulse each frame
+        if (e.turbulenceStrength > 0.0f)
+        {
+            glm::vec3 turbulence(
+                (randF() * 2.0f - 1.0f) * e.turbulenceStrength,
+                (randF() * 2.0f - 1.0f) * e.turbulenceStrength,
+                (randF() * 2.0f - 1.0f) * e.turbulenceStrength
+            );
+            p.velocity += turbulence * dt;
+        }
+
         p.position += p.velocity * dt;
 
+        // Optional custom hook
         if (e.onUpdate) e.onUpdate(p, dt);
 
         ++e.aliveCount;
 
+        // Pack into staging buffer for Draw()
         float t = p.age / p.lifetime;
         glm::vec4 color = glm::mix(p.colorStart, p.colorEnd, t);
         float size = glm::mix(p.sizeStart, p.sizeEnd, t);
@@ -249,15 +273,40 @@ void ParticleSystem::SpawnParticle(ParticleEmitterComponent& e,
     }
     if (!slot) return; // pool exhausted
 
+    auto randF = []() { return static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX); };
+
+    // Lifetime variance
+    float lifetime = e.startLifetime * e.speedScale;
+    if (e.lifetimeVariance > 0.0f)
+        lifetime += (randF() * 2.0f - 1.0f) * e.lifetimeVariance;
+    lifetime = std::max(0.05f, lifetime);
+
+    // Speed variance
+    float speed = e.startSpeed;
+    if (e.speedVariance > 0.0f)
+        speed += (randF() * 2.0f - 1.0f) * e.speedVariance;
+    speed = std::max(0.0f, speed);
+
+    // Color temperature: only when opted in — never override smoke/fire colors
+    glm::vec3 spawnDir = SampleSpawnVelocity(e, emitterWorldDir);
+    glm::vec4 spawnColor = e.startColor;
+    if (e.colorTemperature)
+    {
+        float alignment = glm::dot(spawnDir, emitterWorldDir);
+        float heatT = glm::clamp((alignment - 0.95f) / 0.05f, 0.0f, 1.0f);
+        glm::vec4 hotColor = glm::vec4(1.0f, 1.0f, 1.0f, e.startColor.a);
+        spawnColor = glm::mix(e.startColor, hotColor, heatT);
+    }
+
     slot->alive = true;
     slot->age = 0.0f;
-    slot->lifetime = e.startLifetime;
-    slot->colorStart = e.startColor;
+    slot->lifetime = lifetime;
+    slot->colorStart = spawnColor;
     slot->colorEnd = e.endColor;
     slot->sizeStart = e.startSize * uniformScale;
     slot->sizeEnd = e.endSize * uniformScale;
     slot->position = emitterWorldPos + SampleSpawnPosition(e, emitterWorldPos) * uniformScale;
-    slot->velocity = SampleSpawnVelocity(e, emitterWorldDir) * e.startSpeed;
+    slot->velocity = spawnDir * speed;
 }
 
 // =====================================================

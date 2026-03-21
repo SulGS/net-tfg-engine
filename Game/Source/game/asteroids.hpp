@@ -57,7 +57,7 @@ public:
             Debug::Info("GameState") << "    Alive: "
                 << (state.alive[i] ? "true" : "false") << "\n";
 			Debug::Info("GameState") << "    Is Moving: "
-				<< (state.isMoving[i] ? "true" : "false") << "\n";
+				<< (state.isMovingForward[i] ? "true" : "false") << "\n";
             Debug::Info("GameState") << "    Remaining shoot frames: "
                 << state.remaingShootFrames[i] << "\n";
             Debug::Info("GameState") << "    Shoot Cooldown: "
@@ -109,7 +109,7 @@ public:
         if (Input::KeyPressed(Input::CharToKeycode('a'))) m |= INPUT_LEFT;
         if (Input::KeyPressed(Input::CharToKeycode('d'))) m |= INPUT_RIGHT;
         if (Input::KeyPressed(Input::CharToKeycode('w'))) m |= INPUT_TOP;
-        if (Input::KeyPressed(Input::CharToKeycode('s'))) m |= INPUT_DOWN;
+        //if (Input::KeyPressed(Input::CharToKeycode('s'))) m |= INPUT_DOWN;
         if (Input::KeyPressed(Input::CharToKeycode(' '))) m |= INPUT_SHOOT;  // Space bar
         
         InputBlob buf = MakeZeroInputBlob();
@@ -128,7 +128,8 @@ public:
             ship->shootCooldown = s.shootCooldown[p];
             ship->health = s.health[p];
 			ship->isShooting = s.isShooting[p];
-			ship->isMoving = s.isMoving[p];
+			ship->isMovingForward = s.isMovingForward[p];
+			ship->shipInclination = s.shipInclination[p];
             ship->remainingShootFrames = s.remaingShootFrames[p];
             ship->deathCooldown = s.deathCooldown[p];
 			ship->isAlive = s.alive[p];
@@ -200,7 +201,8 @@ public:
             s.shootCooldown[p] = ship->shootCooldown;
             s.remaingShootFrames[p] = ship->remainingShootFrames;
 			s.isShooting[p] = ship->isShooting;
-			s.isMoving[p] = ship->isMoving;
+			s.isMovingForward[p] = ship->isMovingForward;
+			s.shipInclination[p] = ship->shipInclination;
             s.health[p] = ship->health;
             s.deathCooldown[p] = ship->deathCooldown;
 			s.alive[p] = ship->isAlive;
@@ -258,8 +260,11 @@ public:
 		s->isShooting[0] = false;
 		s->isShooting[1] = false;
 
-		s->isMoving[0] = false;
-		s->isMoving[1] = false;
+		s->isMovingForward[0] = false;
+		s->isMovingForward[1] = false;
+
+		s->shipInclination[0] = 0;
+		s->shipInclination[1] = 0;
         
         // Initialize cooldowns
         s->shootCooldown[0] = 0;
@@ -458,7 +463,8 @@ public:
             ship->isAlive = s.alive[p];
 
 			ship->isShooting = s.isShooting[p];
-			ship->isMoving = s.isMoving[p];
+			ship->isMovingForward = s.isMovingForward[p];
+			ship->shipInclination = s.shipInclination[p];
             ship->remainingShootFrames = s.remaingShootFrames[p];
 
             ship->shootCooldown = s.shootCooldown[p];
@@ -646,17 +652,68 @@ public:
         auto escenarioMat = std::make_shared<Material>("ggx.vert", "ggx.frag");
         world.GetEntityManager().AddComponent<MeshComponent>(escenario, MeshComponent(new Mesh("escenario.glb", escenarioMat)));
 
-		Entity thrusterEntity = world.GetEntityManager().CreateEntity();
-		Transform* tThruster = world.GetEntityManager().AddComponent<Transform>(thrusterEntity, Transform{});
-		tThruster->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
-        tThruster->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
-        tThruster->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
+		Entity thrusterEntity1 = world.GetEntityManager().CreateEntity();
+		Transform* tThruster1 = world.GetEntityManager().AddComponent<Transform>(thrusterEntity1, Transform{});
+		tThruster1->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
+        tThruster1->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
+        tThruster1->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
 
-		auto thrusterOwner = world.GetEntityManager().AddComponent<ThrusterOwner>(thrusterEntity, ThrusterOwner{ 0 });
+		auto thrusterOwner1 = world.GetEntityManager().AddComponent<ThrusterOwner>(thrusterEntity1, ThrusterOwner{ 0,false });
 
-		auto thrusterParticle = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(thrusterEntity, ParticlePresets::SpaceshipThruster());
-		thrusterParticle->emissionRate = 200.0f;
-        thrusterParticle->startLifetime = 0.1f;
+		auto thrusterParticle1 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(thrusterEntity1, ParticlePresets::SpaceshipThruster());
+		thrusterParticle1->emissionRate = 300.0f;
+        thrusterParticle1->startLifetime = 0.05f;
+
+        Entity smokeEntity1 = world.GetEntityManager().CreateEntity();
+        Transform* tSmoke1 = world.GetEntityManager().AddComponent<Transform>(smokeEntity1, Transform{});
+        tSmoke1->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
+        tSmoke1->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
+        tSmoke1->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
+        world.GetEntityManager().AddComponent<ThrusterOwner>(smokeEntity1, ThrusterOwner{ 0,true });
+        auto smokeParticle1 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(smokeEntity1, ParticlePresets::Smoke());
+        smokeParticle1->emissionRate = 6.0f;
+        smokeParticle1->startLifetime = 2.5f;
+        smokeParticle1->startSpeed = 0.8f;
+        smokeParticle1->startSize = 0.15f;
+        smokeParticle1->endSize = 0.5f;
+        smokeParticle1->gravityModifier = 0.15f;          // pulled down as it slows
+        smokeParticle1->startColor = glm::vec4(0.08f, 0.08f, 0.08f, 0.8f);  // near-black
+        smokeParticle1->endColor = glm::vec4(0.05f, 0.05f, 0.05f, 0.0f);  // stays dark, just fades
+        smokeParticle1->shape = EmitterShape::Cone;
+        smokeParticle1->shapeConeAngle = 0.2f;           // wider than thruster but still directional
+        smokeParticle1->lifetimeVariance = 0.6f;
+        smokeParticle1->turbulenceStrength = 0.1f;           // slight drift, not chaotic
+        smokeParticle1->enabled = false;
+
+        Entity thrusterEntity2 = world.GetEntityManager().CreateEntity();
+        Transform* tThruster2 = world.GetEntityManager().AddComponent<Transform>(thrusterEntity2, Transform{});
+        tThruster2->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
+        tThruster2->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
+        tThruster2->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
+        auto thrusterOwner2 = world.GetEntityManager().AddComponent<ThrusterOwner>(thrusterEntity2, ThrusterOwner{ 1,false });
+        auto thrusterParticle2 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(thrusterEntity2, ParticlePresets::SpaceshipThruster());
+        thrusterParticle2->emissionRate = 300.0f;
+        thrusterParticle2->startLifetime = 0.05f;
+        Entity smokeEntity2 = world.GetEntityManager().CreateEntity();
+        Transform* tSmoke2 = world.GetEntityManager().AddComponent<Transform>(smokeEntity2, Transform{});
+        tSmoke2->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
+        tSmoke2->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
+        tSmoke2->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
+        world.GetEntityManager().AddComponent<ThrusterOwner>(smokeEntity2, ThrusterOwner{ 1,true });
+        auto smokeParticle2 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(smokeEntity2, ParticlePresets::Smoke());
+        smokeParticle2->emissionRate = 6.0f;
+        smokeParticle2->startLifetime = 2.5f;
+        smokeParticle2->startSpeed = 0.8f;
+        smokeParticle2->startSize = 0.15f;
+        smokeParticle2->endSize = 0.5f;
+        smokeParticle2->gravityModifier = 0.15f;          // pulled down as it slows
+        smokeParticle2->startColor = glm::vec4(0.08f, 0.08f, 0.08f, 0.8f);  // near-black
+        smokeParticle2->endColor = glm::vec4(0.05f, 0.05f, 0.05f, 0.0f);  // stays dark, just fades
+        smokeParticle2->shape = EmitterShape::Cone;
+        smokeParticle2->shapeConeAngle = 0.2f;           // wider than thruster but still directional
+        smokeParticle2->lifetimeVariance = 0.6f;
+        smokeParticle2->turbulenceStrength = 0.1f;           // slight drift, not chaotic
+        smokeParticle2->enabled = false;
 
 
         // Add render systems
@@ -714,7 +771,8 @@ public:
             rend.health[i] = currServer.health[i];
 			rend.alive[i] = currServer.alive[i];
 			rend.remaingShootFrames[i] = currServer.remaingShootFrames[i];
-			rend.isMoving[i] = currServer.isMoving[i];
+			rend.isMovingForward[i] = currServer.isMovingForward[i];
+			rend.shipInclination[i] = currServer.shipInclination[i];
 			rend.isShooting[i] = currServer.isShooting[i];
             rend.shootCooldown[i] = currServer.shootCooldown[i];
             rend.deathCooldown[i] = currServer.deathCooldown[i];

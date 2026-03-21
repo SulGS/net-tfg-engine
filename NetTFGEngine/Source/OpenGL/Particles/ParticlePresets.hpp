@@ -3,25 +3,8 @@
 
 #include "ParticleEmitterComponent.hpp"
 
-// -------------------------------------------------------
-//  ParticlePresets
-//
-//  Factory functions that return fully-configured
-//  ParticleEmitterComponents.  Start from a preset and
-//  tweak individual fields as needed — they are plain
-//  structs, so every member is assignable directly.
-//
-//  Example:
-//      auto emitter = ParticlePresets::Fire();
-//      emitter.emissionRate = 80.0f;   // tweak
-//      entity.Add<ParticleEmitterComponent>(emitter);
-// -------------------------------------------------------
 namespace ParticlePresets
 {
-    // -------------------------------------------------------
-    //  Fire — fast upward burst, orange→red→transparent,
-    //  medium lifetime, slight gravity lift (negative modifier).
-    // -------------------------------------------------------
     inline ParticleEmitterComponent Fire()
     {
         ParticleEmitterComponent e;
@@ -30,19 +13,20 @@ namespace ParticlePresets
         e.startSpeed = 1.5f;
         e.startSize = 0.25f;
         e.endSize = 0.05f;
-        e.gravityModifier = -0.3f;          // slight upward drift
-        e.startColor = glm::vec4(1.0f, 0.55f, 0.0f, 1.0f);  // orange
-        e.endColor = glm::vec4(0.8f, 0.1f, 0.0f, 0.0f);  // red, fade out
+        e.gravityModifier = -0.3f;
+        e.startColor = glm::vec4(1.0f, 0.55f, 0.0f, 1.0f);
+        e.endColor = glm::vec4(0.8f, 0.1f, 0.0f, 0.0f);
         e.shape = EmitterShape::Cone;
         e.shapeConeAngle = 0.25f;
         e.maxParticles = 200;
         e.looping = true;
+        e.lifetimeVariance = 0.3f;
+        e.emissionVariance = 20.0f;
+        e.speedVariance = 0.5f;
+        e.turbulenceStrength = 0.6f;
         return e;
     }
 
-    // -------------------------------------------------------
-    //  Smoke — slow rise, large grey billboards, long life.
-    // -------------------------------------------------------
     inline ParticleEmitterComponent Smoke()
     {
         ParticleEmitterComponent e;
@@ -58,17 +42,17 @@ namespace ParticlePresets
         e.shapeRadius = 0.15f;
         e.maxParticles = 120;
         e.looping = true;
+        e.lifetimeVariance = 1.0f;
+        e.emissionVariance = 5.0f;
+        e.speedVariance = 0.15f;
+        e.turbulenceStrength = 0.08f;
         return e;
     }
 
-    // -------------------------------------------------------
-    //  Sparks — fast, short-lived, bright yellow/white,
-    //  affected by gravity, spawned in all directions.
-    // -------------------------------------------------------
     inline ParticleEmitterComponent Sparks()
     {
         ParticleEmitterComponent e;
-        e.emissionRate = 0.0f;    // burst-style: set manually per event
+        e.emissionRate = 0.0f;
         e.startLifetime = 0.6f;
         e.startSpeed = 4.0f;
         e.startSize = 0.05f;
@@ -81,12 +65,13 @@ namespace ParticlePresets
         e.maxParticles = 80;
         e.looping = false;
         e.duration = 0.1f;
+        e.lifetimeVariance = 0.2f;
+        e.emissionVariance = 0.0f;
+        e.speedVariance = 2.5f;
+        e.turbulenceStrength = 0.0f;
         return e;
     }
 
-    // -------------------------------------------------------
-    //  Rain — straight down, thin, fast, high volume.
-    // -------------------------------------------------------
     inline ParticleEmitterComponent Rain()
     {
         ParticleEmitterComponent e;
@@ -99,16 +84,17 @@ namespace ParticlePresets
         e.startColor = glm::vec4(0.7f, 0.85f, 1.0f, 0.7f);
         e.endColor = glm::vec4(0.7f, 0.85f, 1.0f, 0.0f);
         e.shape = EmitterShape::Sphere;
-        e.shapeRadius = 5.0f;   // wide spawn volume overhead
+        e.shapeRadius = 5.0f;
         e.simulationSpace = SimulationSpace::World;
         e.maxParticles = 600;
         e.looping = true;
+        e.lifetimeVariance = 0.3f;
+        e.emissionVariance = 40.0f;
+        e.speedVariance = 1.5f;
+        e.turbulenceStrength = 0.15f;
         return e;
     }
 
-    // -------------------------------------------------------
-    //  Magic — slow, swirling colour, glowing, medium life.
-    // -------------------------------------------------------
     inline ParticleEmitterComponent Magic()
     {
         ParticleEmitterComponent e;
@@ -118,42 +104,40 @@ namespace ParticlePresets
         e.startSize = 0.12f;
         e.endSize = 0.0f;
         e.gravityModifier = -0.1f;
-        e.startColor = glm::vec4(0.4f, 0.2f, 1.0f, 1.0f);  // purple
-        e.endColor = glm::vec4(0.0f, 0.8f, 1.0f, 0.0f);  // cyan, fade
+        e.startColor = glm::vec4(0.4f, 0.2f, 1.0f, 1.0f);
+        e.endColor = glm::vec4(0.0f, 0.8f, 1.0f, 0.0f);
         e.shape = EmitterShape::Sphere;
         e.shapeRadius = 0.3f;
         e.maxParticles = 150;
         e.looping = true;
+        e.lifetimeVariance = 0.6f;
+        e.emissionVariance = 10.0f;
+        e.speedVariance = 0.3f;
+        e.turbulenceStrength = 0.5f;
         return e;
     }
 
-    // -------------------------------------------------------
-    //  SpaceshipThruster — hot plasma exhaust jet.
-    //  Attach to an entity whose -Z axis points backward
-    //  (i.e. the exhaust nozzle direction).
-    //
-    //  Tuning tips:
-    //    emissionRate  — higher = more thrust visually
-    //    startSpeed    — matches the perceived thrust power
-    //    shapeConeAngle — tighter (< 0.1) = focused jet,
-    //                     wider  (> 0.3) = damaged/sputtering
-    // -------------------------------------------------------
     inline ParticleEmitterComponent SpaceshipThruster()
     {
         ParticleEmitterComponent e;
-        e.emissionRate = 120.0f;
-        e.startLifetime = 0.4f;        // plasma disperses fast
-        e.startSpeed = 6.0f;        // strong focused jet
-        e.startSize = 0.08f;       // tight core
-        e.endSize = 0.35f;       // expands as it disperses
-        e.gravityModifier = 0.0f;        // space — no gravity
-        e.startColor = glm::vec4(0.6f, 0.85f, 1.0f, 1.0f);  // hot blue-white core
-        e.endColor = glm::vec4(0.1f, 0.3f, 0.8f, 0.0f);  // deep blue, fade out
+        e.emissionRate = 180.0f;
+        e.startLifetime = 0.35f;
+        e.startSpeed = 7.0f;
+        e.startSize = 0.06f;
+        e.endSize = 0.3f;
+        e.gravityModifier = 0.0f;
+        e.startColor = glm::vec4(0.6f, 0.85f, 1.0f, 1.0f);
+        e.endColor = glm::vec4(0.1f, 0.3f, 0.8f, 0.0f);
         e.shape = EmitterShape::Cone;
-        e.shapeConeAngle = 0.08f;       // very focused — tighten further for a clean thruster
+        e.shapeConeAngle = 0.08f;
         e.simulationSpace = SimulationSpace::World;
-        e.maxParticles = 150;
+        e.maxParticles = 200;
         e.looping = true;
+        e.lifetimeVariance = 0.08f;
+        e.emissionVariance = 30.0f;
+        e.speedVariance = 1.5f;
+        e.turbulenceStrength = 0.3f;
+        e.colorTemperature = true;
         return e;
     }
 

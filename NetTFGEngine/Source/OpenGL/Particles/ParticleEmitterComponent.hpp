@@ -12,7 +12,7 @@
 //  Individual particle state — CPU side only.
 //  The GPU sees a packed GPUParticle uploaded each frame.
 // -------------------------------------------------------
-struct Particle{
+struct Particle {
     glm::vec3 position = glm::vec3(0.0f);
     glm::vec3 velocity = glm::vec3(0.0f);
     glm::vec4 colorStart = glm::vec4(1.0f);
@@ -59,7 +59,7 @@ enum class SimulationSpace {
 //
 //  Create via ParticlePresets::* or configure manually.
 // -------------------------------------------------------
-struct ParticleEmitterComponent : public IComponent{
+struct ParticleEmitterComponent : public IComponent {
     // --- Emission ------------------------------------------------
     bool  enabled = true;
     bool  looping = true;
@@ -89,6 +89,20 @@ struct ParticleEmitterComponent : public IComponent{
 
     // --- Limits -------------------------------------------------
     int maxParticles = 100;
+
+    // --- Realism / variation -----------------------------------
+    //  lifetimeVariance   : lifetime = startLifetime +/- rand * variance
+    //  emissionVariance   : emissionRate jitters +/- rand * variance per frame
+    //  speedVariance      : speed = startSpeed +/- rand * variance per particle
+    //  turbulenceStrength : random impulse added to velocity each frame
+    //  speedScale         : runtime multiplier — set each frame by game logic
+    //                       scales both emissionRate and startLifetime
+    float lifetimeVariance = 0.0f;
+    float emissionVariance = 0.0f;
+    float speedVariance = 0.0f;
+    float turbulenceStrength = 0.0f;
+    float speedScale = 1.0f;
+    bool  colorTemperature = false; // if true, cone-center particles lerp toward white-hot
 
     // --- Optional custom update hook ----------------------------
     //  Called once per alive particle per frame, after the default

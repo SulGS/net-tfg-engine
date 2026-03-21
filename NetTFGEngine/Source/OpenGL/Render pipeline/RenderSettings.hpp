@@ -364,7 +364,7 @@ private:
             m_filmicLinearWhite = 11.2f;
             m_gamma = 2.2f;
             m_bloomEnabled = true;
-            m_bloomThreshold = 0.8f;
+            m_bloomThreshold = 0.65f;
             m_bloomStrength = 0.5f;
             m_bloomPasses = 3;
             m_fxaaEnabled = true;
@@ -393,8 +393,8 @@ private:
             m_filmicLinearWhite = 11.2f;
             m_gamma = 2.2f;
             m_bloomEnabled = true;
-            m_bloomThreshold = 0.6f;
-            m_bloomStrength = 0.5f;
+            m_bloomThreshold = 0.65f;
+            m_bloomStrength = 0.25f;
             m_bloomPasses = 5;
             m_fxaaEnabled = true;
             break;
@@ -422,8 +422,8 @@ private:
             m_filmicLinearWhite = 11.2f;
             m_gamma = 2.2f;
             m_bloomEnabled = true;
-            m_bloomThreshold = 0.4f;
-            m_bloomStrength = 0.5f;
+            m_bloomThreshold = 0.65f;
+            m_bloomStrength = 0.25f;
             m_bloomPasses = 8;
             m_fxaaEnabled = true;
             break;

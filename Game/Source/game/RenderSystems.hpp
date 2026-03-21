@@ -253,33 +253,59 @@ public:
         auto thrusterQuery = entityManager.CreateQuery<Transform, ParticleEmitterComponent, ThrusterOwner>();
         auto shipQuery = entityManager.CreateQuery<Transform, Playable, SpaceShip>();
 
+        //Rotate ship
+
+		for (auto [shipEntity, shipTransform, play, ship] : shipQuery)
+		{
+			if (!ship->isAlive) continue;
+
+            float yawRad = glm::radians(shipTransform->getRotation().z);
+            float incl = ship->shipInclination;
+
+            glm::vec3 rotation;
+            rotation.x = -incl * sin(yawRad);   // cancels the pitch bleedthrough
+            rotation.y = incl * cos(yawRad);   // bank
+            rotation.z = shipTransform->getRotation().z;
+
+			shipTransform->setRotation(rotation);
+		}
+
         for (auto [thrusterEntity, thrusterTransform, thrusterEmitter, thrusterOwner] : thrusterQuery)
         {
             for (auto [shipEntity, shipTransform, play, ship] : shipQuery)
             {
-				if (thrusterOwner->shipEntity != play->playerId) continue;
+                if (thrusterOwner->shipEntity != play->playerId) continue;
 
-				thrusterEmitter->enabled = ship->isMoving;
-
-                // Define where the thruster sits relative to the ship origin.
-                // This is the only value you need to tune — at rotation 0,
-                // negative X = left side of ship (rear nozzle).
-                const glm::vec3 localOffset = glm::vec3(0.0f, 2.8f, 0.0f);
-
-                // Rotate the offset by the ship's world rotation.
-                // glm::mat3(model) strips translation and scale — pure rotation.
+                // --- Position (same for both thruster and smoke) ---
+                const glm::vec3 localOffset = glm::vec3(0.0f, 2.5f, 0.0f);
                 glm::mat4 model = shipTransform->getModelMatrix();
-                glm::vec3 worldOffset = glm::mat3(model) * localOffset;
+                glm::mat3 rot = glm::mat3(model);
+                rot[0] = glm::normalize(rot[0]);
+                rot[1] = glm::normalize(rot[1]);
+                rot[2] = glm::normalize(rot[2]);
+                thrusterTransform->setPosition(shipTransform->getPosition() + rot * localOffset);
+                
 
-                thrusterTransform->setPosition(shipTransform->getPosition() + worldOffset);
-
-                // Exhaust fires backward along the ship's local -X axis.
-                // The particle system reads -Z, so we align Z to the ship's -X.
-                thrusterTransform->setRotation(glm::vec3(
-                    90.0f,
-                    shipTransform->getRotation().z,
-					0.0f
-                ));
+                // --- Activation ---
+                if (thrusterOwner->isSmoke)
+                {
+                    thrusterEmitter->enabled = !ship->isMovingForward;  // smoke when idle
+                    thrusterTransform->setRotation(glm::vec3(
+                        0.0f,
+                        shipTransform->getRotation().z,
+                        0.0f
+                    ));
+                }
+                else 
+                {
+                    thrusterEmitter->enabled = ship->isMovingForward;   // exhaust when moving
+                    thrusterTransform->setRotation(glm::vec3(
+                        90.0f,
+                        shipTransform->getRotation().z,
+                        0.0f
+                    ));
+                }
+                    
             }
         }
     }
