@@ -235,6 +235,7 @@ private:
     // =====================================================
     void GBufferPass(EntityManager::Query<MeshComponent, Transform>& meshQuery, const glm::mat4& view,
         const glm::mat4& projection);
+    void CollectLightsPass(EntityManager& em);
     void ShadowPass(EntityManager& em, EntityManager::Query<MeshComponent, Transform>& meshQuery);
     void ShadingPass(EntityManager::Query<MeshComponent, Transform>& meshQuery, const glm::mat4& view,
         const glm::mat4& projection, const glm::vec3& cameraPos);

@@ -116,8 +116,11 @@ void RenderSystem::Update(EntityManager& entityManager,
 
     GBufferPass(meshQuery, view, projection);
 
+    // Always collect lights regardless of shadow toggle
+    CollectLightsPass(entityManager);           // NEW, always runs
+
     if (RenderSettings::instance().getShadowsEnabled())
-        ShadowPass(entityManager, meshQuery);
+        ShadowPass(entityManager, meshQuery);   // now only does shadow rendering
     else
         m_shadowCount = 0;
 
