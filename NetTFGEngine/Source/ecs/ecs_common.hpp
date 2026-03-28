@@ -45,6 +45,23 @@ public:
         dirty = true;
     }
 
+    // Rotate by 'degrees' around a specific axis, respecting current rotation
+    void rotateAround(float degrees, const glm::vec3& axis) {
+        // Convert current Euler angles to a quaternion
+        glm::quat currentQuat =
+            glm::angleAxis(glm::radians(rotation.x), glm::vec3(1, 0, 0)) *
+            glm::angleAxis(glm::radians(rotation.y), glm::vec3(0, 1, 0)) *
+            glm::angleAxis(glm::radians(rotation.z), glm::vec3(0, 0, 1));
+
+        // Apply the new rotation as a quaternion on top
+        glm::quat deltaQuat = glm::angleAxis(glm::radians(degrees), glm::normalize(axis));
+        glm::quat resultQuat = deltaQuat * currentQuat;
+
+        // Convert back to Euler angles (XYZ order to match updateModelMatrix)
+        rotation = glm::degrees(glm::eulerAngles(resultQuat));
+        dirty = true;
+    }
+
     void rotate(const glm::vec3& delta) {
         rotation += delta;
         dirty = true;

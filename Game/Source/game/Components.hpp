@@ -6,9 +6,10 @@
 class ThrusterOwner : public IComponent {
 public:
 	int shipEntity; // The ship this thruster belongs to
+	bool isLeftEngine; // True if left thruster, false if right
     bool isSmoke = false;
-	ThrusterOwner() : shipEntity(-1), isSmoke(false) {}
-	ThrusterOwner(int se, bool isSm) : shipEntity(se), isSmoke(isSm) {}
+	ThrusterOwner() : shipEntity(-1), isSmoke(false), isLeftEngine(false){}
+	ThrusterOwner(int se, bool isSm, bool isLeftE) : shipEntity(se), isSmoke(isSm), isLeftEngine(isLeftE) {}
 };
 
 class SpaceShip : public IComponent {
@@ -23,8 +24,10 @@ public:
     int deathCooldown;
     bool isAlive;
 
-    SpaceShip() : health(100), isShooting(false), remainingShootFrames(0), shootCooldown(0), deathCooldown(0), isAlive(true), isMovingForward(false), shipInclination(0) {}
-    SpaceShip(int h, int rsf, int cd, int dc, bool al) : health(h), isShooting(false), remainingShootFrames(rsf), shootCooldown(cd), deathCooldown(dc), isAlive(al), isMovingForward(false), shipInclination(0) {}
+	int shipZRotation;
+
+    SpaceShip() : health(100), isShooting(false), remainingShootFrames(0), shootCooldown(0), deathCooldown(0), isAlive(true), isMovingForward(false), shipInclination(0), shipZRotation(0) {}
+    SpaceShip(int h, int rsf, int cd, int dc, bool al) : health(h), isShooting(false), remainingShootFrames(rsf), shootCooldown(cd), deathCooldown(dc), isAlive(al), isMovingForward(false), shipInclination(0), shipZRotation(0) {}
 };
 
 class ECSBullet : public IComponent {

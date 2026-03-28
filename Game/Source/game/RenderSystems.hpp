@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "netcode/netcode_common.hpp"
 #include "ecs/ecs_common.hpp"
@@ -255,20 +255,17 @@ public:
 
         //Rotate ship
 
-		for (auto [shipEntity, shipTransform, play, ship] : shipQuery)
-		{
-			if (!ship->isAlive) continue;
-
+        for (auto [shipEntity, shipTransform, play, ship] : shipQuery)
+        {
+            if (!ship->isAlive) continue;
             float yawRad = glm::radians(shipTransform->getRotation().z);
-            float incl = ship->shipInclination;
-
+            float incl = ship->shipInclination*-1.0f;
             glm::vec3 rotation;
-            rotation.x = -incl * sin(yawRad);   // cancels the pitch bleedthrough
-            rotation.y = incl * cos(yawRad);   // bank
+            rotation.x = incl * cos(yawRad);
+            rotation.y = incl * sin(yawRad);
             rotation.z = shipTransform->getRotation().z;
-
-			shipTransform->setRotation(rotation);
-		}
+            shipTransform->setRotation(rotation);
+        }
 
         for (auto [thrusterEntity, thrusterTransform, thrusterEmitter, thrusterOwner] : thrusterQuery)
         {
@@ -277,7 +274,20 @@ public:
                 if (thrusterOwner->shipEntity != play->playerId) continue;
 
                 // --- Position (same for both thruster and smoke) ---
-                const glm::vec3 localOffset = glm::vec3(0.0f, 2.5f, 0.0f);
+                glm::vec3 localOffset = glm::vec3(-1.8f, 0.0f, 0.0f);
+
+                if (thrusterOwner->isLeftEngine) 
+                {
+					localOffset.y = -0.75f;
+				}
+				else
+				{
+					localOffset.y = 0.75f;
+                }
+
+
+
+
                 glm::mat4 model = shipTransform->getModelMatrix();
                 glm::mat3 rot = glm::mat3(model);
                 rot[0] = glm::normalize(rot[0]);

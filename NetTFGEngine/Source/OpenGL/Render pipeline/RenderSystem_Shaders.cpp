@@ -14,7 +14,7 @@ void RenderSystem::CompileShadowShader()
 
     const char* geom = R"GLSL(
         #version 430 core
-        layout(triangles) in;
+        layout(triangles) in; 
         layout(triangle_strip, max_vertices = 18) out;
 
         uniform mat4 uLightSpaceMatrices[6];

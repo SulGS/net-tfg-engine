@@ -125,6 +125,7 @@ public:
             int p = play->playerId;
             transform->setPosition(glm::vec3(s.posX[p], s.posY[p], 0.0f));
             transform->setRotation(glm::vec3(0.0f, 0.0f, static_cast<float>(s.rot[p])));
+            ship->shipZRotation = s.rot[p];
             ship->shootCooldown = s.shootCooldown[p];
             ship->health = s.health[p];
 			ship->isShooting = s.isShooting[p];
@@ -456,11 +457,13 @@ public:
             int p = play->playerId;
 
             transform->setPosition(glm::vec3(s.posX[p], s.posY[p], 0.0f));
-            transform->setRotation(glm::vec3(0.0f, 0.0f, s.rot[p] + 90.0f));
+            transform->setRotation(glm::vec3(0.0f, 0.0f, s.rot[p]));
 
             
             ship->health = s.health[p];
             ship->isAlive = s.alive[p];
+
+			ship->shipZRotation = s.rot[p];
 
 			ship->isShooting = s.isShooting[p];
 			ship->isMovingForward = s.isMovingForward[p];
@@ -593,7 +596,7 @@ public:
         Transform* t1 = world.GetEntityManager().AddComponent<Transform>(player1, Transform{});
         t1->setPosition(glm::vec3(s.posX[0], s.posY[0], 0.0f));
         t1->setRotation(glm::vec3(0.0f, 0.0f, 90.0f));
-        t1->setScale(glm::vec3(1.0f, 1.0f, 1.0f));
+        t1->setScale(glm::vec3(5.0f, 5.0f, 5.0f));
 
         auto player1Mat = std::make_shared<Material>("ggx.vert", "ggx.frag");
 
@@ -605,7 +608,7 @@ public:
         Transform* t2 = world.GetEntityManager().AddComponent<Transform>(player2, Transform{});
         t2->setPosition(glm::vec3(s.posX[1], s.posY[1], 0.0f));
         t2->setRotation(glm::vec3(0.0f, 0.0f, 270.0f));
-        t2->setScale(glm::vec3(1.0f, 1.0f, 1.0f));
+        t2->setScale(glm::vec3(5.0f, 5.0f, 5.0f));
 
         auto player2Mat = std::make_shared<Material>("ggx.vert", "ggx.frag");
 
@@ -652,68 +655,131 @@ public:
         auto escenarioMat = std::make_shared<Material>("ggx.vert", "ggx.frag");
         world.GetEntityManager().AddComponent<MeshComponent>(escenario, MeshComponent(new Mesh("escenario.glb", escenarioMat)));
 
-		Entity thrusterEntity1 = world.GetEntityManager().CreateEntity();
-		Transform* tThruster1 = world.GetEntityManager().AddComponent<Transform>(thrusterEntity1, Transform{});
-		tThruster1->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
-        tThruster1->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
-        tThruster1->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
+		Entity rightThrusterEntity1 = world.GetEntityManager().CreateEntity();
+		Transform* rThruster1 = world.GetEntityManager().AddComponent<Transform>(rightThrusterEntity1, Transform{});
+		rThruster1->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
+        rThruster1->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
+        rThruster1->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
 
-		auto thrusterOwner1 = world.GetEntityManager().AddComponent<ThrusterOwner>(thrusterEntity1, ThrusterOwner{ 0,false });
+		auto rThrusterOwner1 = world.GetEntityManager().AddComponent<ThrusterOwner>(rightThrusterEntity1, ThrusterOwner{ 0,false,false });
 
-		auto thrusterParticle1 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(thrusterEntity1, ParticlePresets::SpaceshipThruster());
-		thrusterParticle1->emissionRate = 300.0f;
-        thrusterParticle1->startLifetime = 0.05f;
+		auto rThrusterParticle1 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(rightThrusterEntity1, ParticlePresets::SpaceshipThruster());
+		rThrusterParticle1->emissionRate = 300.0f;
+        rThrusterParticle1->startLifetime = 0.05f;
 
-        Entity smokeEntity1 = world.GetEntityManager().CreateEntity();
-        Transform* tSmoke1 = world.GetEntityManager().AddComponent<Transform>(smokeEntity1, Transform{});
-        tSmoke1->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
-        tSmoke1->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
-        tSmoke1->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
-        world.GetEntityManager().AddComponent<ThrusterOwner>(smokeEntity1, ThrusterOwner{ 0,true });
-        auto smokeParticle1 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(smokeEntity1, ParticlePresets::Smoke());
-        smokeParticle1->emissionRate = 6.0f;
-        smokeParticle1->startLifetime = 2.5f;
-        smokeParticle1->startSpeed = 0.8f;
-        smokeParticle1->startSize = 0.15f;
-        smokeParticle1->endSize = 0.5f;
-        smokeParticle1->gravityModifier = 0.15f;          // pulled down as it slows
-        smokeParticle1->startColor = glm::vec4(0.08f, 0.08f, 0.08f, 0.8f);  // near-black
-        smokeParticle1->endColor = glm::vec4(0.05f, 0.05f, 0.05f, 0.0f);  // stays dark, just fades
-        smokeParticle1->shape = EmitterShape::Cone;
-        smokeParticle1->shapeConeAngle = 0.2f;           // wider than thruster but still directional
-        smokeParticle1->lifetimeVariance = 0.6f;
-        smokeParticle1->turbulenceStrength = 0.1f;           // slight drift, not chaotic
-        smokeParticle1->enabled = false;
+        Entity leftThrusterEntity1 = world.GetEntityManager().CreateEntity();
+        Transform* lThruster1 = world.GetEntityManager().AddComponent<Transform>(leftThrusterEntity1, Transform{});
+        lThruster1->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
+        lThruster1->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
+        lThruster1->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
+        auto lThrusterOwner1 = world.GetEntityManager().AddComponent<ThrusterOwner>(leftThrusterEntity1, ThrusterOwner{ 0,false,true });
+        auto lThrusterParticle1 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(leftThrusterEntity1, ParticlePresets::SpaceshipThruster());
+        lThrusterParticle1->emissionRate = 300.0f;
+        lThrusterParticle1->startLifetime = 0.05f;
 
-        Entity thrusterEntity2 = world.GetEntityManager().CreateEntity();
-        Transform* tThruster2 = world.GetEntityManager().AddComponent<Transform>(thrusterEntity2, Transform{});
-        tThruster2->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
-        tThruster2->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
-        tThruster2->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
-        auto thrusterOwner2 = world.GetEntityManager().AddComponent<ThrusterOwner>(thrusterEntity2, ThrusterOwner{ 1,false });
-        auto thrusterParticle2 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(thrusterEntity2, ParticlePresets::SpaceshipThruster());
-        thrusterParticle2->emissionRate = 300.0f;
-        thrusterParticle2->startLifetime = 0.05f;
-        Entity smokeEntity2 = world.GetEntityManager().CreateEntity();
-        Transform* tSmoke2 = world.GetEntityManager().AddComponent<Transform>(smokeEntity2, Transform{});
-        tSmoke2->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
-        tSmoke2->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
-        tSmoke2->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
-        world.GetEntityManager().AddComponent<ThrusterOwner>(smokeEntity2, ThrusterOwner{ 1,true });
-        auto smokeParticle2 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(smokeEntity2, ParticlePresets::Smoke());
-        smokeParticle2->emissionRate = 6.0f;
-        smokeParticle2->startLifetime = 2.5f;
-        smokeParticle2->startSpeed = 0.8f;
-        smokeParticle2->startSize = 0.15f;
-        smokeParticle2->endSize = 0.5f;
-        smokeParticle2->gravityModifier = 0.15f;          // pulled down as it slows
-        smokeParticle2->startColor = glm::vec4(0.08f, 0.08f, 0.08f, 0.8f);  // near-black
-        smokeParticle2->endColor = glm::vec4(0.05f, 0.05f, 0.05f, 0.0f);  // stays dark, just fades
-        smokeParticle2->shape = EmitterShape::Cone;
-        smokeParticle2->shapeConeAngle = 0.2f;           // wider than thruster but still directional
-        smokeParticle2->lifetimeVariance = 0.6f;
-        smokeParticle2->turbulenceStrength = 0.1f;           // slight drift, not chaotic
-        smokeParticle2->enabled = false;
+        Entity leftSmokeEntity1 = world.GetEntityManager().CreateEntity();
+        Transform* tLeftSmoke1 = world.GetEntityManager().AddComponent<Transform>(leftSmokeEntity1, Transform{});
+        tLeftSmoke1->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
+        tLeftSmoke1->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
+        tLeftSmoke1->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
+        world.GetEntityManager().AddComponent<ThrusterOwner>(leftSmokeEntity1, ThrusterOwner{ 0,true, true });
+        auto leftSmokeParticle1 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(leftSmokeEntity1, ParticlePresets::Smoke());
+        leftSmokeParticle1->emissionRate = 6.0f;
+        leftSmokeParticle1->startLifetime = 2.5f;
+        leftSmokeParticle1->startSpeed = 0.8f;
+        leftSmokeParticle1->startSize = 0.15f;
+        leftSmokeParticle1->endSize = 0.5f;
+        leftSmokeParticle1->gravityModifier = 0.15f;
+        leftSmokeParticle1->startColor = glm::vec4(0.08f, 0.08f, 0.08f, 0.8f);
+        leftSmokeParticle1->endColor = glm::vec4(0.05f, 0.05f, 0.05f, 0.0f);
+        leftSmokeParticle1->shape = EmitterShape::Cone;
+        leftSmokeParticle1->shapeConeAngle = 0.2f;
+        leftSmokeParticle1->lifetimeVariance = 0.6f;
+        leftSmokeParticle1->turbulenceStrength = 0.1f;
+        leftSmokeParticle1->enabled = false;
+
+        Entity rightSmokeEntity1 = world.GetEntityManager().CreateEntity();
+        Transform* tRightSmoke1 = world.GetEntityManager().AddComponent<Transform>(rightSmokeEntity1, Transform{});
+        tRightSmoke1->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
+        tRightSmoke1->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
+        tRightSmoke1->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
+        world.GetEntityManager().AddComponent<ThrusterOwner>(rightSmokeEntity1, ThrusterOwner{ 0,true, false });
+        auto rightSmokeParticle1 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(rightSmokeEntity1, ParticlePresets::Smoke());
+        rightSmokeParticle1->emissionRate = 6.0f;
+        rightSmokeParticle1->startLifetime = 2.5f;
+        rightSmokeParticle1->startSpeed = 0.8f;
+        rightSmokeParticle1->startSize = 0.15f;
+        rightSmokeParticle1->endSize = 0.5f;
+        rightSmokeParticle1->gravityModifier = 0.15f;
+        rightSmokeParticle1->startColor = glm::vec4(0.08f, 0.08f, 0.08f, 0.8f);
+        rightSmokeParticle1->endColor = glm::vec4(0.05f, 0.05f, 0.05f, 0.0f);
+        rightSmokeParticle1->shape = EmitterShape::Cone;
+        rightSmokeParticle1->shapeConeAngle = 0.2f;
+        rightSmokeParticle1->lifetimeVariance = 0.6f;
+        rightSmokeParticle1->turbulenceStrength = 0.1f;
+        rightSmokeParticle1->enabled = false;
+
+        Entity rightThrusterEntity2 = world.GetEntityManager().CreateEntity();
+        Transform* rThruster2 = world.GetEntityManager().AddComponent<Transform>(rightThrusterEntity2, Transform{});
+        rThruster2->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
+        rThruster2->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
+        rThruster2->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
+        auto rThrusterOwner2 = world.GetEntityManager().AddComponent<ThrusterOwner>(rightThrusterEntity2, ThrusterOwner{ 1,false,false });
+        auto rThrusterParticle2 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(rightThrusterEntity2, ParticlePresets::SpaceshipThruster());
+        rThrusterParticle2->emissionRate = 300.0f;
+        rThrusterParticle2->startLifetime = 0.05f;
+
+        Entity leftThrusterEntity2 = world.GetEntityManager().CreateEntity();
+        Transform* lThruster2 = world.GetEntityManager().AddComponent<Transform>(leftThrusterEntity2, Transform{});
+        lThruster2->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
+        lThruster2->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
+        lThruster2->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
+        auto lThrusterOwner2 = world.GetEntityManager().AddComponent<ThrusterOwner>(leftThrusterEntity2, ThrusterOwner{ 1,false,true });
+        auto lThrusterParticle2 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(leftThrusterEntity2, ParticlePresets::SpaceshipThruster());
+        lThrusterParticle2->emissionRate = 300.0f;
+        lThrusterParticle2->startLifetime = 0.05f;
+
+        Entity leftSmokeEntity2 = world.GetEntityManager().CreateEntity();
+        Transform* tLeftSmoke2 = world.GetEntityManager().AddComponent<Transform>(leftSmokeEntity2, Transform{});
+        tLeftSmoke2->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
+        tLeftSmoke2->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
+        tLeftSmoke2->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
+        world.GetEntityManager().AddComponent<ThrusterOwner>(leftSmokeEntity2, ThrusterOwner{ 1,true, true });
+        auto leftSmokeParticle2 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(leftSmokeEntity2, ParticlePresets::Smoke());
+        leftSmokeParticle2->emissionRate = 6.0f;
+        leftSmokeParticle2->startLifetime = 2.5f;
+        leftSmokeParticle2->startSpeed = 0.8f;
+        leftSmokeParticle2->startSize = 0.15f;
+        leftSmokeParticle2->endSize = 0.5f;
+        leftSmokeParticle2->gravityModifier = 0.15f;
+        leftSmokeParticle2->startColor = glm::vec4(0.08f, 0.08f, 0.08f, 0.8f);
+        leftSmokeParticle2->endColor = glm::vec4(0.05f, 0.05f, 0.05f, 0.0f);
+        leftSmokeParticle2->shape = EmitterShape::Cone;
+        leftSmokeParticle2->shapeConeAngle = 0.2f;
+        leftSmokeParticle2->lifetimeVariance = 0.6f;
+        leftSmokeParticle2->turbulenceStrength = 0.1f;
+        leftSmokeParticle2->enabled = false;
+
+        Entity rightSmokeEntity2 = world.GetEntityManager().CreateEntity();
+        Transform* tRightSmoke2 = world.GetEntityManager().AddComponent<Transform>(rightSmokeEntity2, Transform{});
+        tRightSmoke2->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
+        tRightSmoke2->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
+        tRightSmoke2->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
+        world.GetEntityManager().AddComponent<ThrusterOwner>(rightSmokeEntity2, ThrusterOwner{ 1,true, false });
+        auto rightSmokeParticle2 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(rightSmokeEntity2, ParticlePresets::Smoke());
+        rightSmokeParticle2->emissionRate = 6.0f;
+        rightSmokeParticle2->startLifetime = 2.5f;
+        rightSmokeParticle2->startSpeed = 0.8f;
+        rightSmokeParticle2->startSize = 0.15f;
+        rightSmokeParticle2->endSize = 0.5f;
+        rightSmokeParticle2->gravityModifier = 0.15f;
+        rightSmokeParticle2->startColor = glm::vec4(0.08f, 0.08f, 0.08f, 0.8f);
+        rightSmokeParticle2->endColor = glm::vec4(0.05f, 0.05f, 0.05f, 0.0f);
+        rightSmokeParticle2->shape = EmitterShape::Cone;
+        rightSmokeParticle2->shapeConeAngle = 0.2f;
+        rightSmokeParticle2->lifetimeVariance = 0.6f;
+        rightSmokeParticle2->turbulenceStrength = 0.1f;
+        rightSmokeParticle2->enabled = false;
 
 
         // Add render systems
@@ -815,7 +881,7 @@ public:
             }
         }
 
-        if (Input::KeyPressed(Input::CharToKeycode('p'))) 
+        /*/if (Input::KeyPressed(Input::CharToKeycode('p')))
         {
 			Debug::Info("Interpolation") << "=== Prev Server Game State ===\n";
             printGameState(prevServer);
@@ -827,7 +893,7 @@ public:
             printGameState(currLocal);
 			Debug::Info("Interpolation") << "=== Rendered Game State ===\n";
 			printGameState(rend);
-        }
+        }*/
     }
 
     ~AsteroidShooterGameRenderer() override {
