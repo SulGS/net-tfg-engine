@@ -592,6 +592,10 @@ public:
         world.GetEntityManager().RegisterComponentType<DestroyTimer>();
 		world.GetEntityManager().RegisterComponentType<ThrusterOwner>();
 
+		Entity sunEntity = world.GetEntityManager().CreateEntity();
+		Transform* sunTransform = world.GetEntityManager().AddComponent<Transform>(sunEntity, Transform{});
+		DirectionalLightComponent* sunLight = world.GetEntityManager().AddComponent<DirectionalLightComponent>(sunEntity, DirectionalLightComponent{});
+
         Entity player1 = world.GetEntityManager().CreateEntity();
         Transform* t1 = world.GetEntityManager().AddComponent<Transform>(player1, Transform{});
         t1->setPosition(glm::vec3(s.posX[0], s.posY[0], 0.0f));
@@ -644,7 +648,7 @@ public:
         PointLightComponent* lightComp = world.GetEntityManager().AddComponent<PointLightComponent>(light, PointLightComponent{});
         lightComp->intensity = 1000.0f;
         lightComp->radius = 100.0f;
-        lightComp->enabled = true;
+        lightComp->castShadows = true;
 
         Entity escenario = world.GetEntityManager().CreateEntity();
         Transform* tesc = world.GetEntityManager().AddComponent<Transform>(escenario, Transform{});

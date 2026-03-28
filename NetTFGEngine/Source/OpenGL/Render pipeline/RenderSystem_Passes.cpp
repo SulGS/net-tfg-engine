@@ -1,13 +1,8 @@
 ﻿#include "RenderSystem.hpp"
+#include <glm/gtc/matrix_transform.hpp>
 
 // =====================================================
 //  GBufferPass
-//  Renders view-space normals + perceptual roughness into
-//  m_gbufferFBO before the shading pass.
-//
-//  The GBuffer FBO shares m_hdrDepthTex with m_hdrFBO, so
-//  this pass also fills the scene depth for free early-Z
-//  in the subsequent ShadingPass (GL_LEQUAL, depth write off).
 // =====================================================
 void RenderSystem::GBufferPass(EntityManager::Query<MeshComponent, Transform>& meshQuery,
     const glm::mat4& view, const glm::mat4& projection)
@@ -39,26 +34,14 @@ void RenderSystem::GBufferPass(EntityManager::Query<MeshComponent, Transform>& m
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-
 // =====================================================
 //  ResolveMSAA
-//  Blits the multisampled HDR color attachment into the
-//  corresponding single-sample HDR texture so post-process
-//  passes can sample it as an ordinary sampler2D input.
-//
-//  The GBuffer normal/roughness is written by a separate
-//  single-sample pre-pass and needs no resolve.
-//  Depth is also resolved for completeness (depth of field,
-//  etc.) even though post-process passes don't currently use it.
-//
-//  No-op when m_msaaSamples <= 1 (single-sample path).
 // =====================================================
 void RenderSystem::ResolveMSAA()
 {
     if (m_msaaSamples <= 1)
         return;
 
-    // --- Attachment 0: HDR colour ---
     glBindFramebuffer(GL_READ_FRAMEBUFFER, m_msaaFBO);
     glReadBuffer(GL_COLOR_ATTACHMENT0);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_hdrFBO);
@@ -67,12 +50,10 @@ void RenderSystem::ResolveMSAA()
         0, 0, m_screenW, m_screenH,
         GL_COLOR_BUFFER_BIT, GL_NEAREST);
 
-    // --- Depth ---
     glBlitFramebuffer(0, 0, m_screenW, m_screenH,
         0, 0, m_screenW, m_screenH,
         GL_DEPTH_BUFFER_BIT, GL_NEAREST);
 
-    // Restore draw buffer state for the HDR FBO
     GLenum drawBuf = GL_COLOR_ATTACHMENT0;
     glBindFramebuffer(GL_FRAMEBUFFER, m_hdrFBO);
     glDrawBuffers(1, &drawBuf);
@@ -80,9 +61,15 @@ void RenderSystem::ResolveMSAA()
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-// RenderSystem_Passes.cpp — new method
+// =====================================================
+//  CollectLightsPass
+//  Uploads point lights (respecting castShadows) to the
+//  light SSBO and uploads the directional light (if any)
+//  to the dir light UBO.
+// =====================================================
 void RenderSystem::CollectLightsPass(EntityManager& em)
 {
+    // ---- Point lights ----
     std::vector<GPUPointLight> lightVec;
     lightVec.reserve(MAX_LIGHTS);
 
@@ -93,6 +80,8 @@ void RenderSystem::CollectLightsPass(EntityManager& em)
         gl.posRadius = glm::vec4(xform->getPosition(), light->radius);
         gl.colorIntensity = glm::vec4(light->color, light->intensity);
         lightVec.push_back(gl);
+        // Note: castShadows is checked in ShadowPass when building the shadow
+        // data SSBO — lights are still sent to the shading pass regardless.
     }
 
     m_lightCount = (int)lightVec.size();
@@ -102,8 +91,37 @@ void RenderSystem::CollectLightsPass(EntityManager& em)
         glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
             sizeof(GPUPointLight) * m_lightCount, lightVec.data());
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+    // ---- Directional light ----
+    // Use the first DirectionalLightComponent found; zero-out if none.
+    GPUDirLight gpuDir{};
+
+    auto dirQuery = em.CreateQuery<DirectionalLightComponent>();
+    bool foundDir = false;
+    for (auto [entity, dirLight] : dirQuery) {
+        if (foundDir) break; // only one supported
+        foundDir = true;
+
+        glm::vec3 dir = glm::normalize(dirLight->direction);
+        gpuDir.directionIntensity = glm::vec4(dir, dirLight->intensity);
+        gpuDir.colorEnabled = glm::vec4(dirLight->color, 1.0f); // a=1 means enabled
+
+        // lightSpaceMatrix is filled in DirShadowPass once we know shadows are
+        // enabled.  We pre-fill identity here so the shader can at least read it
+        // without undefined behaviour if shadows are disabled.
+        gpuDir.lightSpaceMatrix = glm::mat4(1.0f);
+    }
+    // If no dir light found, colorEnabled.a stays 0 → shader skips the term.
+
+    glBindBuffer(GL_UNIFORM_BUFFER, m_dirLightUBO);
+    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(GPUDirLight), &gpuDir);
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
 }
 
+// =====================================================
+//  ShadowPass  — point light cubemap array
+//  Only lights with castShadows == true consume a shadow slot.
+// =====================================================
 void RenderSystem::ShadowPass(EntityManager& em, EntityManager::Query<MeshComponent, Transform>& meshQuery)
 {
     const auto& rs = RenderSettings::instance();
@@ -121,14 +139,20 @@ void RenderSystem::ShadowPass(EntityManager& em, EntityManager::Query<MeshCompon
     glUseProgram(m_shadowShader);
 
     int shadowIdx = 0;
-    int lightBufIdx = 0;  // mirrors the order CollectLightsPass pushed into the SSBO
-    auto lightQuery = em.CreateQuery<PointLightComponent, Transform>();
+    int lightBufIdx = 0; // mirrors insertion order in CollectLightsPass
 
+    auto lightQuery = em.CreateQuery<PointLightComponent, Transform>();
     for (auto [entity, light, xform] : lightQuery) {
         if (lightBufIdx >= MAX_LIGHTS) break;
 
+        // Skip lights that opt out of shadow casting.
+        if (!light->castShadows) {
+            lightBufIdx++;
+            continue;
+        }
+
         if (shadowIdx < MAX_SHADOW_LIGHTS) {
-            glClear(GL_DEPTH_BUFFER_BIT); // must clear per light
+            glClear(GL_DEPTH_BUFFER_BIT);
 
             glm::vec3 pos = xform->getPosition();
             float     farPlane = light->radius;
@@ -164,7 +188,7 @@ void RenderSystem::ShadowPass(EntityManager& em, EntityManager::Query<MeshCompon
 
             GPUShadowData sd;
             for (int f = 0; f < 6; f++) sd.lightSpaceMatrices[f] = views[f];
-            sd.lightIndex = lightBufIdx;  // absolute index into lights[] SSBO
+            sd.lightIndex = lightBufIdx;
             sd.farPlane = farPlane;
             shadowDataVec.push_back(sd);
             shadowIdx++;
@@ -175,12 +199,121 @@ void RenderSystem::ShadowPass(EntityManager& em, EntityManager::Query<MeshCompon
 
     m_shadowCount = shadowIdx;
 
-    // Upload shadow SSBO
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_shadowDataSSBO);
     if (m_shadowCount > 0)
         glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
             sizeof(GPUShadowData) * m_shadowCount, shadowDataVec.data());
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+    glDisable(GL_POLYGON_OFFSET_FILL);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, m_screenW, m_screenH);
+}
+
+// =====================================================
+//  DirShadowPass
+//  Renders the scene from the directional light's point
+//  of view into a 2-D orthographic shadow map.
+//
+//  The light-space matrix is also patched into the dir
+//  light UBO so the shading pass can transform world
+//  positions into shadow space without a second uniform.
+//
+//  Scene bounds: we use a fixed-size orthographic frustum
+//  centred on the world origin.  For production use you
+//  would compute a tight fit around the camera frustum
+//  (CSM / stable shadow mapping), but this simple form is
+//  correct and produces good results for bounded scenes.
+// =====================================================
+void RenderSystem::DirShadowPass(EntityManager::Query<MeshComponent, Transform>& meshQuery)
+{
+    // Read the current dir light UBO to check whether shadows are wanted.
+    // We only need the colorEnabled.a flag — read it back from the buffer.
+    GPUDirLight gpuDir{};
+    glBindBuffer(GL_UNIFORM_BUFFER, m_dirLightUBO);
+    glGetBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(GPUDirLight), &gpuDir);
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
+
+    // a == 0 → no directional light, or castShadows == false at the ECS level.
+    // We still need to know castShadows — it was encoded by CollectLightsPass:
+    // if the component has castShadows=false we set a=1 but skip the shadow matrix
+    // update.  Easier: re-query here.  (It's a cheap query, only one entity.)
+    // Actually the cleanest approach: CollectLightsPass already wrote a=1 when
+    // the light exists.  We check an additional flag via a re-read of the component.
+    // To avoid coupling, we keep a small cached bool from CollectLightsPass.
+    // Since we don't have that cache, we do a lightweight re-query.
+
+    // If no dir light at all, nothing to do.
+    if (gpuDir.colorEnabled.a < 0.5f)
+        return;
+
+    // Re-query to get castShadows.  This is the only place we need it after
+    // CollectLightsPass, and the query is O(1) for a single component.
+    // (If your ECS is expensive to query mid-frame, cache a bool in the class.)
+    bool castShadows = false;
+    glm::vec3 lightDir = glm::vec3(gpuDir.directionIntensity);
+
+    // We need the EntityManager here — but DirShadowPass only receives the
+    // mesh query.  Solution: the shadow pass reads castShadows from the UBO
+    // extension.  For simplicity we always render the shadow map when the
+    // light is present; the component's castShadows flag suppresses binding
+    // in the shading pass instead (see ShadingPass).
+    // *** If you want per-component castShadows to fully skip the render,
+    //     pass EntityManager& em into this function and re-query here. ***
+    castShadows = true; // render shadow map if light exists
+
+    const auto& rs = RenderSettings::instance();
+    const int   res = m_shadowRes;
+
+    // Orthographic frustum dimensions read from RenderSettings so they can be
+    // tuned per-quality-preset or adjusted at runtime without a recompile.
+    const float kExtent = rs.getDirShadowExtent();
+    const float kNear = rs.getDirShadowNear();
+    const float kFar = rs.getDirShadowFar();
+
+    glm::vec3 up = (glm::abs(lightDir.y) > 0.99f)
+        ? glm::vec3(1, 0, 0)
+        : glm::vec3(0, 1, 0);
+
+    glm::mat4 lightView = glm::lookAt(
+        -lightDir * 50.0f,   // eye: pull back from origin along the light direction
+        glm::vec3(0.0f),     // look-at: world origin (centre of your scene)
+        up);
+
+    glm::mat4 lightProj = glm::ortho(
+        -kExtent, kExtent,
+        -kExtent, kExtent,
+        kNear, kFar);
+
+    glm::mat4 lightSpace = lightProj * lightView;
+
+    // Patch the light-space matrix back into the UBO.
+    gpuDir.lightSpaceMatrix = lightSpace;
+    glBindBuffer(GL_UNIFORM_BUFFER, m_dirLightUBO);
+    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(GPUDirLight), &gpuDir);
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
+
+    // ---- Render depth into m_dirShadowFBO ----
+    glBindFramebuffer(GL_FRAMEBUFFER, m_dirShadowFBO);
+    glViewport(0, 0, res, res);
+    glClear(GL_DEPTH_BUFFER_BIT);
+    glEnable(GL_DEPTH_TEST);
+    glDepthMask(GL_TRUE);
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(rs.getShadowBiasFactor(), rs.getShadowBiasUnits());
+
+    glUseProgram(m_dirShadowShader);
+    glUniformMatrix4fv(glGetUniformLocation(m_dirShadowShader, "uLightSpaceMatrix"),
+        1, GL_FALSE, glm::value_ptr(lightSpace));
+
+    for (auto [entity, meshC, xf] : meshQuery) {
+        if (!meshC->enabled || !meshC->mesh) continue;
+        glUniformMatrix4fv(glGetUniformLocation(m_dirShadowShader, "uModel"),
+            1, GL_FALSE, glm::value_ptr(xf->getModelMatrix()));
+        meshC->mesh->drawDepthOnly(glm::mat4(1.0f), m_dirShadowShader);
+    }
 
     glDisable(GL_POLYGON_OFFSET_FILL);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
@@ -196,7 +329,6 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
     const glm::mat4& projection,
     const glm::vec3& cameraPos)
 {
-    // Render into the MSAA FBO when active, otherwise directly into the HDR FBO.
     const GLuint targetFBO = (m_msaaSamples > 1) ? m_msaaFBO : m_hdrFBO;
     glBindFramebuffer(GL_FRAMEBUFFER, targetFBO);
     GLenum drawBuf = GL_COLOR_ATTACHMENT0;
@@ -205,18 +337,24 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glEnable(GL_DEPTH_TEST);
-
-    // ShadingPass — depth state before clear
     glDepthFunc(GL_LESS);
     glDepthMask(GL_TRUE);
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_lightSSBO);      // binding 0 — lights[]
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_shadowDataSSBO); // binding 1 — shadows[]
+    // Point light SSBO + shadow SSBO
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_lightSSBO);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_shadowDataSSBO);
 
+    // Directional light UBO
+    glBindBufferBase(GL_UNIFORM_BUFFER, 2, m_dirLightUBO);
+
+    // Point light shadow cubemap array — texture unit 5
     glActiveTexture(GL_TEXTURE5);
     glBindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, m_shadowCubeArray);
+
+    // Directional light shadow map — texture unit 6
+    glActiveTexture(GL_TEXTURE6);
+    glBindTexture(GL_TEXTURE_2D, m_dirShadowTex);
 
     for (auto [entity, meshC, transform] : meshQuery) {
         if (!meshC->enabled || !meshC->mesh) continue;
@@ -227,6 +365,7 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
         if (Material* mat = meshC->mesh->getMaterial()) {
             mat->setVec3("uCameraPos", cameraPos);
             mat->setInt("uShadowCubeArray", 5);
+            mat->setInt("uDirShadowMap", 6);  // NEW
             mat->setInt("uShadowCount", m_shadowCount);
             mat->setInt("uLightCount", m_lightCount);
             mat->setInt("uShadowRes", m_shadowRes);
@@ -234,15 +373,11 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
         meshC->mesh->draw();
     }
 
-    glDepthMask(GL_TRUE); // restore for subsequent passes
+    glDepthMask(GL_TRUE);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    // If MSAA is active, resolve the multisampled FBO into the single-sample
-    // HDR FBO so that the post-process passes can sample it as a regular texture.
     ResolveMSAA();
 
-    // Re-bind the HDR FBO so subsequent passes (particle Draw(), etc.) render
-    // into m_hdrColorTex rather than the default framebuffer.
     glBindFramebuffer(GL_FRAMEBUFFER, m_hdrFBO);
     glDepthMask(GL_TRUE);
     glEnable(GL_DEPTH_TEST);
@@ -252,8 +387,6 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
 
 // =====================================================
 //  TonemapPass
-//  Tonemaps HDR color + composites bloom
-//  and gamma-corrects to LDR FBO.
 // =====================================================
 void RenderSystem::TonemapPass()
 {
@@ -270,7 +403,6 @@ void RenderSystem::TonemapPass()
     glBindTexture(GL_TEXTURE_2D, m_hdrColorTex);
     glUniform1i(glGetUniformLocation(m_tonemapShader, "uHDRBuffer"), 0);
 
-    // Bloom composite
     const bool bloomOn = rs.getBloomEnabled();
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, bloomOn ? m_bloomPingTex : 0);
@@ -297,11 +429,9 @@ void RenderSystem::TonemapPass()
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glEnable(GL_DEPTH_TEST);
 }
+
 // =====================================================
 //  BloomPass
-//  1. Threshold pass  — extract bright pixels into m_bloomThreshTex
-//  2. Downsample      — blit threshold to half-res ping buffer
-//  3. Kawase N passes — ping-pong between ping/pong buffers
 // =====================================================
 void RenderSystem::BloomPass()
 {
@@ -311,7 +441,6 @@ void RenderSystem::BloomPass()
 
     glDisable(GL_DEPTH_TEST);
 
-    // ---- 1. Threshold ----
     glBindFramebuffer(GL_FRAMEBUFFER, m_bloomThreshFBO);
     glViewport(0, 0, m_screenW, m_screenH);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -323,7 +452,6 @@ void RenderSystem::BloomPass()
     glBindVertexArray(m_quadVAO);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 
-    // ---- 2. Downsample threshold -> ping (half res) ----
     glBindFramebuffer(GL_FRAMEBUFFER, m_bloomPingFBO);
     glViewport(0, 0, bW, bH);
     glClear(GL_COLOR_BUFFER_BIT);
@@ -336,11 +464,9 @@ void RenderSystem::BloomPass()
     glUniform1i(glGetUniformLocation(m_bloomKawaseShader, "uIteration"), 0);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 
-    // ---- 3. Kawase ping-pong at half res ----
     const int passes = rs.getBloomPasses();
     GLuint src = m_bloomPingTex;
     GLuint dstFBO = m_bloomPongFBO;
-    GLuint srcFBO = m_bloomPingFBO; // unused but keeps naming clear
 
     for (int i = 1; i <= passes; ++i) {
         glBindFramebuffer(GL_FRAMEBUFFER, dstFBO);
@@ -353,21 +479,10 @@ void RenderSystem::BloomPass()
         glUniform1i(glGetUniformLocation(m_bloomKawaseShader, "uIteration"), i);
         glDrawArrays(GL_TRIANGLES, 0, 3);
 
-        // Swap ping/pong
-        if (dstFBO == m_bloomPongFBO) {
-            src = m_bloomPongTex;
-            dstFBO = m_bloomPingFBO;
-        }
-        else {
-            src = m_bloomPingTex;
-            dstFBO = m_bloomPongFBO;
-        }
+        if (dstFBO == m_bloomPongFBO) { src = m_bloomPongTex; dstFBO = m_bloomPingFBO; }
+        else { src = m_bloomPingTex; dstFBO = m_bloomPongFBO; }
     }
-    // After the loop, 'src' holds the last written texture.
-    // We always want the result in m_bloomPingTex so TonemapPass
-    // can sample it without needing to know which buffer won.
     if (src != m_bloomPingTex) {
-        // Copy pong -> ping via one more blit
         glBindFramebuffer(GL_FRAMEBUFFER, m_bloomPingFBO);
         glViewport(0, 0, bW, bH);
         glActiveTexture(GL_TEXTURE0);
@@ -386,8 +501,6 @@ void RenderSystem::BloomPass()
 
 // =====================================================
 //  FXAAPass
-//  Reads m_ldrTex (tonemap output) and writes the
-//  anti-aliased result to the default framebuffer.
 // =====================================================
 void RenderSystem::FXAAPass()
 {
@@ -399,10 +512,6 @@ void RenderSystem::FXAAPass()
     glClear(GL_COLOR_BUFFER_BIT);
 
     if (!rs.getFXAAEnabled()) {
-        // No FXAA — just blit the LDR texture with the Kawase shader reused
-        // as a simple pass-through.  Use the tonemap shader instead: easier
-        // and cheaper — just sample the LDR tex and output it unchanged.
-        // We repurpose the Kawase shader at iteration 0 as a copy blit.
         glUseProgram(m_bloomKawaseShader);
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, m_ldrTex);

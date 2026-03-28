@@ -8,19 +8,18 @@
 
 // -------------------------------------------------------
 // QualityPreset
-// Controls texture resolution and compression tier.
 // -------------------------------------------------------
 enum class QualityPreset
 {
-    VeryLow,  // 1/8 res  + BC7 compressed  (~0.4% memory)
-    Low,      // 1/4 res  + BC7 compressed  (~1.5% memory)
-    Medium,   // 1/2 res  + BC7 compressed  (~6%   memory)
-    High,     // Full res + BC7 compressed  (~25%  memory)
-    Ultra     // Full res + uncompressed    (100%  memory)
+    VeryLow,
+    Low,
+    Medium,
+    High,
+    Ultra
 };
 
 // -------------------------------------------------------
-// RenderSettings � global singleton
+// RenderSettings — global singleton
 //
 // Two categories of settings:
 //
@@ -28,25 +27,17 @@ enum class QualityPreset
 //                 Changing them afterwards has no effect
 //                 unless you call RenderSystem::Init() again.
 //
-//  [Runtime]      Can be changed at any time. RenderSystem
-//                 reads them every frame or every pass.
-//
-// Usage:
-//   RenderSettings::instance().setPreset(QualityPreset::High);
-//   RenderSettings::instance().setShadowResolution(1024);
-//   RenderSystem rs; rs.Init(1920, 1080);
+//  [Runtime]      Can be changed at any time.
 // -------------------------------------------------------
 class RenderSettings
 {
 public:
-    // ---- Singleton access ----
     static RenderSettings& instance()
     {
         static RenderSettings inst;
         return inst;
     }
 
-    // Delete copy / move
     RenderSettings(const RenderSettings&) = delete;
     RenderSettings& operator=(const RenderSettings&) = delete;
     RenderSettings(RenderSettings&&) = delete;
@@ -54,71 +45,45 @@ public:
 
     // =======================================================
     //  QUALITY PRESET
-    //  Applies to texture loading � set before loading assets.
     // =======================================================
     void          setPreset(QualityPreset preset) { m_preset = preset; applyPreset(); }
     QualityPreset getPreset()               const { return m_preset; }
 
-    // Derived texture settings consumed by the asset loader
     int  texBaseMip()     const { return m_baseMip; }
     bool texCompression() const { return m_useCompression; }
 
     // =======================================================
     //  INIT-TIME SETTINGS
-    //  Read once inside RenderSystem::Init().
     // =======================================================
 
-    // Maximum number of point lights streamed to the GPU per frame.
-    // Determines the light SSBO size.
     void setMaxLights(int v) { m_maxLights = v; }
-    int  getMaxLights()        const { return m_maxLights; }
+    int  getMaxLights()      const { return m_maxLights; }
 
-    // How many shadow-casting point lights are supported simultaneously.
-    // Each occupies 6 layers in the cubemap array texture.
     void setMaxShadowLights(int v) { m_maxShadowLights = v; }
-    int  getMaxShadowLights()  const { return m_maxShadowLights; }
+    int  getMaxShadowLights()const { return m_maxShadowLights; }
 
-    // MSAA sample count for the shading pass.
-    // 1 = disabled.  Common values: 2, 4, 8.
-    // The driver clamps to GL_MAX_SAMPLES if the value exceeds
-    // hardware support.
-    // [Init-time] — call RenderSystem::Init() or Resize() to apply.
     void setMsaaSamples(int v) { m_msaaSamples = std::max(1, v); }
-    int  getMsaaSamples()  const { return m_msaaSamples; }
+    int  getMsaaSamples()    const { return m_msaaSamples; }
 
-    // Anisotropic filtering level applied to every texture at load time.
-    // Common values: 1 (off), 2, 4, 8, 16.
-    // The driver silently clamps to GL_MAX_TEXTURE_MAX_ANISOTROPY if
-    // the requested value exceeds hardware support.
-    // Requires reloading assets to take effect.
     void  setAnisotropy(float v) { m_anisotropy = v; }
-    float getAnisotropy()  const { return m_anisotropy; }
+    float getAnisotropy()    const { return m_anisotropy; }
 
     // =======================================================
-    //  RUNTIME SETTINGS
-    //  Read every frame / every pass by RenderSystem.
+    //  RUNTIME — POINT LIGHT SHADOWS
     // =======================================================
 
-    // Shadow map resolution (width == height, applies to every cubemap face).
-    // Changing this requires RenderSystem to re-create the cubemap array �
-    // call RenderSystem::ReInitShadows() after changing.
+    // Shadow map resolution (width == height).
+    // Also used for the directional light shadow map.
+    // Call RenderSystem::ReInitShadows() after changing.
     void setShadowResolution(int v) { m_shadowRes = v; }
-    int  getShadowResolution()  const { return m_shadowRes; }
+    int  getShadowResolution()const { return m_shadowRes; }
 
-    // Enable / disable the entire shadow pass.
     void setShadowsEnabled(bool v) { m_shadowsEnabled = v; }
-    bool getShadowsEnabled()    const { return m_shadowsEnabled; }
+    bool getShadowsEnabled()  const { return m_shadowsEnabled; }
 
-    // Near plane for the shadow projection frustum.
-    // Larger values improve depth precision across the shadow range,
-    // reducing acne and peter-panning on geometry far from the light.
-    // Too large a value clips geometry very close to the light source.
     void  setShadowNearPlane(float v) { m_shadowNearPlane = v; }
     float getShadowNearPlane()  const { return m_shadowNearPlane; }
 
-    // Depth bias applied during the shadow pass via glPolygonOffset.
-    // factor: scales with the slope of the polygon.
-    // units:  constant depth offset (in depth-buffer units).
     void  setShadowBiasFactor(float v) { m_shadowBiasFactor = v; }
     float getShadowBiasFactor()  const { return m_shadowBiasFactor; }
 
@@ -126,129 +91,113 @@ public:
     float getShadowBiasUnits()   const { return m_shadowBiasUnits; }
 
     // =======================================================
-    //  HDR & TONEMAPPING  [Runtime]
+    //  RUNTIME — DIRECTIONAL LIGHT SHADOW
     //
-    //  The shading pass renders into a floating-point (RGBA16F)
-    //  HDR framebuffer.  A fullscreen post-process pass then
-    //  applies exposure and tonemapping before writing to the
-    //  default (LDR) framebuffer.
+    //  getDirShadowsEnabled() — master toggle for the directional
+    //                           shadow map pass.  When false,
+    //                           DirShadowPass is skipped entirely
+    //                           and the shader receives no occlusion
+    //                           from the directional light.
+    //                           Independent of getShadowsEnabled()
+    //                           so point light shadows can remain on
+    //                           while directional shadows are off
+    //                           (useful for low-end or VeryLow preset).
     //
-    //  Operators available:
-    //    Reinhard  — simple, never clips, slightly desaturates
-    //    Filmic    — ACES-approximation (Hill/Narkowicz), more
-    //                contrast and colour saturation; shoulder
-    //                and toe controlled by the curve parameters
-    //                below.  Recommended for most scenes.
+    //  getDirShadowExtent()   — half-width and half-height of
+    //                           the ortho frustum in world units.
+    //                           Increase if shadows clip at scene edges.
+    //
+    //  getDirShadowNear() /
+    //  getDirShadowFar()      — near and far clip distances along
+    //                           the light direction.  The eye is pulled
+    //                           back getDirShadowFar()*0.5 from the
+    //                           origin along -lightDir, centring the
+    //                           frustum on the world origin.
+    //                           Default: near=-100, far=100.
+    //
+    //  Changing any of these takes effect on the next frame with
+    //  no GPU resource recreation needed.
     // =======================================================
 
-    // Scene exposure multiplier applied before tonemapping.
-    // 1.0 = neutral.  Values > 1 brighten, < 1 darken.
+    // Master on/off for the directional shadow map pass.
+    void setDirShadowsEnabled(bool v) { m_dirShadowsEnabled = v; }
+    bool getDirShadowsEnabled() const { return m_dirShadowsEnabled; }
+
+    void  setDirShadowExtent(float v) { m_dirShadowExtent = v; }
+    float getDirShadowExtent()  const { return m_dirShadowExtent; }
+
+    void  setDirShadowNear(float v) { m_dirShadowNear = v; }
+    float getDirShadowNear()    const { return m_dirShadowNear; }
+
+    void  setDirShadowFar(float v) { m_dirShadowFar = v; }
+    float getDirShadowFar()     const { return m_dirShadowFar; }
+
+    // =======================================================
+    //  RUNTIME — HDR / TONEMAPPING
+    // =======================================================
+
     void  setExposure(float v) { m_exposure = v; }
-    float getExposure()  const { return m_exposure; }
+    float getExposure()         const { return m_exposure; }
 
-    // Toggle between Reinhard (false) and Filmic/ACES (true).
     void setFilmicEnabled(bool v) { m_filmicEnabled = v; }
-    bool getFilmicEnabled()  const { return m_filmicEnabled; }
+    bool getFilmicEnabled()     const { return m_filmicEnabled; }
 
-    // ----- Filmic curve parameters (ACES approximation) -----
-    // These shape the shoulder (bright roll-off) and toe (dark
-    // lift) of the curve.  Sensible ranges are given below.
-    // Changing them takes effect on the next frame with no
-    // GPU resource recreation needed.
-
-    // Shoulder strength — controls how aggressively bright values
-    // are compressed.  Range [0.0, 1.0], default 0.22.
     void  setFilmicShoulder(float v) { m_filmicShoulder = v; }
-    float getFilmicShoulder()  const { return m_filmicShoulder; }
+    float getFilmicShoulder()        const { return m_filmicShoulder; }
 
-    // Linear strength — the slope of the linear middle section.
-    // Range [0.0, 1.0], default 0.30.
     void  setFilmicLinearStrength(float v) { m_filmicLinearStrength = v; }
     float getFilmicLinearStrength()  const { return m_filmicLinearStrength; }
 
-    // Linear angle — blending factor between linear and
-    // shoulder segments.  Range [0.0, 1.0], default 0.10.
     void  setFilmicLinearAngle(float v) { m_filmicLinearAngle = v; }
-    float getFilmicLinearAngle()  const { return m_filmicLinearAngle; }
+    float getFilmicLinearAngle()     const { return m_filmicLinearAngle; }
 
-    // Toe strength — controls how dark values are lifted.
-    // Range [0.0, 1.0], default 0.20.
     void  setFilmicToeStrength(float v) { m_filmicToeStrength = v; }
-    float getFilmicToeStrength()  const { return m_filmicToeStrength; }
+    float getFilmicToeStrength()     const { return m_filmicToeStrength; }
 
-    // Toe numerator and denominator — fine-tune the toe shape.
-    // Default: numerator 0.01, denominator 0.30.
     void  setFilmicToeNumerator(float v) { m_filmicToeNumerator = v; }
     float getFilmicToeNumerator()    const { return m_filmicToeNumerator; }
 
     void  setFilmicToeDenominator(float v) { m_filmicToeDenominator = v; }
     float getFilmicToeDenominator()  const { return m_filmicToeDenominator; }
 
-    // Linear white point — input value that maps to pure white.
-    // Increase to retain more midtone detail; default 11.2.
     void  setFilmicLinearWhite(float v) { m_filmicLinearWhite = v; }
-    float getFilmicLinearWhite()  const { return m_filmicLinearWhite; }
+    float getFilmicLinearWhite()     const { return m_filmicLinearWhite; }
 
-    // Gamma correction applied after tonemapping (sRGB ≈ 2.2).
-    // Set to 1.0 if your window surface is already sRGB.
     void  setGamma(float v) { m_gamma = v; }
     float getGamma()  const { return m_gamma; }
 
-
     // =======================================================
-    //  BLOOM  [Runtime]
-    //
-    //  A threshold pass extracts bright pixels, then a
-    //  Kawase multi-pass blur spreads the glow.  The result
-    //  is additively composited in TonemapPass.
+    //  RUNTIME — BLOOM
     // =======================================================
 
-    // Enable / disable bloom entirely.
     void setBloomEnabled(bool v) { m_bloomEnabled = v; }
-    bool getBloomEnabled()  const { return m_bloomEnabled; }
+    bool getBloomEnabled()       const { return m_bloomEnabled; }
 
-    // Luminance threshold — pixels brighter than this feed into bloom.
-    // Typical range [0.5, 2.0].  Default 1.0.
     void  setBloomThreshold(float v) { m_bloomThreshold = v; }
-    float getBloomThreshold()  const { return m_bloomThreshold; }
+    float getBloomThreshold()    const { return m_bloomThreshold; }
 
-    // Additive blend weight of the bloom texture in the tonemap pass.
-    // Range [0.0, 1.0].  Default 0.04.
     void  setBloomStrength(float v) { m_bloomStrength = v; }
-    float getBloomStrength()  const { return m_bloomStrength; }
+    float getBloomStrength()     const { return m_bloomStrength; }
 
-    // Number of Kawase blur iterations.  More = wider glow, more cost.
-    // Range [1, 8].  Default 4.
     void setBloomPasses(int v) { m_bloomPasses = v; }
-    int  getBloomPasses() const { return m_bloomPasses; }
+    int  getBloomPasses()        const { return m_bloomPasses; }
 
     // =======================================================
-    //  FXAA  [Runtime]
-    //
-    //  Fast approximate anti-aliasing applied as the last
-    //  pass before the default framebuffer.
+    //  RUNTIME — FXAA
     // =======================================================
 
-    // Enable / disable FXAA.
     void setFXAAEnabled(bool v) { m_fxaaEnabled = v; }
-    bool getFXAAEnabled()  const { return m_fxaaEnabled; }
+    bool getFXAAEnabled()              const { return m_fxaaEnabled; }
 
-    // Sub-pixel quality — blends aliased edges with neighbours.
-    // Range [0.0, 1.0].  0.75 is a good default.
     void  setFXAASubpix(float v) { m_fxaaSubpix = v; }
-    float getFXAASubpix()  const { return m_fxaaSubpix; }
+    float getFXAASubpix()              const { return m_fxaaSubpix; }
 
-    // Edge threshold — minimum local contrast to trigger AA.
-    // Range [0.063, 0.333].  Lower = more edges processed.  Default 0.125.
     void  setFXAAEdgeThreshold(float v) { m_fxaaEdgeThreshold = v; }
-    float getFXAAEdgeThreshold()  const { return m_fxaaEdgeThreshold; }
+    float getFXAAEdgeThreshold()       const { return m_fxaaEdgeThreshold; }
 
-    // Edge threshold minimum — skip very dark pixels.
-    // Range [0.0, 0.0833].  Default 0.0833.
     void  setFXAAEdgeThresholdMin(float v) { m_fxaaEdgeThresholdMin = v; }
-    float getFXAAEdgeThresholdMin()  const { return m_fxaaEdgeThresholdMin; }
+    float getFXAAEdgeThresholdMin()    const { return m_fxaaEdgeThresholdMin; }
 
-    // Save the current preset index back to the cfg file.
     void savePreset() const
     {
         std::ofstream f(CFG_PATH);
@@ -265,26 +214,20 @@ private:
         applyPreset();
     }
 
-    // Read render_quality.cfg and return the corresponding preset.
-    // Falls back to High if the file is missing, empty, or contains
-    // an out-of-range value.
     static QualityPreset loadPresetFromFile()
     {
         std::ifstream f(CFG_PATH);
         if (!f.is_open())
-            return QualityPreset::High; // file not found � use default
+            return QualityPreset::High;
 
         std::string line;
         std::getline(f, line);
-
-        // Strip whitespace
         line.erase(std::remove_if(line.begin(), line.end(),
             [](unsigned char c) { return std::isspace(c); }), line.end());
 
         if (line.empty())
             return QualityPreset::High;
 
-        // Must be a single digit 0�4
         if (line.size() == 1 && std::isdigit((unsigned char)line[0]))
         {
             int v = line[0] - '0';
@@ -292,7 +235,7 @@ private:
                 return static_cast<QualityPreset>(v);
         }
 
-        return QualityPreset::High; // malformed value � use default
+        return QualityPreset::High;
     }
 
     void applyPreset()
@@ -300,21 +243,21 @@ private:
         switch (m_preset)
         {
         case QualityPreset::VeryLow:
-            // Texture
             m_baseMip = 3;
             m_useCompression = true;
-            // Init-time
             m_maxLights = 64;
             m_maxShadowLights = 0;
-            m_msaaSamples = 1;    // no MSAA
-            m_anisotropy = 1.0f; // off
-            // Runtime
-            m_shadowsEnabled = false;
+            m_msaaSamples = 1;
+            m_anisotropy = 1.0f;
+            m_shadowsEnabled = false; // point light shadows off
             m_shadowRes = 128;
             m_shadowNearPlane = 0.5f;
             m_shadowBiasFactor = 2.0f;
             m_shadowBiasUnits = 4.0f;
-            // HDR — Reinhard only; filmic too expensive at this tier
+            m_dirShadowsEnabled = false; // directional shadows off
+            m_dirShadowExtent = 30.0f;
+            m_dirShadowNear = -50.0f;
+            m_dirShadowFar = 50.0f;
             m_exposure = 1.0f;
             m_filmicEnabled = false;
             m_gamma = 2.2f;
@@ -329,19 +272,15 @@ private:
             m_maxShadowLights = 2;
             m_msaaSamples = 1;
             m_anisotropy = 2.0f;
-            m_shadowsEnabled = true;
+            m_shadowsEnabled = false; // point light shadows off
             m_shadowRes = 256;
             m_shadowNearPlane = 0.3f;
             m_shadowBiasFactor = 2.0f;
             m_shadowBiasUnits = 4.0f;
-            m_exposure = 1.0f;
-            m_filmicEnabled = false;
-            m_gamma = 2.2f;
-            m_bloomEnabled = false;
-            m_fxaaEnabled = true;
-            break;
-
-        case QualityPreset::Medium:
+            m_dirShadowsEnabled = true;  // directional shadows on
+            m_dirShadowExtent = 50.0f;
+            m_dirShadowNear = -100.0f;
+            m_dirShadowFar = 100.0f;
             m_baseMip = 1;
             m_useCompression = true;
             m_maxLights = 256;
@@ -353,6 +292,10 @@ private:
             m_shadowNearPlane = 0.2f;
             m_shadowBiasFactor = 2.0f;
             m_shadowBiasUnits = 4.0f;
+            m_dirShadowsEnabled = true;
+            m_dirShadowExtent = 50.0f;
+            m_dirShadowNear = -100.0f;
+            m_dirShadowFar = 100.0f;
             m_exposure = 1.0f;
             m_filmicEnabled = true;
             m_filmicShoulder = 0.22f;
@@ -382,6 +325,10 @@ private:
             m_shadowNearPlane = 0.1f;
             m_shadowBiasFactor = 2.0f;
             m_shadowBiasUnits = 4.0f;
+            m_dirShadowsEnabled = true;
+            m_dirShadowExtent = 50.0f;
+            m_dirShadowNear = -100.0f;
+            m_dirShadowFar = 100.0f;
             m_exposure = 1.0f;
             m_filmicEnabled = true;
             m_filmicShoulder = 0.22f;
@@ -411,6 +358,11 @@ private:
             m_shadowNearPlane = 0.05f;
             m_shadowBiasFactor = 2.0f;
             m_shadowBiasUnits = 4.0f;
+            m_dirShadowsEnabled = true;
+            // Ultra: larger frustum to cover expansive scenes at high res.
+            m_dirShadowExtent = 75.0f;
+            m_dirShadowNear = -150.0f;
+            m_dirShadowFar = 150.0f;
             m_exposure = 1.2f;
             m_filmicEnabled = true;
             m_filmicShoulder = 0.22f;
@@ -441,12 +393,18 @@ private:
     int   m_msaaSamples = 4;
     float m_anisotropy = 8.0f;
 
-    // ---- Runtime ----
+    // ---- Runtime — point light shadows ----
     int   m_shadowRes = 1024;
     bool  m_shadowsEnabled = true;
     float m_shadowNearPlane = 0.1f;
     float m_shadowBiasFactor = 2.0f;
     float m_shadowBiasUnits = 4.0f;
+
+    // ---- Runtime — directional light shadow frustum ----
+    bool  m_dirShadowsEnabled = true;  // independent toggle
+    float m_dirShadowExtent = 50.0f;
+    float m_dirShadowNear = -100.0f;
+    float m_dirShadowFar = 100.0f;
 
     // ---- HDR / Tonemapping ----
     float m_exposure = 1.0f;

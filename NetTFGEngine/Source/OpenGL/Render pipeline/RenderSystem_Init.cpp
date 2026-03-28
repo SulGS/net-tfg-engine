@@ -48,7 +48,7 @@ void RenderSystem::InitLightSSBO()
 }
 
 // =====================================================
-//  InitShadowCubeArray
+//  InitShadowCubeArray  — point light cubemap array
 // =====================================================
 void RenderSystem::InitShadowCubeArray()
 {
@@ -80,16 +80,65 @@ void RenderSystem::InitShadowCubeArray()
 }
 
 // =====================================================
+//  InitDirLightUBO
+//  Single GPUDirLight struct uploaded each frame.
+//  Bound to uniform buffer binding 2.
+// =====================================================
+void RenderSystem::InitDirLightUBO()
+{
+    glGenBuffers(1, &m_dirLightUBO);
+    glBindBuffer(GL_UNIFORM_BUFFER, m_dirLightUBO);
+    glBufferData(GL_UNIFORM_BUFFER, sizeof(GPUDirLight), nullptr, GL_DYNAMIC_DRAW);
+    glBindBufferBase(GL_UNIFORM_BUFFER, 2, m_dirLightUBO);
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
+}
+
+// =====================================================
+//  InitDirShadowMap
+//  A single 2-D DEPTH32F texture + FBO for the
+//  directional light orthographic shadow map.
+//  Resolution reuses getShadowResolution() (same as
+//  point lights — change the setting before calling
+//  ReInitShadows() to adjust both at once).
+// =====================================================
+void RenderSystem::InitDirShadowMap()
+{
+    int res = RenderSettings::instance().getShadowResolution();
+
+    glGenTextures(1, &m_dirShadowTex);
+    glBindTexture(GL_TEXTURE_2D, m_dirShadowTex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F,
+        res, res, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+    // Use hardware PCF comparison sampler so the shader can use shadow2D().
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    // Fragments outside the frustum are treated as fully lit.
+    float borderColor[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderColor);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LESS);
+
+    glGenFramebuffers(1, &m_dirShadowFBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_dirShadowFBO);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
+        GL_TEXTURE_2D, m_dirShadowTex, 0);
+    glDrawBuffer(GL_NONE);
+    glReadBuffer(GL_NONE);
+
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        Debug::Error("RenderSystem") << "Dir shadow FBO incomplete\n";
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+// =====================================================
 //  InitGBufferFBO
-//  Single-sample FBO that the geometry pre-pass writes into.
-//  Attachment: RGBA16F normal+roughness.
-//  Depth: shared with m_hdrDepthTex so the shading pass can
-//  perform the early-Z test against the already-filled depth.
-//  Must be called AFTER InitHDRFBO() so m_hdrDepthTex exists.
 // =====================================================
 void RenderSystem::InitGBufferFBO()
 {
-    // Helper: one NEAREST, CLAMP_TO_EDGE RGBA16F texture
     auto makeAttachment = [&](GLuint& tex) {
         glGenTextures(1, &tex);
         glBindTexture(GL_TEXTURE_2D, tex);
@@ -101,15 +150,10 @@ void RenderSystem::InitGBufferFBO()
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         };
 
-    // attachment 0 — view-space normals (xyz) + roughness (w)  [same layout as before]
     makeAttachment(m_gbufferNormalTex);
-    // attachment 1 — perceptual roughness (r channel)
     makeAttachment(m_gbufferRoughnessTex);
-    // attachment 2 — metalness (r channel)
     makeAttachment(m_gbufferMetalnessTex);
 
-    // Dedicated depth renderbuffer — never bound as a sampler so no
-    // feedback-loop risk with m_hdrDepthTex.
     glGenRenderbuffers(1, &m_gbufferDepthRBO);
     glBindRenderbuffer(GL_RENDERBUFFER, m_gbufferDepthRBO);
     glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT32F, m_screenW, m_screenH);
@@ -139,22 +183,14 @@ void RenderSystem::InitGBufferFBO()
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
-
 // =====================================================
 //  InitMSAAFBO
-//  Creates a multisampled FBO for the shading pass.
-//  Only one color attachment (HDR radiance) — the GBuffer
-//  normal/roughness is written in a separate pre-pass that
-//  does not need MSAA.
-//  When m_msaaSamples == 1, this is a no-op — ShadingPass
-//  will render directly into m_hdrFBO instead.
 // =====================================================
 void RenderSystem::InitMSAAFBO()
 {
     if (m_msaaSamples <= 1)
-        return; // single-sample path; no extra FBO needed
+        return;
 
-    // Multisample textures do not accept filter/wrap parameters
     glGenTextures(1, &m_msaaColorTex);
     glBindTexture(GL_TEXTURE_2D_MULTISAMPLE, m_msaaColorTex);
     glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, m_msaaSamples,
@@ -184,17 +220,11 @@ void RenderSystem::InitMSAAFBO()
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-
-//  Single-sample HDR FBO — resolve target for MSAA and source
-//  for all post-process passes.
-//  MRT: attachment0 = HDR color (RGBA16F)
-//       depth       = DEPTH32F  (shared with GBuffer FBO)
-//  The view-space normal + roughness GBuffer lives in a separate
-//  m_gbufferFBO / m_gbufferNormalTex written by GBufferPass.
+// =====================================================
+//  InitHDRFBO
 // =====================================================
 void RenderSystem::InitHDRFBO()
 {
-    // --- color attachment 0: HDR radiance ---
     glGenTextures(1, &m_hdrColorTex);
     glBindTexture(GL_TEXTURE_2D, m_hdrColorTex);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F,
@@ -204,7 +234,6 @@ void RenderSystem::InitHDRFBO()
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-    // --- depth (shared with GBuffer FBO) ---
     glGenTextures(1, &m_hdrDepthTex);
     glBindTexture(GL_TEXTURE_2D, m_hdrDepthTex);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F,
@@ -233,15 +262,14 @@ void RenderSystem::InitHDRFBO()
 }
 
 // =====================================================
-//  InitScreenQuad  — single large triangle covering NDC
+//  InitScreenQuad
 // =====================================================
 void RenderSystem::InitScreenQuad()
 {
     static const float kVerts[] = {
-        // position (NDC)   texcoord
-        -1.0f, -1.0f,       0.0f, 0.0f,
-         3.0f, -1.0f,       2.0f, 0.0f,
-        -1.0f,  3.0f,       0.0f, 2.0f,
+        -1.0f, -1.0f,  0.0f, 0.0f,
+         3.0f, -1.0f,  2.0f, 0.0f,
+        -1.0f,  3.0f,  0.0f, 2.0f,
     };
 
     glGenVertexArrays(1, &m_quadVAO);
@@ -251,12 +279,10 @@ void RenderSystem::InitScreenQuad()
     glBindBuffer(GL_ARRAY_BUFFER, m_quadVBO);
     glBufferData(GL_ARRAY_BUFFER, sizeof(kVerts), kVerts, GL_STATIC_DRAW);
 
-    glEnableVertexAttribArray(0); // vec2 position
+    glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
-
-    glEnableVertexAttribArray(1); // vec2 texcoord
-    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE,
-        4 * sizeof(float), (void*)(2 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
 
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -264,23 +290,20 @@ void RenderSystem::InitScreenQuad()
 
 // =====================================================
 //  InitBloom
-//  Threshold buffer at full res; ping/pong at half res.
 // =====================================================
 void RenderSystem::InitBloom()
 {
     auto makeTex = [&](GLuint& tex, GLuint& fbo, int w, int h) {
         glGenTextures(1, &tex);
         glBindTexture(GL_TEXTURE_2D, tex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h,
-            0, GL_RGBA, GL_FLOAT, nullptr);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, w, h, 0, GL_RGBA, GL_FLOAT, nullptr);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glGenFramebuffers(1, &fbo);
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-            GL_TEXTURE_2D, tex, 0);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
         if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
             Debug::Error("RenderSystem") << "Bloom FBO incomplete\n";
         };
@@ -297,7 +320,6 @@ void RenderSystem::InitBloom()
 
 // =====================================================
 //  InitLDRFBO
-//  RGBA8 target that tonemap writes into; FXAA reads from.
 // =====================================================
 void RenderSystem::InitLDRFBO()
 {
@@ -312,8 +334,7 @@ void RenderSystem::InitLDRFBO()
 
     glGenFramebuffers(1, &m_ldrFBO);
     glBindFramebuffer(GL_FRAMEBUFFER, m_ldrFBO);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-        GL_TEXTURE_2D, m_ldrTex, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_ldrTex, 0);
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
         Debug::Error("RenderSystem") << "LDR FBO incomplete\n";
 

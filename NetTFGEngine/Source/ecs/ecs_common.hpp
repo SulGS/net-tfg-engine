@@ -1,4 +1,4 @@
-#ifndef ECS_COMMON_H
+﻿#ifndef ECS_COMMON_H
 #define ECS_COMMON_H
 
 #include "netcode/netcode_common.hpp"
@@ -134,11 +134,22 @@ private:
 };
 
 struct PointLightComponent : public IComponent {
-    glm::vec3 color = glm::vec3(1.0f);   // RGB, values in [0,1]
-    float     intensity = 1.0f;               // multiplier, can exceed 1 for HDR
-    float     radius = 10.0f;              // world-space cutoff distance
-    bool      enabled = true;
+    glm::vec3 color = glm::vec3(1.0f);
+    float     intensity = 1.0f;   // candelas
+    float     radius = 10.0f;
+    bool      castShadows = true; // NEW — set false to skip shadow map for this light
 };
+
+// ── new component — add alongside PointLightComponent ──
+// Only the first entity that carries this component is
+// used by RenderSystem.  A second one is silently ignored.
+struct DirectionalLightComponent : public IComponent {
+    glm::vec3 direction = glm::normalize(glm::vec3(-0.3f, -1.0f, -0.5f)); // world-space, points TOWARD the scene
+    glm::vec3 color = glm::vec3(1.0f);
+    float     intensity = 1.0f;   // lux (scene-scale)
+    bool      castShadows = true; // whether to render a shadow map
+};
+
 
 class Camera : public IComponent {
 public:

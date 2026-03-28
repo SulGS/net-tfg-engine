@@ -1,12 +1,12 @@
 ﻿#include "RenderSystem.hpp"
 
 // =====================================================
-//  CompileShadowShader
+//  CompileShadowShader  — point light cubemap
 // =====================================================
 void RenderSystem::CompileShadowShader()
 {
     const char* vert = R"GLSL(
-        #version 430 core
+        #version 430 core 
         layout(location = 0) in vec3 aPos;
         uniform mat4 uModel;
         void main() { gl_Position = uModel * vec4(aPos, 1.0); }
@@ -14,7 +14,7 @@ void RenderSystem::CompileShadowShader()
 
     const char* geom = R"GLSL(
         #version 430 core
-        layout(triangles) in; 
+        layout(triangles) in;
         layout(triangle_strip, max_vertices = 18) out;
 
         uniform mat4 uLightSpaceMatrices[6];
@@ -53,9 +53,38 @@ void RenderSystem::CompileShadowShader()
 }
 
 // =====================================================
+//  CompileDirShadowShader
+//  Simple depth-only pass for the directional light.
+//  No geometry shader needed — a single view-projection
+//  matrix transforms all geometry.
+// =====================================================
+void RenderSystem::CompileDirShadowShader()
+{
+    const char* vert = R"GLSL(
+        #version 430 core
+        layout(location = 0) in vec3 aPos;
+        uniform mat4 uModel;
+        uniform mat4 uLightSpaceMatrix;
+        void main()
+        {
+            gl_Position = uLightSpaceMatrix * uModel * vec4(aPos, 1.0);
+        }
+    )GLSL";
+
+    // Depth is written implicitly — no fragment shader output needed.
+    const char* frag = R"GLSL(
+        #version 430 core
+        void main() {}
+    )GLSL";
+
+    m_dirShadowShader = LinkProgram({
+        CompileStage(GL_VERTEX_SHADER,   vert),
+        CompileStage(GL_FRAGMENT_SHADER, frag)
+        });
+}
+
+// =====================================================
 //  CompileTonemapShader
-//  Reinhard and Filmic (Uncharted 2 / Hable) operators.
-//  Gamma correction applied after both. Composites bloom.
 // =====================================================
 void RenderSystem::CompileTonemapShader()
 {
@@ -116,12 +145,9 @@ void RenderSystem::CompileTonemapShader()
         CompileStage(GL_FRAGMENT_SHADER, frag)
         });
 }
+
 // =====================================================
 //  CompileBloomShaders
-//  Two programs:
-//    Threshold � extracts bright regions above uThreshold
-//    Kawase    � single-pass Kawase blur; run multiple times
-//               with increasing uIteration offsets
 // =====================================================
 void RenderSystem::CompileBloomShaders()
 {
@@ -133,7 +159,6 @@ void RenderSystem::CompileBloomShaders()
         void main() { vUV = aUV; gl_Position = vec4(aPos, 0.0, 1.0); }
     )GLSL";
 
-    // ---- Threshold ----
     const char* threshFrag = R"GLSL(
         #version 430 core
         in  vec2 vUV;
@@ -153,13 +178,12 @@ void RenderSystem::CompileBloomShaders()
         CompileStage(GL_FRAGMENT_SHADER, threshFrag)
         });
 
-    // ---- Kawase blur ----
     const char* kawaseFrag = R"GLSL(
         #version 430 core
         in  vec2 vUV;
         out vec4 FragColor;
         uniform sampler2D uTex;
-        uniform vec2      uTexelSize; // 1.0 / resolution
+        uniform vec2      uTexelSize;
         uniform int       uIteration;
         void main()
         {
@@ -181,7 +205,6 @@ void RenderSystem::CompileBloomShaders()
 
 // =====================================================
 //  CompileFXAAShader
-//  FXAA 3.11 quality implementation in a single pass.
 // =====================================================
 void RenderSystem::CompileFXAAShader()
 {
@@ -199,7 +222,7 @@ void RenderSystem::CompileFXAAShader()
         out vec4 FragColor;
 
         uniform sampler2D uLDRBuffer;
-        uniform vec2      uTexelSize;   // 1.0 / resolution
+        uniform vec2      uTexelSize;
         uniform float     uSubpix;
         uniform float     uEdgeThreshold;
         uniform float     uEdgeThresholdMin;
@@ -210,7 +233,6 @@ void RenderSystem::CompileFXAAShader()
         {
             vec2 uv = vUV;
 
-            // Sample centre and cardinal neighbours
             vec3  rgbM  = texture(uLDRBuffer, uv).rgb;
             float lumaM = Luma(rgbM);
             float lumaN = Luma(texture(uLDRBuffer, uv + vec2( 0, -1) * uTexelSize).rgb);
@@ -222,30 +244,25 @@ void RenderSystem::CompileFXAAShader()
             float rangeMax = max(lumaM, max(max(lumaN, lumaS), max(lumaW, lumaE)));
             float range    = rangeMax - rangeMin;
 
-            // Skip pixels below contrast threshold
             if (range < max(uEdgeThresholdMin, rangeMax * uEdgeThreshold)) {
                 FragColor = vec4(rgbM, 1.0);
                 return;
             }
 
-            // Diagonal neighbours
             float lumaNW = Luma(texture(uLDRBuffer, uv + vec2(-1, -1) * uTexelSize).rgb);
             float lumaNE = Luma(texture(uLDRBuffer, uv + vec2( 1, -1) * uTexelSize).rgb);
             float lumaSW = Luma(texture(uLDRBuffer, uv + vec2(-1,  1) * uTexelSize).rgb);
             float lumaSE = Luma(texture(uLDRBuffer, uv + vec2( 1,  1) * uTexelSize).rgb);
 
-            // Edge direction
             float edgeH = abs(lumaNW + 2.0*lumaN + lumaNE - lumaSW - 2.0*lumaS - lumaSE);
             float edgeV = abs(lumaNW + 2.0*lumaW + lumaSW - lumaNE - 2.0*lumaE - lumaSE);
             bool  isHorizontal = edgeH >= edgeV;
 
-            // Sub-pixel blend
             float lumaAvg = (2.0*(lumaN+lumaS+lumaW+lumaE) +
                              lumaNW + lumaNE + lumaSW + lumaSE) / 12.0;
             float subpixBlend = clamp(abs(lumaAvg - lumaM) / range, 0.0, 1.0);
             subpixBlend = smoothstep(0.0, 1.0, subpixBlend) * uSubpix;
 
-            // Blend along detected edge direction
             vec2 blendDir = isHorizontal ? vec2(0.0, uTexelSize.y)
                                          : vec2(uTexelSize.x, 0.0);
             vec3 rgbBlend = 0.5 * (rgbM + texture(uLDRBuffer, uv + blendDir).rgb);
@@ -260,13 +277,8 @@ void RenderSystem::CompileFXAAShader()
         });
 }
 
-
 // =====================================================
 //  CompileGBufferShader
-//  Geometry pre-pass: outputs view-space normal (xyz) +
-//  perceptual roughness (w) into a single RGBA16F attachment.
-//  Reads the same vertex attributes and uniforms as ggx.vert
-//  so no extra VAO layout is needed.
 // =====================================================
 void RenderSystem::CompileGBufferShader()
 {
@@ -275,7 +287,7 @@ void RenderSystem::CompileGBufferShader()
         layout(location = 0) in vec3 aPos;
         layout(location = 1) in vec3 aNormal;
         layout(location = 2) in vec2 aUV;
-        layout(location = 3) in vec4 aTangent; // xyz = tangent, w = bitangent sign
+        layout(location = 3) in vec4 aTangent;
 
         uniform mat4 uModel;
         uniform mat4 uView;
@@ -290,7 +302,7 @@ void RenderSystem::CompileGBufferShader()
 
             vec3 vN = normalize(viewNormalMatrix * aNormal);
             vec3 vT = normalize(viewNormalMatrix * aTangent.xyz);
-            vT      = normalize(vT - dot(vT, vN) * vN); // Gram-Schmidt
+            vT      = normalize(vT - dot(vT, vN) * vN);
             vec3 vB = cross(vN, vT) * aTangent.w;
             vViewTBN = mat3(vT, vB, vN);
 
@@ -304,19 +316,19 @@ void RenderSystem::CompileGBufferShader()
         in vec2 vUV;
         in mat3 vViewTBN;
 
-        layout(location = 0) out vec4 FragNormalRoughness; // xyz=normal, w=roughness (backward-compat)
-        layout(location = 1) out vec4 FragRoughness;       // r=roughness
-        layout(location = 2) out vec4 FragMetalness;       // r=metalness
+        layout(location = 0) out vec4 FragNormalRoughness;
+        layout(location = 1) out vec4 FragRoughness;
+        layout(location = 2) out vec4 FragMetalness;
 
-        uniform sampler2D uNormalTex; // unit 1 — tangent-space normal map
-        uniform sampler2D uMRTex;     // unit 2 — G=roughness, B=metallic
+        uniform sampler2D uNormalTex;
+        uniform sampler2D uMRTex;
 
         void main()
         {
             vec3 tangentN   = texture(uNormalTex, vUV).rgb * 2.0 - 1.0;
             vec3 viewNormal = normalize(vViewTBN * tangentN);
 
-            vec2 mr = texture(uMRTex, vUV).gb; // g=roughness, b=metallic
+            vec2 mr = texture(uMRTex, vUV).gb;
             float perceptualRoughness = clamp(mr.x, 0.045, 1.0);
             float metalness           = clamp(mr.y, 0.0,   1.0);
 

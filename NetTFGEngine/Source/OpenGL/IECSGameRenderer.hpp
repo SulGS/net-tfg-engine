@@ -47,6 +47,7 @@ public:
         world.GetEntityManager().RegisterComponentType<UIText>();
 		world.GetEntityManager().RegisterComponentType<UITextField>();
 
+		world.GetEntityManager().RegisterComponentType<DirectionalLightComponent>();
 		world.GetEntityManager().RegisterComponentType<PointLightComponent>();
 
         world.GetEntityManager().RegisterComponentType<AudioSourceComponent>();
