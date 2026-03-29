@@ -264,7 +264,7 @@ void RenderSystem::DirShadowPass(EntityManager::Query<MeshComponent, Transform>&
     castShadows = true; // render shadow map if light exists
 
     const auto& rs = RenderSettings::instance();
-    const int   res = m_shadowRes;
+    const int   res = rs.getDirShadowResolution();
 
     // Orthographic frustum dimensions read from RenderSettings so they can be
     // tuned per-quality-preset or adjusted at runtime without a recompile.

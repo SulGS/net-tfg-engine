@@ -72,14 +72,13 @@ public:
     //  RUNTIME — POINT LIGHT SHADOWS
     // =======================================================
 
-    // Shadow map resolution (width == height).
-    // Also used for the directional light shadow map.
+    // Point light cubemap shadow resolution (width == height).
     // Call RenderSystem::ReInitShadows() after changing.
     void setShadowResolution(int v) { m_shadowRes = v; }
     int  getShadowResolution()const { return m_shadowRes; }
 
-    void setShadowsEnabled(bool v) { m_shadowsEnabled = v; }
-    bool getShadowsEnabled()  const { return m_shadowsEnabled; }
+    void setPointShadowsEnabled(bool v) { m_shadowsEnabled = v; }
+    bool getPointShadowsEnabled()  const { return m_shadowsEnabled; }
 
     void  setShadowNearPlane(float v) { m_shadowNearPlane = v; }
     float getShadowNearPlane()  const { return m_shadowNearPlane; }
@@ -98,10 +97,16 @@ public:
     //                           DirShadowPass is skipped entirely
     //                           and the shader receives no occlusion
     //                           from the directional light.
-    //                           Independent of getShadowsEnabled()
+    //                           Independent of getPointShadowsEnabled()
     //                           so point light shadows can remain on
     //                           while directional shadows are off
     //                           (useful for low-end or VeryLow preset).
+    //
+    //  getDirShadowResolution()— resolution of the directional ortho
+    //                           shadow map (independent of point light
+    //                           shadow resolution).
+    //                           Call RenderSystem::ReInitShadows() after
+    //                           changing.
     //
     //  getDirShadowExtent()   — half-width and half-height of
     //                           the ortho frustum in world units.
@@ -115,13 +120,18 @@ public:
     //                           frustum on the world origin.
     //                           Default: near=-100, far=100.
     //
-    //  Changing any of these takes effect on the next frame with
+    //  Changing extent/near/far takes effect on the next frame with
     //  no GPU resource recreation needed.
     // =======================================================
 
     // Master on/off for the directional shadow map pass.
     void setDirShadowsEnabled(bool v) { m_dirShadowsEnabled = v; }
     bool getDirShadowsEnabled() const { return m_dirShadowsEnabled; }
+
+    // Directional shadow map resolution (independent of point light res).
+    // Call RenderSystem::ReInitShadows() after changing.
+    void setDirShadowResolution(int v) { m_dirShadowRes = v; }
+    int  getDirShadowResolution() const { return m_dirShadowRes; }
 
     void  setDirShadowExtent(float v) { m_dirShadowExtent = v; }
     float getDirShadowExtent()  const { return m_dirShadowExtent; }
@@ -249,12 +259,13 @@ private:
             m_maxShadowLights = 0;
             m_msaaSamples = 1;
             m_anisotropy = 1.0f;
-            m_shadowsEnabled = false; // point light shadows off
+            m_shadowsEnabled = false;
             m_shadowRes = 128;
             m_shadowNearPlane = 0.5f;
             m_shadowBiasFactor = 2.0f;
             m_shadowBiasUnits = 4.0f;
-            m_dirShadowsEnabled = false; // directional shadows off
+            m_dirShadowsEnabled = false;
+            m_dirShadowRes = 512;
             m_dirShadowExtent = 30.0f;
             m_dirShadowNear = -50.0f;
             m_dirShadowFar = 50.0f;
@@ -272,15 +283,24 @@ private:
             m_maxShadowLights = 2;
             m_msaaSamples = 1;
             m_anisotropy = 2.0f;
-            m_shadowsEnabled = false; // point light shadows off
+            m_shadowsEnabled = false;
             m_shadowRes = 256;
             m_shadowNearPlane = 0.3f;
             m_shadowBiasFactor = 2.0f;
             m_shadowBiasUnits = 4.0f;
-            m_dirShadowsEnabled = true;  // directional shadows on
+            m_dirShadowsEnabled = true;
+            m_dirShadowRes = 1024;
             m_dirShadowExtent = 50.0f;
             m_dirShadowNear = -100.0f;
             m_dirShadowFar = 100.0f;
+            m_exposure = 1.0f;
+            m_filmicEnabled = false;
+            m_gamma = 2.2f;
+            m_bloomEnabled = false;
+            m_fxaaEnabled = true;
+            break;
+
+        case QualityPreset::Medium:
             m_baseMip = 1;
             m_useCompression = true;
             m_maxLights = 256;
@@ -293,6 +313,7 @@ private:
             m_shadowBiasFactor = 2.0f;
             m_shadowBiasUnits = 4.0f;
             m_dirShadowsEnabled = true;
+            m_dirShadowRes = 2048;
             m_dirShadowExtent = 50.0f;
             m_dirShadowNear = -100.0f;
             m_dirShadowFar = 100.0f;
@@ -326,6 +347,7 @@ private:
             m_shadowBiasFactor = 2.0f;
             m_shadowBiasUnits = 4.0f;
             m_dirShadowsEnabled = true;
+            m_dirShadowRes = 4096;
             m_dirShadowExtent = 50.0f;
             m_dirShadowNear = -100.0f;
             m_dirShadowFar = 100.0f;
@@ -354,11 +376,12 @@ private:
             m_msaaSamples = 8;
             m_anisotropy = 16.0f;
             m_shadowsEnabled = true;
-            m_shadowRes = 2048;
+			m_shadowRes = 2048;
             m_shadowNearPlane = 0.05f;
             m_shadowBiasFactor = 2.0f;
             m_shadowBiasUnits = 4.0f;
             m_dirShadowsEnabled = true;
+            m_dirShadowRes = 8192;
             // Ultra: larger frustum to cover expansive scenes at high res.
             m_dirShadowExtent = 75.0f;
             m_dirShadowNear = -150.0f;
@@ -402,6 +425,7 @@ private:
 
     // ---- Runtime — directional light shadow frustum ----
     bool  m_dirShadowsEnabled = true;  // independent toggle
+    int   m_dirShadowRes = 2048;       // independent resolution
     float m_dirShadowExtent = 50.0f;
     float m_dirShadowNear = -100.0f;
     float m_dirShadowFar = 100.0f;

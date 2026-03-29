@@ -1,4 +1,4 @@
-#include "RenderSystem.hpp"
+ï»¿#include "RenderSystem.hpp"
 
 void RenderSystem::Init(int screenW, int screenH)
 {
@@ -72,7 +72,7 @@ void RenderSystem::Resize(int screenW, int screenH)
     glDeleteTextures(1, &m_ldrTex);     m_ldrTex = 0;
     InitLDRFBO();
 
-    // Dir shadow map resolution does not depend on screen size — no resize needed.
+    // Dir shadow map resolution does not depend on screen size ï¿½ no resize needed.
 }
 
 void RenderSystem::ReInitShadows()
@@ -130,7 +130,7 @@ void RenderSystem::Update(EntityManager& entityManager,
 
     const auto& rs = RenderSettings::instance();
 
-    if (rs.getShadowsEnabled())
+    if (rs.getPointShadowsEnabled())
         ShadowPass(entityManager, meshQuery);   // point light cubemap shadows
     else
         m_shadowCount = 0;

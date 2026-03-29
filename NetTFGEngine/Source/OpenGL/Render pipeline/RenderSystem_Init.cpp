@@ -103,7 +103,7 @@ void RenderSystem::InitDirLightUBO()
 // =====================================================
 void RenderSystem::InitDirShadowMap()
 {
-    int res = RenderSettings::instance().getShadowResolution();
+    int res = RenderSettings::instance().getDirShadowResolution();
 
     glGenTextures(1, &m_dirShadowTex);
     glBindTexture(GL_TEXTURE_2D, m_dirShadowTex);

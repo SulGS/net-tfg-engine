@@ -418,7 +418,8 @@ void RenderSystem::DumpBuffers() const
     // flag — if it's non-zero Init() created it, and DirShadowPass() would
     // have filled it if a directional light exists and shadows are enabled.
     if (m_dirShadowTex) {
-        DumpTexture2D_DirShadow(m_dirShadowTex, m_shadowRes, path("dir_shadow.png"));
+        const int dirRes = RenderSettings::instance().getDirShadowResolution();
+        DumpTexture2D_DirShadow(m_dirShadowTex, dirRes, path("dir_shadow.png"));
         Debug::Info("RenderSystem::DumpBuffers") << "Saved dir_shadow.png\n";
     }
 
