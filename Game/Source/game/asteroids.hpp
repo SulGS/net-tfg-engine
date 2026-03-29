@@ -652,9 +652,9 @@ public:
 
         Entity escenario = world.GetEntityManager().CreateEntity();
         Transform* tesc = world.GetEntityManager().AddComponent<Transform>(escenario, Transform{});
-        tesc->setPosition(glm::vec3(0.0f, 0.0f, -2.0f));
-        tesc->setRotation(glm::vec3(90.0f, 0.0f, 0.0f));
-        tesc->setScale(glm::vec3(6.0f, 6.0f, 6.0f));
+        tesc->setPosition(glm::vec3(0.0f, 0.0f, -130.0f));
+        tesc->setRotation(glm::vec3(180.0f, 0.0f, 0.0f));
+        tesc->setScale(glm::vec3(1.0f, 1.0f, 1.0f));
 
         auto escenarioMat = std::make_shared<Material>("ggx.vert", "ggx.frag");
         world.GetEntityManager().AddComponent<MeshComponent>(escenario, MeshComponent(new Mesh("escenario.glb", escenarioMat)));

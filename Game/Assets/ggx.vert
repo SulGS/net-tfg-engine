@@ -11,7 +11,9 @@ uniform mat4 uProjection;
 
 out vec3 vWorldPos;
 out vec2 vUV;
-out mat3 vTBN;
+out vec3 vT;
+out vec3 vB;
+out vec3 vN;
 
 void main()
 {
@@ -19,14 +21,26 @@ void main()
     vWorldPos     = worldPos.xyz;
     vUV           = aUV;
 
-    mat3 normalMatrix = mat3(transpose(inverse(uModel)));
+    // Extract rotation-only from uModel by stripping scale from each column.
+    // Numerically stable at any uniform scale (e.g. 200): all values stay near
+    // 1.0, unlike transpose(inverse(uModel)) which produces values of 1/scale
+    // (0.005 at scale 200) causing precision loss in interpolated TBN varyings
+    // across large triangles — the root cause of the specular dot/ring artifact.
+    mat3 modelMat = mat3(uModel);
+    mat3 rotOnly  = mat3(
+        modelMat[0] / length(modelMat[0]),
+        modelMat[1] / length(modelMat[1]),
+        modelMat[2] / length(modelMat[2])
+    );
 
-    vec3 N = normalize(normalMatrix * aNormal);
-    vec3 T = normalize(normalMatrix * aTangent.xyz);
+    vec3 N = normalize(rotOnly * aNormal);
+    vec3 T = normalize(rotOnly * aTangent.xyz);
     T      = normalize(T - dot(T, N) * N); // Gram-Schmidt re-orthogonalize
     vec3 B = cross(N, T) * aTangent.w;     // w = bitangent handedness
 
-    vTBN = mat3(T, B, N);
+    vT = T;
+    vB = B;
+    vN = N;
 
     gl_Position = uProjection * uView * worldPos;
 }

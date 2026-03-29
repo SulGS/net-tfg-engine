@@ -5,7 +5,9 @@
 // -------------------------------------------------------
 in vec3 vWorldPos;
 in vec2 vUV;
-in mat3 vTBN;
+in vec3 vT;
+in vec3 vB;
+in vec3 vN;
 
 // -------------------------------------------------------
 // MRT output
@@ -70,12 +72,19 @@ const float PI = 3.14159265358979;
 
 // -------------------------------------------------------
 // Normal map decode
+// GL_TEXTURE_LOD_BIAS on the normal map texture object
+// handles mip selection — no shader bias needed.
 // -------------------------------------------------------
 vec3 SampleNormal()
 {
     vec3 n = texture(uNormalTex, vUV).rgb;
     n      = n * 2.0 - 1.0;
-    return normalize(vTBN * n);
+
+    vec3 T = normalize(vT);
+    vec3 B = normalize(vB);
+    vec3 N = normalize(vN);
+
+    return normalize(mat3(T, B, N) * n);
 }
 
 // -------------------------------------------------------
@@ -172,7 +181,7 @@ float ShadowPCSS(int shadowIdx, vec3 fragToLight,
         if (depth < refDepth) { blockerSum += depth; blockerCount++; }
     }
 
-    if (blockerCount == 0)              return 1.0;
+    if (blockerCount == 0)               return 1.0;
     if (blockerCount == kBlockerSamples) return 0.0;
 
     float avgBlocker = blockerSum / float(blockerCount);
@@ -218,16 +227,7 @@ float GetShadowFactor(int lightBufIndex, vec3 lightPos,
 
 // -------------------------------------------------------
 // Directional light PCF shadow
-//
-// Uses the hardware comparison sampler (sampler2DShadow)
-// so each texture() call already returns a [0,1] filtered
-// shadow factor.  A simple 3×3 Poisson disk gives smooth
-// soft shadows at low cost — sufficient for a directional
-// (sun/sky) light whose penumbra is essentially infinite.
-//
-// Returns 1.0 = fully lit, 0.0 = fully in shadow.
 // -------------------------------------------------------
-// 2-D Poisson disk offsets in texel space (normalised by shadowRes).
 const vec2 kPoissonDisk[16] = vec2[](
     vec2(-0.94201624, -0.39906216),
     vec2( 0.94558609, -0.76890725),
@@ -249,30 +249,24 @@ const vec2 kPoissonDisk[16] = vec2[](
 
 float DirShadowPCF(vec3 worldPos, float NdotL)
 {
-    // Transform to light-space NDC.
-    vec4 lsPos  = uDirLightSpaceMatrix * vec4(worldPos, 1.0);
-    vec3 projCoords = lsPos.xyz / lsPos.w;   // [-1,+1]
-    projCoords = projCoords * 0.5 + 0.5;     // [0,1]
+    vec4 lsPos      = uDirLightSpaceMatrix * vec4(worldPos, 1.0);
+    vec3 projCoords = lsPos.xyz / lsPos.w;
+    projCoords      = projCoords * 0.5 + 0.5;
 
-    // Fragments outside the shadow frustum → fully lit.
     if (projCoords.x < 0.0 || projCoords.x > 1.0 ||
         projCoords.y < 0.0 || projCoords.y > 1.0 ||
         projCoords.z > 1.0)
         return 1.0;
 
-    // Slope-scaled bias to reduce acne on grazing surfaces.
-    float bias = max(0.005, 0.010 * (1.0 - NdotL));
+    float bias         = max(0.005, 0.010 * (1.0 - NdotL));
     float compareDepth = projCoords.z - bias;
 
-    // 16-sample Poisson PCF.  Spread = ~2 texels for soft penumbra.
     const float kSpread  = 2.0;
     const float kTexelSz = 1.0 / float(uShadowRes);
     float shadow = 0.0;
     for (int i = 0; i < 16; i++)
     {
         vec2 offset = kPoissonDisk[i] * kTexelSz * kSpread;
-        // texture() with sampler2DShadow takes a vec3: (uv, compareDepth).
-        // Hardware returns 1.0 if the stored depth > compareDepth (lit).
         shadow += texture(uDirShadowMap,
                           vec3(projCoords.xy + offset, compareDepth));
     }
@@ -304,7 +298,7 @@ vec3 CalcPointLights(vec3 N, vec3 V,
         float w     = max(0.0, 1.0 - (dist / rad) * (dist / rad));
         atten *= w * w;
 
-        vec3 Li     = l.colorIntensity.rgb * atten;
+        vec3  Li     = l.colorIntensity.rgb * atten;
         float shadow = GetShadowFactor(i, l.posRadius.xyz, dist, l.posRadius.w, NdotL);
 
         vec3 brdf = CookTorranceBRDF(N, V, L, albedo, F0, alpha, metallic);
@@ -321,16 +315,12 @@ vec3 CalcDirLight(vec3 N, vec3 V,
                   vec3 albedo, vec3 F0,
                   float alpha, float metallic, float ao)
 {
-    // colorEnabled.a == 0 → no directional light.
     if (uDirLightColorEnabled.a < 0.5)
         return vec3(0.0);
 
-    // uDirLightDirIntensity.xyz points FROM the light TOWARD the scene,
-    // so we negate it to get the L vector (toward the light).
     vec3  L     = normalize(-uDirLightDirIntensity.xyz);
     float NdotL = clamp(dot(N, L), 0.0, 1.0);
 
-    // Directional light has no distance falloff.
     vec3 Li = uDirLightColorEnabled.rgb * uDirLightDirIntensity.w;
 
     float shadow = DirShadowPCF(vWorldPos, NdotL);
@@ -357,11 +347,9 @@ void main()
     vec3 V  = normalize(uCameraPos - vWorldPos);
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
 
-    // Accumulate point lights + directional light.
     vec3 color = CalcPointLights(N, V, albedo, F0, alpha, metallic, ao)
                + CalcDirLight   (N, V, albedo, F0, alpha, metallic, ao);
 
-    // Emissive
     color += texture(uEmissiveTex, vUV).rgb;
 
     FragColor = vec4(color, 1.0);

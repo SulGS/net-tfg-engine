@@ -339,7 +339,6 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
     glDepthMask(GL_TRUE);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     // Point light SSBO + shadow SSBO
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_lightSSBO);

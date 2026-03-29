@@ -290,7 +290,12 @@ private:
                 // -------------------------------------------------------
                 std::unordered_map<uint64_t, GLuint> texCache;
 
-                auto loadTex = [&](int texIndex, bool sRGB) -> GLuint
+                // isNormalMap: applies GL_TEXTURE_LOD_BIAS = 2.0 to push sampling
+                // toward blurrier mips. At large world scale (e.g. 200) the GPU picks
+                // mip 0 because screen-space UV derivatives are tiny — every normal
+                // map texel covers a large screen area and produces a distinct specular
+                // dot. The LOD bias fixes this at all resolutions without shader changes.
+                auto loadTex = [&](int texIndex, bool sRGB, bool isNormalMap = false) -> GLuint
                     {
                         if (texIndex < 0 || texIndex >= (int)model.textures.size())
                             return 0;
@@ -350,16 +355,6 @@ private:
                         // -------------------------------------------------------
                         // Resolution reduction — box-filter downsample on CPU by
                         // skipping `baseMip` mip levels.
-                        //
-                        // sRGB textures (albedo) must be linearised before
-                        // averaging and re-encoded afterwards, otherwise the
-                        // non-linear encoding makes the result too dark.
-                        // Linear textures (normal, MR, AO, emissive) are averaged
-                        // directly in encoded space, which is correct.
-                        //
-                        // We use a gamma-2.0 approximation (square / sqrt) which
-                        // is fast, avoids the pow(x,2.2) expense, and is accurate
-                        // enough for mip generation purposes.
                         // -------------------------------------------------------
                         std::vector<uint8_t> downsampled;
                         int uploadW = img.width;
@@ -375,14 +370,13 @@ private:
                             int sampleArea = scale * scale;
                             downsampled.resize(uploadW * uploadH * components);
 
-                            // Gamma-2.0 encode/decode helpers (fast, good enough for mips)
                             auto toLinear = [](uint8_t v) -> float {
                                 float f = v / 255.0f;
-                                return f * f;                        // gamma ~2.0 decode
+                                return f * f;
                                 };
                             auto toSRGB = [](float v) -> uint8_t {
                                 v = glm::clamp(v, 0.0f, 1.0f);
-                                return static_cast<uint8_t>(sqrtf(v) * 255.0f + 0.5f); // gamma ~2.0 encode
+                                return static_cast<uint8_t>(sqrtf(v) * 255.0f + 0.5f);
                                 };
 
                             for (int y = 0; y < uploadH; ++y)
@@ -391,13 +385,11 @@ private:
                                 {
                                     for (int c = 0; c < components; ++c)
                                     {
-                                        // Alpha is never gamma-encoded regardless of sRGB flag
                                         bool isAlpha = (c == 3);
                                         bool doGamma = sRGB && !isAlpha;
 
                                         if (doGamma)
                                         {
-                                            // Linearise → average → re-encode
                                             float sum = 0.0f;
                                             for (int dy = 0; dy < scale; ++dy)
                                                 for (int dx = 0; dx < scale; ++dx)
@@ -411,7 +403,6 @@ private:
                                         }
                                         else
                                         {
-                                            // Linear / alpha — average encoded values directly
                                             uint32_t sum = 0;
                                             for (int dy = 0; dy < scale; ++dy)
                                                 for (int dx = 0; dx < scale; ++dx)
@@ -446,6 +437,13 @@ private:
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
                         glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY,
                             RenderSettings::instance().getAnisotropy());
+
+                        // Normal maps: bias toward blurrier mips to prevent per-texel
+                        // specular dots at large world scale. Tune 2.0f if needed:
+                        // raise if dots persist, lower if normals look too flat.
+                        if (isNormalMap)
+                            glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS, 2.0f);
+
                         glBindTexture(GL_TEXTURE_2D, 0);
 
                         texCache[key] = id;
@@ -454,9 +452,6 @@ private:
 
                 // -------------------------------------------------------
                 // Stride-aware accessor helper.
-                // Returns a per-index accessor lambda, or nullptr if the
-                // attribute doesn't exist in this primitive.
-                // Handles both tightly-packed and interleaved buffers.
                 // -------------------------------------------------------
                 auto getAccessor = [&](const tinygltf::Primitive& prim,
                     const std::string& name)
@@ -473,7 +468,6 @@ private:
                             + view.byteOffset
                             + acc.byteOffset;
 
-                        // byteStride == 0 means tightly packed — compute natural stride
                         size_t componentSize = tinygltf::GetComponentSizeInBytes(acc.componentType);
                         size_t numComponents = tinygltf::GetNumComponentsInType(acc.type);
                         size_t stride = (view.byteStride != 0)
@@ -500,7 +494,6 @@ private:
                         size_t      vertOffset = vertices.size();
                         vertices.resize(vertOffset + posAcc.count);
 
-                        // ---- STEP 1: fill position, normal, uv, tangent ----
                         for (size_t i = 0; i < posAcc.count; ++i) {
                             Vertex& v = vertices[vertOffset + i];
 
@@ -527,10 +520,9 @@ private:
                                 const float* t = getTan(i);
                                 v.tangent = glm::vec4(t[0], t[1], t[2], t[3]);
                             }
-                            // if no tangents: leave uninitialized, generated in STEP 2
                         }
 
-                        // ---- STEP 2: generate tangents if mesh didn't provide them ----
+                        // ---- Generate tangents if mesh didn't provide them ----
                         if (!getTan) {
                             std::vector<glm::vec3> tangentAccum(posAcc.count, glm::vec3(0.0f));
 
@@ -585,7 +577,7 @@ private:
                                         T = glm::normalize(glm::cross(N, glm::vec3(1.0f, 0.0f, 0.0f)));
                                 }
                                 else {
-                                    T = glm::normalize(T - glm::dot(T, N) * N); // Gram-Schmidt
+                                    T = glm::normalize(T - glm::dot(T, N) * N);
                                 }
 
                                 v.tangent = glm::vec4(T, 1.0f);
@@ -622,21 +614,8 @@ private:
                         }
 
                         // -------------------------------------------------------
-                        // Load all PBR textures
-                        //
-                        // sRGB  = true  → loader uses GL_SRGB8_ALPHA8 /
-                        //                 GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM.
-                        //                 Hardware decodes to linear on sample.
-                        //                 Do NOT call SRGBToLinear() in the shader.
-                        //
-                        // sRGB  = false → linear data, no gamma decode.
-                        //
-                        // glTF spec:
-                        //   baseColorTexture   — sRGB  ✓
-                        //   normalTexture      — linear ✓
-                        //   metallicRoughness  — linear ✓
-                        //   occlusionTexture   — linear ✓
-                        //   emissiveTexture    — linear ✓  (NOT sRGB — spec §5.19)
+                        // Load PBR textures
+                        // normalTex passes isNormalMap=true to apply LOD bias.
                         // -------------------------------------------------------
                         SubMeshRange smr{};
                         smr.indexOffset = static_cast<uint32_t>(indices.size() - primIndices.size());
@@ -646,11 +625,11 @@ private:
                             const auto& mat = model.materials[prim.material];
                             const auto& pbr = mat.pbrMetallicRoughness;
 
-                            smr.diffuseTex = loadTex(pbr.baseColorTexture.index, true);  // sRGB
-                            smr.normalTex = loadTex(mat.normalTexture.index, false); // linear
-                            smr.mrTex = loadTex(pbr.metallicRoughnessTexture.index, false); // linear
-                            smr.occlusionTex = loadTex(mat.occlusionTexture.index, false); // linear
-                            smr.emissiveTex = loadTex(mat.emissiveTexture.index, false); // linear (glTF spec §5.19)
+                            smr.diffuseTex = loadTex(pbr.baseColorTexture.index, true);        // sRGB
+                            smr.normalTex = loadTex(mat.normalTexture.index, false, true);  // linear, isNormalMap
+                            smr.mrTex = loadTex(pbr.metallicRoughnessTexture.index, false);        // linear
+                            smr.occlusionTex = loadTex(mat.occlusionTexture.index, false);        // linear
+                            smr.emissiveTex = loadTex(mat.emissiveTexture.index, false);        // linear
                         }
 
                         buffer.subMeshes.push_back(smr);
@@ -715,7 +694,6 @@ private:
                 if (buffer.VBO) glDeleteBuffers(1, &buffer.VBO);
                 if (buffer.VAO) glDeleteVertexArrays(1, &buffer.VAO);
             });
-
 
         AssetManager::instance().registerType<ShaderSource>(
             // Loader
