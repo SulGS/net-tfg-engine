@@ -180,7 +180,7 @@ void RenderSystem::ShadowPass(EntityManager& em, EntityManager::Query<MeshCompon
             glUniform1i(glGetUniformLocation(m_shadowShader, "uCubeArrayLayer"), shadowIdx * 6);
 
             for (auto [me, meshC, xf] : meshQuery) {
-                if (!meshC->enabled || !meshC->mesh) continue;
+                if (!meshC->enabled || !meshC->mesh || !meshC->castShadows) continue;
                 glUniformMatrix4fv(glGetUniformLocation(m_shadowShader, "uModel"),
                     1, GL_FALSE, glm::value_ptr(xf->getModelMatrix()));
                 meshC->mesh->drawDepthOnly(glm::mat4(1.0f), m_shadowShader);
@@ -309,7 +309,7 @@ void RenderSystem::DirShadowPass(EntityManager::Query<MeshComponent, Transform>&
         1, GL_FALSE, glm::value_ptr(lightSpace));
 
     for (auto [entity, meshC, xf] : meshQuery) {
-        if (!meshC->enabled || !meshC->mesh) continue;
+        if (!meshC->enabled || !meshC->mesh || !meshC->castShadows) continue;
         glUniformMatrix4fv(glGetUniformLocation(m_dirShadowShader, "uModel"),
             1, GL_FALSE, glm::value_ptr(xf->getModelMatrix()));
         meshC->mesh->drawDepthOnly(glm::mat4(1.0f), m_dirShadowShader);

@@ -6,7 +6,7 @@
 void RenderSystem::CompileShadowShader()
 {
     const char* vert = R"GLSL(
-        #version 430 core 
+        #version 430 core
         layout(location = 0) in vec3 aPos;
         uniform mat4 uModel;
         void main() { gl_Position = uModel * vec4(aPos, 1.0); }

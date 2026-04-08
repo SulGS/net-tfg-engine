@@ -302,8 +302,9 @@ class MeshComponent : public IComponent {
 public:
     std::unique_ptr<Mesh> mesh;
     bool enabled;
-    MeshComponent() : mesh(nullptr), enabled(true) {}
-    MeshComponent(Mesh* m) : mesh(m), enabled(true) {}
+	bool castShadows = true; // NEW — set false to skip shadow map for this mesh
+    MeshComponent() : mesh(nullptr), enabled(true), castShadows(true) {}
+    MeshComponent(Mesh* m) : mesh(m), enabled(true), castShadows(true) {}
 };
 
 class CameraSystem : public ISystem {

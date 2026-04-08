@@ -442,7 +442,7 @@ private:
                         // specular dots at large world scale. Tune 2.0f if needed:
                         // raise if dots persist, lower if normals look too flat.
                         if (isNormalMap)
-                            glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS, 2.0f);
+                            glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS, 0.0f);
 
                         glBindTexture(GL_TEXTURE_2D, 0);
 

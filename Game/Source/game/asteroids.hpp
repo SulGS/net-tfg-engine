@@ -595,6 +595,7 @@ public:
 		Entity sunEntity = world.GetEntityManager().CreateEntity();
 		Transform* sunTransform = world.GetEntityManager().AddComponent<Transform>(sunEntity, Transform{});
 		DirectionalLightComponent* sunLight = world.GetEntityManager().AddComponent<DirectionalLightComponent>(sunEntity, DirectionalLightComponent{});
+		sunLight->color = glm::vec3(1.0f, 0.95f, 0.8f);
 
         Entity player1 = world.GetEntityManager().CreateEntity();
         Transform* t1 = world.GetEntityManager().AddComponent<Transform>(player1, Transform{});
@@ -646,15 +647,16 @@ public:
         Transform* tlight = world.GetEntityManager().AddComponent<Transform>(light, Transform{});
         tlight->setPosition(glm::vec3(0.0f, 0.0f, 15.0f));
         PointLightComponent* lightComp = world.GetEntityManager().AddComponent<PointLightComponent>(light, PointLightComponent{});
+		lightComp->color = glm::vec3(0.302, 0.651, 1.0);
         lightComp->intensity = 1000.0f;
         lightComp->radius = 100.0f;
         lightComp->castShadows = true;
 
         Entity escenario = world.GetEntityManager().CreateEntity();
         Transform* tesc = world.GetEntityManager().AddComponent<Transform>(escenario, Transform{});
-        tesc->setPosition(glm::vec3(0.0f, 0.0f, -130.0f));
-        tesc->setRotation(glm::vec3(180.0f, 0.0f, 0.0f));
-        tesc->setScale(glm::vec3(1.0f, 1.0f, 1.0f));
+        tesc->setPosition(glm::vec3(0.0f, 0.0f, 1.0f));
+        tesc->setRotation(glm::vec3(90.0f,0.0f, 0.0f));
+        tesc->setScale(glm::vec3(12.0f, 12.0f, 12.0f));
 
         auto escenarioMat = std::make_shared<Material>("ggx.vert", "ggx.frag");
         world.GetEntityManager().AddComponent<MeshComponent>(escenario, MeshComponent(new Mesh("escenario.glb", escenarioMat)));
