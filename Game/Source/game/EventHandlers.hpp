@@ -9,6 +9,58 @@
 #include "OpenAL/AudioManager.hpp"
 #include "OpenAL/AudioComponents.hpp"
 
+
+class ToggleWallHandler : public IEventHandler {
+public:
+    void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
+    {
+        auto ev = *reinterpret_cast<const ToggleWallEventData*>(event.data);
+
+        if (ev.isSpoke)
+        {
+            auto query = world.GetEntityManager().CreateQuery<LaserWallID, CenterSpoke>();
+            for (auto [entity, lwid, spoke] : query)
+            {
+                if (lwid->cellId == ev.cellId && lwid->dir == ev.dir)
+                {
+                    lwid->enabled = ev.enabled;
+                    break;
+                }
+            }
+        }
+        else
+        {
+            auto query = world.GetEntityManager().CreateQuery<LaserWallID>();
+            for (auto [entity, lwid] : query)
+            {
+                if (lwid->cellId == ev.cellId && lwid->dir == ev.dir)
+                {
+                    lwid->enabled = ev.enabled;
+                    break;
+                }
+            }
+        }
+    }
+};
+
+class DestroyTileHandler : public IEventHandler {
+public:
+    void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
+    {
+        auto ev = *reinterpret_cast<const DestroyTileEventData*>(event.data);
+
+        auto query = world.GetEntityManager().CreateQuery<TileID>();
+        for (auto [entity, tileId] : query)
+        {
+            if (tileId->id == ev.tileId)
+            {
+                world.GetEntityManager().DestroyEntity(entity);
+                break;
+            }
+        }
+    }
+};
+
 class SpawnBulletHandler : public IEventHandler {
 public:
     void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override

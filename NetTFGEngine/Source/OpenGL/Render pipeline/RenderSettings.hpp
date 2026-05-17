@@ -290,7 +290,7 @@ private:
             m_shadowBiasUnits = 4.0f;
             m_dirShadowsEnabled = true;
             m_dirShadowRes = 1024;
-            m_dirShadowExtent = 50.0f;
+            m_dirShadowExtent = 75.0f;
             m_dirShadowNear = -100.0f;
             m_dirShadowFar = 100.0f;
             m_exposure = 1.0f;
@@ -314,9 +314,9 @@ private:
             m_shadowBiasUnits = 4.0f;
             m_dirShadowsEnabled = true;
             m_dirShadowRes = 2048;
-            m_dirShadowExtent = 50.0f;
+            m_dirShadowExtent = 150.0f;
             m_dirShadowNear = -100.0f;
-            m_dirShadowFar = 100.0f;
+            m_dirShadowFar = 250.0f;
             m_exposure = 1.0f;
             m_filmicEnabled = true;
             m_filmicShoulder = 0.22f;
@@ -348,9 +348,9 @@ private:
             m_shadowBiasUnits = 4.0f;
             m_dirShadowsEnabled = true;
             m_dirShadowRes = 4096;
-            m_dirShadowExtent = 50.0f;
+            m_dirShadowExtent = 300.0f;
             m_dirShadowNear = -100.0f;
-            m_dirShadowFar = 100.0f;
+            m_dirShadowFar = 500.0f;
             m_exposure = 1.0f;
             m_filmicEnabled = true;
             m_filmicShoulder = 0.22f;
@@ -376,16 +376,16 @@ private:
             m_msaaSamples = 8;
             m_anisotropy = 16.0f;
             m_shadowsEnabled = true;
-			m_shadowRes = 2048;
+            m_shadowRes = 2048;
             m_shadowNearPlane = 0.05f;
             m_shadowBiasFactor = 2.0f;
             m_shadowBiasUnits = 4.0f;
             m_dirShadowsEnabled = true;
             m_dirShadowRes = 8192;
             // Ultra: larger frustum to cover expansive scenes at high res.
-            m_dirShadowExtent = 75.0f;
+            m_dirShadowExtent = 600.0f;
             m_dirShadowNear = -150.0f;
-            m_dirShadowFar = 150.0f;
+            m_dirShadowFar = 800.0f;
             m_exposure = 1.2f;
             m_filmicEnabled = true;
             m_filmicShoulder = 0.22f;

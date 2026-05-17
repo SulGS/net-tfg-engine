@@ -9,4 +9,6 @@ ggx.frag
 ship.glb
 generic_texture.vert
 generic_texture.frag
-escenario.glb
+tile.glb
+pilar.glb
+laser_wall.glb

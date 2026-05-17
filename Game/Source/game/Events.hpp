@@ -6,7 +6,9 @@ enum AsteroidEventMask : uint8_t {
 	SPAWN_BULLET = 0,
 	BULLET_COLLIDES = 1,
 	DEATH = 2,
-	RESPAWN = 3
+	RESPAWN = 3,
+	DESTROY_TILE = 4,
+	TOGGLE_WALL = 5
 };
 
 struct SpawnBulletEventData {
@@ -16,6 +18,17 @@ struct SpawnBulletEventData {
 	float posY;
 	float velX;
 	float velY;
+};
+
+struct DestroyTileEventData {
+	int tileId;
+};
+
+struct ToggleWallEventData {
+	int cellId;
+	CellCardinalDirection dir;
+	bool isSpoke;
+	bool enabled;
 };
 
 

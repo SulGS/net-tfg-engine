@@ -100,7 +100,7 @@ public:
 
         ProcessEvents(events);
 		ProcessInputs(inputs);
-        world.Update(isServer, 1 / TICKS_PER_SECOND);
+        world.Update(isServer, 1.0f / TICKS_PER_SECOND);
         
         ECSWorld_To_GameState(state);
 

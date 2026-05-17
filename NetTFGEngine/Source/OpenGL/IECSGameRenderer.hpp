@@ -98,8 +98,12 @@ public:
 
         UIRenderSystem* ui_system = world.GetSystem<UIRenderSystem>();
         ui_system->UpdateScreenSize(window->getWidth(),window->getHeight());
-        
-        world.Update(false, 1.0f / RENDER_TICKS_PER_SECOND); // Assume 60 FPS for now
+
+        auto t1 = std::chrono::high_resolution_clock::now();
+        world.Update(false, 1.0f / RENDER_TICKS_PER_SECOND);
+        auto t2 = std::chrono::high_resolution_clock::now();
+        Debug::Info("Render") << "world.Update: "
+            << std::chrono::duration<float, std::milli>(t2 - t1).count() << "ms\n";
 
 		if (renderDataTransferToLogicCallback) {
 			IECSGameLogic* logic = static_cast<IECSGameLogic*>(GetGameLogic());

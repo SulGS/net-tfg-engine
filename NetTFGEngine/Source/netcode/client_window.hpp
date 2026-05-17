@@ -34,7 +34,9 @@ public:
     GameStateBlob PreviousLocalState;
     GameStateBlob CurrentLocalState;
     std::chrono::steady_clock::time_point lastStateUpdate;
+    std::chrono::steady_clock::time_point previousStateUpdate;
     std::chrono::steady_clock::time_point lastLocalUpdate;
+    std::chrono::steady_clock::time_point previousLocalUpdate;
     std::function<void(GameStateBlob&, OpenGLWindow*)> renderInitCallback;
     std::function<void(GameStateBlob&, OpenGLWindow*)> renderCallback;
     std::function<void(const GameStateBlob&, const GameStateBlob&, const GameStateBlob&, const GameStateBlob&, GameStateBlob&, float, float)> interpolationCallback;
@@ -47,13 +49,15 @@ public:
         : renderInitCallback(initCb), renderCallback(renderCb), interpolationCallback(interpolationCb), needsInit(true)
     {
         lastStateUpdate = std::chrono::steady_clock::now();
+        previousStateUpdate = std::chrono::steady_clock::now();
         lastLocalUpdate = std::chrono::steady_clock::now();
+        previousLocalUpdate = std::chrono::steady_clock::now();
 
-		PreviousServerState.frame = -1;
-		CurrentServerState.frame = -1;
-		PreviousLocalState.frame = -1;
-		CurrentLocalState.frame = -1;
-		RenderState.frame = -1;
+        PreviousServerState.frame = -1;
+        CurrentServerState.frame = -1;
+        PreviousLocalState.frame = -1;
+        CurrentLocalState.frame = -1;
+        RenderState.frame = -1;
     }
 
     ~ClientWindow() {
@@ -121,10 +125,11 @@ public:
 
     void setServerState(GameStateBlob state) {
         std::lock_guard<std::mutex> lock(gStateMutex);
-		
+
 
         if (state.frame > CurrentServerState.frame) {
             PreviousServerState = CurrentServerState;
+            previousStateUpdate = lastStateUpdate;
             CurrentServerState = state;
             lastStateUpdate = std::chrono::steady_clock::now();
         }
@@ -133,8 +138,9 @@ public:
     void setLocalState(GameStateBlob state) {
         std::lock_guard<std::mutex> lock(gStateMutex);
 
-        if (state.frame > CurrentLocalState.frame) {  // ← ADD THIS CHECK
+        if (state.frame > CurrentLocalState.frame) {
             PreviousLocalState = CurrentLocalState;
+            previousLocalUpdate = lastLocalUpdate;
             CurrentLocalState = state;
             lastLocalUpdate = std::chrono::steady_clock::now();
         }
@@ -197,19 +203,25 @@ private:
                 // Calculate interpolation factors
                 auto now = std::chrono::high_resolution_clock::now();
 
+                // Server: sweeps 0->1 over MS_PER_TICK after each new state arrives.
+                // factor=0: render at prevServer. factor=1: render at currServer.
                 float serverInterpolationFactor = 0.0f;
                 if (instance->CurrentServerState.frame != instance->PreviousServerState.frame) {
-                    auto frameDelta = std::chrono::milliseconds(MS_PER_TICK);
-                    auto elapsed = now - instance->lastStateUpdate;  // ✅ FIXED: Use lastStateUpdate
-                    serverInterpolationFactor = std::chrono::duration<float, std::milli>(elapsed).count() / frameDelta.count();
+                    auto elapsed = now - instance->lastStateUpdate;
+                    float elapsedMs = std::chrono::duration<float, std::milli>(elapsed).count();
+                    serverInterpolationFactor = elapsedMs / static_cast<float>(MS_PER_TICK);
+                    if (serverInterpolationFactor < 0.0f) serverInterpolationFactor = 0.0f;
                     if (serverInterpolationFactor > 1.0f) serverInterpolationFactor = 1.0f;
                 }
 
+                // Local: sweeps 0->1 over MS_PER_TICK after each new predicted state.
+                // factor=0: render at prevLocal. factor=1: render at currLocal.
                 float localInterpolationFactor = 0.0f;
-                if (instance->CurrentLocalState.frame != instance->PreviousLocalState.frame) {  // ✅ FIXED: Check local frames
-                    auto frameDelta = std::chrono::milliseconds(MS_PER_TICK);
-                    auto elapsed = now - instance->lastLocalUpdate;  // ✅ FIXED: Use lastLocalUpdate
-                    localInterpolationFactor = std::chrono::duration<float, std::milli>(elapsed).count() / frameDelta.count();
+                if (instance->CurrentLocalState.frame != instance->PreviousLocalState.frame) {
+                    auto elapsed = now - instance->lastLocalUpdate;
+                    float elapsedMs = std::chrono::duration<float, std::milli>(elapsed).count();
+                    localInterpolationFactor = elapsedMs / static_cast<float>(MS_PER_TICK);
+                    if (localInterpolationFactor < 0.0f) localInterpolationFactor = 0.0f;
                     if (localInterpolationFactor > 1.0f) localInterpolationFactor = 1.0f;
                 }
 
@@ -250,7 +262,7 @@ private:
 
             tickCount++;
             if (tickCount == RENDER_TICKS_PER_SECOND) {
-				tickCount = 0;
+                tickCount = 0;
 
                 auto frameEnd = std::chrono::high_resolution_clock::now();
                 auto frameDurationUs =
@@ -267,7 +279,7 @@ private:
                     sum += d;
 
                 double currentMs = frameDurationUs / 1000.0;
-				double currentFps = 1000.0 / currentMs;
+                double currentFps = 1000.0 / currentMs;
                 double meanMs = (sum / static_cast<double>(tickDurations.size())) / 1000.0;
                 double meanFps = 1000.0 / meanMs;
 
@@ -275,7 +287,7 @@ private:
                     << "Frame: " << currentMs << " ms | "
                     << "Avg: " << meanMs << " ms | "
                     << "FPS: " << currentFps << " | "
-					<< "Avg FPS: " << meanFps << " | "
+                    << "Avg FPS: " << meanFps << " | "
                     << "Active: " << instances.size()
                     << "\n";
             }

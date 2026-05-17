@@ -128,6 +128,8 @@ private:
     GLuint m_dirShadowFBO = 0;
     GLuint m_dirShadowShader = 0;
 
+    GPUDirLight m_cpuDirLight{};  // cached copy of the directional light for CPU-side use (e.g. particles)
+
     // =====================================================
     //  GBuffer framebuffer
     // =====================================================
@@ -220,7 +222,8 @@ private:
         const glm::mat4& view, const glm::mat4& projection);
     void CollectLightsPass(EntityManager& em);  // also handles directional light
     void ShadowPass(EntityManager& em, EntityManager::Query<MeshComponent, Transform>& meshQuery);
-    void DirShadowPass(EntityManager::Query<MeshComponent, Transform>& meshQuery); // NEW
+    void DirShadowPass(EntityManager::Query<MeshComponent, Transform>& meshQuery,
+        const glm::vec3& cameraPos);
     void ShadingPass(EntityManager::Query<MeshComponent, Transform>& meshQuery,
         const glm::mat4& view, const glm::mat4& projection,
         const glm::vec3& cameraPos);

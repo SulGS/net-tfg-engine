@@ -93,28 +93,26 @@ void RenderSystem::CollectLightsPass(EntityManager& em)
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 
     // ---- Directional light ----
-    // Use the first DirectionalLightComponent found; zero-out if none.
-    GPUDirLight gpuDir{};
+    // Write into the CPU cache — no glGetBufferSubData readback stall.
+    m_cpuDirLight = GPUDirLight{};  // clear each frame
 
     auto dirQuery = em.CreateQuery<DirectionalLightComponent>();
     bool foundDir = false;
     for (auto [entity, dirLight] : dirQuery) {
-        if (foundDir) break; // only one supported
+        if (foundDir) break;
         foundDir = true;
 
         glm::vec3 dir = glm::normalize(dirLight->direction);
-        gpuDir.directionIntensity = glm::vec4(dir, dirLight->intensity);
-        gpuDir.colorEnabled = glm::vec4(dirLight->color, 1.0f); // a=1 means enabled
-
-        // lightSpaceMatrix is filled in DirShadowPass once we know shadows are
-        // enabled.  We pre-fill identity here so the shader can at least read it
-        // without undefined behaviour if shadows are disabled.
-        gpuDir.lightSpaceMatrix = glm::mat4(1.0f);
+        m_cpuDirLight.directionIntensity = glm::vec4(dir, dirLight->intensity);
+        m_cpuDirLight.colorEnabled = glm::vec4(dirLight->color, 1.0f);
+        // lightSpaceMatrix filled in DirShadowPass; pre-fill identity so the
+        // shader can read it safely even when shadows are disabled.
+        m_cpuDirLight.lightSpaceMatrix = glm::mat4(1.0f);
     }
     // If no dir light found, colorEnabled.a stays 0 → shader skips the term.
 
     glBindBuffer(GL_UNIFORM_BUFFER, m_dirLightUBO);
-    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(GPUDirLight), &gpuDir);
+    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(GPUDirLight), &m_cpuDirLight);
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
 }
 
@@ -216,93 +214,75 @@ void RenderSystem::ShadowPass(EntityManager& em, EntityManager::Query<MeshCompon
 //  Renders the scene from the directional light's point
 //  of view into a 2-D orthographic shadow map.
 //
-//  The light-space matrix is also patched into the dir
-//  light UBO so the shading pass can transform world
-//  positions into shadow space without a second uniform.
+//  The frustum is centred on cameraPos so that distant
+//  objects visible to the camera always receive shadows.
 //
-//  Scene bounds: we use a fixed-size orthographic frustum
-//  centred on the world origin.  For production use you
-//  would compute a tight fit around the camera frustum
-//  (CSM / stable shadow mapping), but this simple form is
-//  correct and produces good results for bounded scenes.
+//  Peter panning fix:
+//    - glPolygonOffset is NOT used for directional shadows.
+//      With kFar = 800 the depth range is huge, making any
+//      fixed polygon offset massive in world space and
+//      causing geometry to visually detach from its shadow.
+//    - Instead we enable GL_DEPTH_CLAMP (prevents near-plane
+//      clipping of steep casters) and rely on a receiver-side
+//      normal-scaled bias in the shading shader, normalised by
+//      kFar so it stays correct regardless of frustum depth.
 // =====================================================
-void RenderSystem::DirShadowPass(EntityManager::Query<MeshComponent, Transform>& meshQuery)
+void RenderSystem::DirShadowPass(EntityManager::Query<MeshComponent, Transform>& meshQuery,
+    const glm::vec3& cameraPos)
 {
-    // Read the current dir light UBO to check whether shadows are wanted.
-    // We only need the colorEnabled.a flag — read it back from the buffer.
-    GPUDirLight gpuDir{};
-    glBindBuffer(GL_UNIFORM_BUFFER, m_dirLightUBO);
-    glGetBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(GPUDirLight), &gpuDir);
-    glBindBuffer(GL_UNIFORM_BUFFER, 0);
-
-    // a == 0 → no directional light, or castShadows == false at the ECS level.
-    // We still need to know castShadows — it was encoded by CollectLightsPass:
-    // if the component has castShadows=false we set a=1 but skip the shadow matrix
-    // update.  Easier: re-query here.  (It's a cheap query, only one entity.)
-    // Actually the cleanest approach: CollectLightsPass already wrote a=1 when
-    // the light exists.  We check an additional flag via a re-read of the component.
-    // To avoid coupling, we keep a small cached bool from CollectLightsPass.
-    // Since we don't have that cache, we do a lightweight re-query.
-
-    // If no dir light at all, nothing to do.
-    if (gpuDir.colorEnabled.a < 0.5f)
+    // No dir light → nothing to do. Read from CPU cache (no GPU readback stall).
+    if (m_cpuDirLight.colorEnabled.a < 0.5f)
         return;
-
-    // Re-query to get castShadows.  This is the only place we need it after
-    // CollectLightsPass, and the query is O(1) for a single component.
-    // (If your ECS is expensive to query mid-frame, cache a bool in the class.)
-    bool castShadows = false;
-    glm::vec3 lightDir = glm::vec3(gpuDir.directionIntensity);
-
-    // We need the EntityManager here — but DirShadowPass only receives the
-    // mesh query.  Solution: the shadow pass reads castShadows from the UBO
-    // extension.  For simplicity we always render the shadow map when the
-    // light is present; the component's castShadows flag suppresses binding
-    // in the shading pass instead (see ShadingPass).
-    // *** If you want per-component castShadows to fully skip the render,
-    //     pass EntityManager& em into this function and re-query here. ***
-    castShadows = true; // render shadow map if light exists
 
     const auto& rs = RenderSettings::instance();
     const int   res = rs.getDirShadowResolution();
-
-    // Orthographic frustum dimensions read from RenderSettings so they can be
-    // tuned per-quality-preset or adjusted at runtime without a recompile.
     const float kExtent = rs.getDirShadowExtent();
-    const float kNear = rs.getDirShadowNear();
     const float kFar = rs.getDirShadowFar();
+
+    glm::vec3 lightDir = glm::normalize(glm::vec3(m_cpuDirLight.directionIntensity));
 
     glm::vec3 up = (glm::abs(lightDir.y) > 0.99f)
         ? glm::vec3(1, 0, 0)
         : glm::vec3(0, 1, 0);
 
+    // Eye pulled back kFar units upstream from cameraPos.
+    // Depth range [0, kFar*2] places cameraPos at the midpoint so objects
+    // up to kFar units in front of AND behind the camera are captured.
+    // The old [kNear, kFar] with a large negative kNear wasted depth range
+    // behind the eye and cut off distant forward objects.
     glm::mat4 lightView = glm::lookAt(
-        -lightDir * 50.0f,   // eye: pull back from origin along the light direction
-        glm::vec3(0.0f),     // look-at: world origin (centre of your scene)
+        cameraPos - lightDir * kFar,
+        cameraPos,
         up);
 
     glm::mat4 lightProj = glm::ortho(
         -kExtent, kExtent,
         -kExtent, kExtent,
-        kNear, kFar);
+        0.0f, kFar * 2.0f);
 
     glm::mat4 lightSpace = lightProj * lightView;
 
-    // Patch the light-space matrix back into the UBO.
-    gpuDir.lightSpaceMatrix = lightSpace;
+    // Patch the computed matrix back into the CPU cache and re-upload the UBO
+    // so ShadingPass can read it without a separate uniform.
+    m_cpuDirLight.lightSpaceMatrix = lightSpace;
     glBindBuffer(GL_UNIFORM_BUFFER, m_dirLightUBO);
-    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(GPUDirLight), &gpuDir);
+    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(GPUDirLight), &m_cpuDirLight);
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
 
-    // ---- Render depth into m_dirShadowFBO ----
+    // ---- Depth-only render ----
     glBindFramebuffer(GL_FRAMEBUFFER, m_dirShadowFBO);
     glViewport(0, 0, res, res);
     glClear(GL_DEPTH_BUFFER_BIT);
     glEnable(GL_DEPTH_TEST);
     glDepthMask(GL_TRUE);
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-    glEnable(GL_POLYGON_OFFSET_FILL);
-    glPolygonOffset(rs.getShadowBiasFactor(), rs.getShadowBiasUnits());
+
+    // GL_DEPTH_CLAMP prevents steep/back-facing casters from being clipped by
+    // the near plane, which is the main cause of missing shadow fragments.
+    // We do NOT use glPolygonOffset here — with kFar = 800 a fixed offset
+    // translates to several world-units of displacement, causing peter panning.
+    // Bias is applied receiver-side in the shading shader instead (see below).
+    glEnable(GL_DEPTH_CLAMP);
 
     glUseProgram(m_dirShadowShader);
     glUniformMatrix4fv(glGetUniformLocation(m_dirShadowShader, "uLightSpaceMatrix"),
@@ -315,7 +295,7 @@ void RenderSystem::DirShadowPass(EntityManager::Query<MeshComponent, Transform>&
         meshC->mesh->drawDepthOnly(glm::mat4(1.0f), m_dirShadowShader);
     }
 
-    glDisable(GL_POLYGON_OFFSET_FILL);
+    glDisable(GL_DEPTH_CLAMP);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glViewport(0, 0, m_screenW, m_screenH);
@@ -329,6 +309,7 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
     const glm::mat4& projection,
     const glm::vec3& cameraPos)
 {
+    const auto& rs = RenderSettings::instance();
     const GLuint targetFBO = (m_msaaSamples > 1) ? m_msaaFBO : m_hdrFBO;
     glBindFramebuffer(GL_FRAMEBUFFER, targetFBO);
     GLenum drawBuf = GL_COLOR_ATTACHMENT0;
@@ -364,10 +345,11 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
         if (Material* mat = meshC->mesh->getMaterial()) {
             mat->setVec3("uCameraPos", cameraPos);
             mat->setInt("uShadowCubeArray", 5);
-            mat->setInt("uDirShadowMap", 6);  // NEW
+            mat->setInt("uDirShadowMap", 6);
             mat->setInt("uShadowCount", m_shadowCount);
             mat->setInt("uLightCount", m_lightCount);
             mat->setInt("uShadowRes", m_shadowRes);
+            mat->setInt("uDirShadowRes", rs.getDirShadowResolution());
         }
         meshC->mesh->draw();
     }

@@ -17,21 +17,22 @@ layout(location = 0) out vec4 FragColor;
 // -------------------------------------------------------
 // Texture units
 // -------------------------------------------------------
-uniform sampler2D      uAlbedoTex;       // unit 0 — baseColor  (sRGB)
-uniform sampler2D      uNormalTex;       // unit 1 — tangent-space normal
-uniform sampler2D      uMRTex;           // unit 2 — G=roughness, B=metallic
-uniform sampler2D      uOcclusionTex;    // unit 3 — R=AO
-uniform sampler2D      uEmissiveTex;     // unit 4 — emissive
+uniform sampler2D      uAlbedoTex;         // unit 0 — baseColor  (sRGB)
+uniform sampler2D      uNormalTex;         // unit 1 — tangent-space normal
+uniform sampler2D      uMRTex;             // unit 2 — G=roughness, B=metallic
+uniform sampler2D      uOcclusionTex;      // unit 3 — R=AO
+uniform sampler2D      uEmissiveTex;       // unit 4 — emissive
 uniform samplerCubeArray uShadowCubeArray; // unit 5 — point light cubemap array
 uniform sampler2DShadow  uDirShadowMap;    // unit 6 — directional light shadow map (hardware PCF)
 
 // -------------------------------------------------------
 // Per-frame uniforms
 // -------------------------------------------------------
-uniform vec3 uCameraPos;
-uniform int  uShadowCount;
-uniform int  uLightCount;
-uniform int  uShadowRes;
+uniform vec3  uCameraPos;
+uniform int   uShadowCount;
+uniform int   uLightCount;
+uniform int   uShadowRes;       // point light cubemap resolution
+uniform int   uDirShadowRes;    // directional shadow map resolution (independent)
 
 // -------------------------------------------------------
 // Point light SSBO  (binding 0)
@@ -72,8 +73,6 @@ const float PI = 3.14159265358979;
 
 // -------------------------------------------------------
 // Normal map decode
-// GL_TEXTURE_LOD_BIAS on the normal map texture object
-// handles mip selection — no shader bias needed.
 // -------------------------------------------------------
 vec3 SampleNormal()
 {
@@ -227,6 +226,13 @@ float GetShadowFactor(int lightBufIndex, vec3 lightPos,
 
 // -------------------------------------------------------
 // Directional light PCF shadow
+//
+// The ortho projection maps the full depth range to NDC [0,1],
+// so the bias is already correctly scaled regardless of kFar —
+// no division by kFar needed or correct here.
+//
+// texelSize uses uDirShadowRes (not uShadowRes) because the
+// directional map has its own independent resolution setting.
 // -------------------------------------------------------
 const vec2 kPoissonDisk[16] = vec2[](
     vec2(-0.94201624, -0.39906216),
@@ -247,26 +253,37 @@ const vec2 kPoissonDisk[16] = vec2[](
     vec2( 0.14383161, -0.14100790)
 );
 
-float DirShadowPCF(vec3 worldPos, float NdotL)
+float DirShadowPCF(vec3 worldPos, vec3 worldNormal)
 {
     vec4 lsPos      = uDirLightSpaceMatrix * vec4(worldPos, 1.0);
     vec3 projCoords = lsPos.xyz / lsPos.w;
     projCoords      = projCoords * 0.5 + 0.5;
 
+    // Outside frustum → fully lit (border sampler handles this too,
+    // but the explicit check avoids sampling altogether).
     if (projCoords.x < 0.0 || projCoords.x > 1.0 ||
         projCoords.y < 0.0 || projCoords.y > 1.0 ||
         projCoords.z > 1.0)
         return 1.0;
 
-    float bias         = max(0.005, 0.010 * (1.0 - NdotL));
+    // Normal-scaled bias in NDC space [0,1].
+    // Ortho projection already normalises depth regardless of kFar,
+    // so no further scaling is needed.
+    // mix(hi, lo, NdotL): grazing surfaces get a larger bias to avoid
+    // self-shadowing acne; surfaces facing the light directly need almost none.
+    vec3  L     = normalize(-uDirLightDirIntensity.xyz);
+    float NdotL = clamp(dot(worldNormal, L), 0.0, 1.0);
+    float bias  = mix(0.002, 0.0002, NdotL);
+
     float compareDepth = projCoords.z - bias;
 
+    // texelSize from the directional map's own resolution.
     const float kSpread  = 2.0;
-    const float kTexelSz = 1.0 / float(uShadowRes);
-    float shadow = 0.0;
+    float texelSz = 1.0 / float(uDirShadowRes);
+    float shadow  = 0.0;
     for (int i = 0; i < 16; i++)
     {
-        vec2 offset = kPoissonDisk[i] * kTexelSz * kSpread;
+        vec2 offset = kPoissonDisk[i] * texelSz * kSpread;
         shadow += texture(uDirShadowMap,
                           vec3(projCoords.xy + offset, compareDepth));
     }
@@ -323,7 +340,9 @@ vec3 CalcDirLight(vec3 N, vec3 V,
 
     vec3 Li = uDirLightColorEnabled.rgb * uDirLightDirIntensity.w;
 
-    float shadow = DirShadowPCF(vWorldPos, NdotL);
+    // Pass the world-space normal so DirShadowPCF can compute its own
+    // NdotL for the bias — avoids recomputing it from the UBO direction.
+    float shadow = DirShadowPCF(vWorldPos, N);
 
     vec3 brdf = CookTorranceBRDF(N, V, L, albedo, F0, alpha, metallic);
     return brdf * Li * shadow * ao;

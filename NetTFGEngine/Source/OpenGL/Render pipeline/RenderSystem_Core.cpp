@@ -136,7 +136,7 @@ void RenderSystem::Update(EntityManager& entityManager,
         m_shadowCount = 0;
 
     if (rs.getDirShadowsEnabled())
-        DirShadowPass(meshQuery);               // directional light ortho shadow
+        DirShadowPass(meshQuery, cameraPos);               // directional light ortho shadow
 
     ShadingPass(meshQuery, view, projection, cameraPos);
 

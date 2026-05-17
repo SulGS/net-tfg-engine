@@ -320,3 +320,21 @@ public:
         }
     }
 };
+
+class LaserWallRenderSystem : public ISystem
+{
+public:
+	void Update(
+		EntityManager& entityManager,
+		std::vector<EventEntry>& events,
+		bool isServer,
+		float deltaTime
+	) override
+	{
+		auto laserWallQuery = entityManager.CreateQuery<Transform, LaserWallID, MeshComponent>();
+		for (auto [entity, transform, lwID, mesh] : laserWallQuery)
+		{
+			mesh->enabled = lwID->enabled;
+		}
+	}
+};

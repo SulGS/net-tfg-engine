@@ -42,63 +42,20 @@ public:
     void printGameState(const AsteroidShooterGameState& state) const
     {
         Debug::Info("GameState") << "=== Asteroid Shooter Game State ===\n";
-
-        // Players
-        Debug::Info("GameState") << "Players:\n";
         for (int i = 0; i < 2; i++) {
             Debug::Info("GameState") << "  Player " << i << ":\n";
-            Debug::Info("GameState") << "    Position: ("
-                << state.posX[i] << ", "
-                << state.posY[i] << ")\n";
-            Debug::Info("GameState") << "    Rotation: "
-                << state.rot[i] << " degrees\n";
-            Debug::Info("GameState") << "    Health: "
-                << state.health[i] << "\n";
-            Debug::Info("GameState") << "    Alive: "
-                << (state.alive[i] ? "true" : "false") << "\n";
-			Debug::Info("GameState") << "    Is Moving: "
-				<< (state.isMovingForward[i] ? "true" : "false") << "\n";
-            Debug::Info("GameState") << "    Remaining shoot frames: "
-                << state.remaingShootFrames[i] << "\n";
-            Debug::Info("GameState") << "    Shoot Cooldown: "
-                << state.shootCooldown[i] << "\n";
-            Debug::Info("GameState") << "    Death Cooldown: "
-                << state.deathCooldown[i] << "\n";
+            Debug::Info("GameState") << "    Position: (" << state.posX[i] << ", " << state.posY[i] << ")\n";
+            Debug::Info("GameState") << "    Rotation: " << state.rot[i] << " degrees\n";
+            Debug::Info("GameState") << "    Health: " << state.health[i] << "\n";
+            Debug::Info("GameState") << "    Alive: " << (state.alive[i] ? "true" : "false") << "\n";
+            Debug::Info("GameState") << "    Is Moving: " << (state.isMovingForward[i] ? "true" : "false") << "\n";
+            Debug::Info("GameState") << "    Remaining shoot frames: " << state.remaingShootFrames[i] << "\n";
+            Debug::Info("GameState") << "    Shoot Cooldown: " << state.shootCooldown[i] << "\n";
+            Debug::Info("GameState") << "    Death Cooldown: " << state.deathCooldown[i] << "\n";
         }
-
-        // Bullets
-        Debug::Info("GameState") << "Bullets:\n";
-        Debug::Info("GameState") << "  Active Bullet Count: "
-            << state.bulletCount << "\n";
-
-        if (state.bulletCount > 0) {
-            Debug::Info("GameState") << "  Active Bullets:\n";
-            for (int i = 0; i < MAX_BULLETS; i++) {
-                const Bullet& b = state.bullets[i];
-                if (!b.active)
-                    continue;
-
-                Debug::Info("GameState") << "    Bullet #" << b.id << "\n";
-                Debug::Info("GameState") << "      Position: ("
-                    << b.posX << ", "
-                    << b.posY << ")\n";
-                Debug::Info("GameState") << "      Velocity: ("
-                    << b.velX << ", "
-                    << b.velY << ")\n";
-                Debug::Info("GameState") << "      Owner: Player "
-                    << b.ownerId << "\n";
-                Debug::Info("GameState") << "      Lifetime: "
-                    << b.lifetime << " frames\n";
-            }
-        }
-        else {
-            Debug::Info("GameState") << "  No active bullets\n";
-        }
-
+        Debug::Info("GameState") << "  Active Bullet Count: " << state.bulletCount << "\n";
         Debug::Info("GameState") << "===================================\n";
     }
-
-
 
     std::unique_ptr<IGameLogic> Clone() const override {
         return std::make_unique<AsteroidShooterGame>();
@@ -109,9 +66,7 @@ public:
         if (Input::KeyPressed(Input::CharToKeycode('a'))) m |= INPUT_LEFT;
         if (Input::KeyPressed(Input::CharToKeycode('d'))) m |= INPUT_RIGHT;
         if (Input::KeyPressed(Input::CharToKeycode('w'))) m |= INPUT_TOP;
-        //if (Input::KeyPressed(Input::CharToKeycode('s'))) m |= INPUT_DOWN;
-        if (Input::KeyPressed(Input::CharToKeycode(' '))) m |= INPUT_SHOOT;  // Space bar
-        
+        if (Input::KeyPressed(Input::CharToKeycode(' '))) m |= INPUT_SHOOT;
         InputBlob buf = MakeZeroInputBlob();
         buf.data[0] = m;
         return buf;
@@ -128,22 +83,22 @@ public:
             ship->shipZRotation = s.rot[p];
             ship->shootCooldown = s.shootCooldown[p];
             ship->health = s.health[p];
-			ship->isShooting = s.isShooting[p];
-			ship->isMovingForward = s.isMovingForward[p];
-			ship->shipInclination = s.shipInclination[p];
+            ship->isShooting = s.isShooting[p];
+            ship->isMovingForward = s.isMovingForward[p];
+            ship->shipInclination = s.shipInclination[p];
             ship->remainingShootFrames = s.remaingShootFrames[p];
             ship->deathCooldown = s.deathCooldown[p];
-			ship->isAlive = s.alive[p];
+            ship->isAlive = s.alive[p];
         }
 
-        // First, collect all existing bullet IDs in ECS
+        // Collect active bullet IDs from ECS
         std::set<int> ecsActiveBulletIds;
         auto bulletQuery = world.GetEntityManager().CreateQuery<ECSBullet>();
         for (auto [entity, ecsb] : bulletQuery) {
             ecsActiveBulletIds.insert(ecsb->id);
         }
 
-        // Create a set of active bullet IDs from state
+        // Collect active bullet IDs from state
         std::set<int> stateActiveBulletIds;
         for (int i = 0; i < MAX_BULLETS; i++) {
             if (s.bullets[i].active) {
@@ -151,7 +106,7 @@ public:
             }
         }
 
-        // Remove bullets that are in ECS but not in state
+        // Remove bullets not in state
         auto bulletQuery2 = world.GetEntityManager().CreateQuery<ECSBullet>();
         for (auto [entity, ecsb] : bulletQuery2) {
             if (stateActiveBulletIds.find(ecsb->id) == stateActiveBulletIds.end()) {
@@ -159,7 +114,7 @@ public:
             }
         }
 
-        // Update or create bullets from state
+        // Update or create bullets
         for (int i = 0; i < MAX_BULLETS; i++) {
             const Bullet& b = s.bullets[i];
             if (b.active) {
@@ -184,15 +139,21 @@ public:
                 }
             }
         }
+
+        const int x_size = 5;
+        const int y_size = 5;
+
+        // Tiles and walls are managed by events (ToggleWallHandler, DestroyTileHandler).
+        // Do NOT sync walls from renderState - renderState walls are zeroed
+        // because deltas don't include wall data, so syncing would disable all walls.
     }
 
     void ECSWorld_To_GameState(GameStateBlob& state) {
         AsteroidShooterGameState& s = *reinterpret_cast<AsteroidShooterGameState*>(state.data);
-        
-        // Clear state
+
         std::memset(&s, 0, sizeof(s));
         s.bulletCount = 0;
-        
+
         auto query = world.GetEntityManager().CreateQuery<Transform, Playable, SpaceShip>();
         for (auto [entity, transform, play, ship] : query) {
             int p = play->playerId;
@@ -201,16 +162,15 @@ public:
             s.rot[p] = transform->getRotation().z;
             s.shootCooldown[p] = ship->shootCooldown;
             s.remaingShootFrames[p] = ship->remainingShootFrames;
-			s.isShooting[p] = ship->isShooting;
-			s.isMovingForward[p] = ship->isMovingForward;
-			s.shipInclination[p] = ship->shipInclination;
+            s.isShooting[p] = ship->isShooting;
+            s.isMovingForward[p] = ship->isMovingForward;
+            s.shipInclination[p] = ship->shipInclination;
             s.health[p] = ship->health;
             s.deathCooldown[p] = ship->deathCooldown;
-			s.alive[p] = ship->isAlive;
+            s.alive[p] = ship->isAlive;
         }
-        
-        auto bulletQuery = world.GetEntityManager().CreateQuery<Transform, ECSBullet>();
 
+        auto bulletQuery = world.GetEntityManager().CreateQuery<Transform, ECSBullet>();
         int i = 0;
         for (auto [entity, transform, ecsb] : bulletQuery) {
             if (s.bulletCount < MAX_BULLETS) {
@@ -228,12 +188,65 @@ public:
             }
         }
 
-		state.len = sizeof(AsteroidShooterGameState);
+        const int x_size = 5;
+        const int y_size = 5;
 
-        //if (Input::KeyPressed(Input::CharToKeycode('p')))
-        //{
-		//	printGameState(s);
-        //}
+        // Tiles
+        auto tileQuery = world.GetEntityManager().CreateQuery<TileID>();
+        for (auto [entity, tileId] : tileQuery)
+        {
+            int cx = tileId->id / y_size;
+            int cy = tileId->id % y_size;
+            s.tilesActive[cx][cy] = true;
+        }
+
+        // Border/shared walls — skip spokes
+        auto wallQuery = world.GetEntityManager().CreateQuery<LaserWallID>();
+        for (auto [entity, lwid] : wallQuery)
+        {
+            if (world.GetEntityManager().GetComponent<CenterSpoke>(entity) != nullptr) continue;
+
+            int cx = lwid->cellId / y_size;
+            int cy = lwid->cellId % y_size;
+
+            switch (lwid->dir)
+            {
+            case CellCardinalDirection::Down:
+                s.vWalls[2 * cx][2 * cy] = lwid->enabled;
+                break;
+            case CellCardinalDirection::Up:
+                s.vWalls[2 * cx][2 * cy + 2] = lwid->enabled;
+                break;
+            case CellCardinalDirection::Left:
+                s.hWalls[2 * cx][2 * cy] = lwid->enabled;
+                break;
+            case CellCardinalDirection::Right:
+                s.hWalls[2 * cx + 2][2 * cy] = lwid->enabled;
+                break;
+            default: break;
+            }
+        }
+
+        // Center spokes
+        auto spokeQuery = world.GetEntityManager().CreateQuery<LaserWallID, CenterSpoke>();
+        for (auto [entity, lwid, spoke] : spokeQuery)
+        {
+            int cx = lwid->cellId / y_size;
+            int cy = lwid->cellId % y_size;
+
+            int dirIdx = 0;
+            switch (lwid->dir)
+            {
+            case CellCardinalDirection::Down:  dirIdx = 0; break;
+            case CellCardinalDirection::Up:    dirIdx = 1; break;
+            case CellCardinalDirection::Left:  dirIdx = 2; break;
+            case CellCardinalDirection::Right: dirIdx = 3; break;
+            default: break;
+            }
+            s.cWalls[cx][cy][dirIdx] = lwid->enabled;
+        }
+
+        state.len = sizeof(AsteroidShooterGameState);
     }
 
     bool CompareStates(const GameStateBlob& a, const GameStateBlob& b) const override {
@@ -242,13 +255,11 @@ public:
 
     void InitECSLogic(GameStateBlob& state) override {
         AsteroidShooterGameState* s = reinterpret_cast<AsteroidShooterGameState*>(state.data);
-        
-        // Initialize players
+
         s->posX[0] = -10; s->posY[0] = -10;
-        s->posX[1] =  10; s->posY[1] =  10;
+        s->posX[1] = 10; s->posY[1] = 10;
         s->rot[0] = 0; s->rot[1] = 180;
-        
-        // Initialize bullets (all inactive)
+
         for (int i = 0; i < MAX_BULLETS; i++) {
             s->bullets[i].id = -1;
             s->bullets[i].active = false;
@@ -258,24 +269,23 @@ public:
         s->remaingShootFrames[0] = 0;
         s->remaingShootFrames[1] = 0;
 
-		s->isShooting[0] = false;
-		s->isShooting[1] = false;
+        s->isShooting[0] = false;
+        s->isShooting[1] = false;
 
-		s->isMovingForward[0] = false;
-		s->isMovingForward[1] = false;
+        s->isMovingForward[0] = false;
+        s->isMovingForward[1] = false;
 
-		s->shipInclination[0] = 0;
-		s->shipInclination[1] = 0;
-        
-        // Initialize cooldowns
+        s->shipInclination[0] = 0;
+        s->shipInclination[1] = 0;
+
         s->shootCooldown[0] = 0;
         s->shootCooldown[1] = 0;
 
         s->health[0] = 100;
         s->health[1] = 100;
 
-		s->alive[0] = true;
-		s->alive[1] = true;
+        s->alive[0] = true;
+        s->alive[1] = true;
 
         s->deathCooldown[0] = 0;
         s->deathCooldown[1] = 0;
@@ -284,26 +294,221 @@ public:
 
         world.GetEntityManager().RegisterComponentType<SpaceShip>();
         world.GetEntityManager().RegisterComponentType<ECSBullet>();
+        world.GetEntityManager().RegisterComponentType<TileID>();
+        world.GetEntityManager().RegisterComponentType<PillarID>();
+        world.GetEntityManager().RegisterComponentType<CenterSpoke>();
+        world.GetEntityManager().RegisterComponentType<LaserWallID>();
+
+        const int x_size = 5;
+        const int y_size = 5;
+
+        auto& em = world.GetEntityManager();
+
+        // --- Tiles ---
+        for (int x = 0; x < x_size; x++)
+        {
+            for (int y = 0; y < y_size; y++)
+            {
+                const int cellId = x * y_size + y;
+                Entity e = em.CreateEntity();
+                Transform* t = em.AddComponent<Transform>(e, Transform{});
+                t->setPosition(glm::vec3((x - x_size / 2.0f) * 80.0f,
+                    (y - y_size / 2.0f) * 80.0f, -4.0f));
+                t->setScale(glm::vec3(1.0f));
+                em.AddComponent<TileID>(e, TileID{ cellId });
+            }
+        }
+
+        // --- Pillars (logic side — no mesh) ---
+        for (int px = 0; px <= 2 * x_size; px++)
+        {
+            for (int py = 0; py <= 2 * y_size; py++)
+            {
+                const bool isTileCentre = (px % 2 == 1 && py % 2 == 1);
+
+                Entity e = em.CreateEntity();
+                Transform* t = em.AddComponent<Transform>(e, Transform{});
+                t->setPosition(glm::vec3((px - x_size) * 40.0f - 40.0f,
+                    (py - y_size) * 40.0f - 40.0f, -4.0f));
+                t->setRotation(glm::vec3(90.0f, 0.0f, 0.0f));
+                t->setScale(glm::vec3(1.0f));
+
+                PillarID pid;
+                if (isTileCentre)
+                {
+                    const int cx = (px - 1) / 2;
+                    const int cy = (py - 1) / 2;
+                    pid.addCell(cx * y_size + cy);
+                }
+                else
+                {
+                    const int cx_min = (px - 2) / 2;
+                    const int cx_max = px / 2;
+                    const int cy_min = (py - 2) / 2;
+                    const int cy_max = py / 2;
+
+                    for (int cx = std::max(cx_min, 0); cx <= std::min(cx_max, x_size - 1); cx++)
+                    {
+                        for (int cy = std::max(cy_min, 0); cy <= std::min(cy_max, y_size - 1); cy++)
+                        {
+                            const bool onBorderX = (px == 2 * cx || px == 2 * cx + 1 || px == 2 * cx + 2);
+                            const bool onBorderY = (py == 2 * cy || py == 2 * cy + 1 || py == 2 * cy + 2);
+                            if (onBorderX && onBorderY)
+                                pid.addCell(cx * y_size + cy);
+                        }
+                    }
+                }
+                em.AddComponent<PillarID>(e, pid);
+            }
+        }
+
+        // --- Walls ---
+        std::mt19937 initRng{ std::random_device{}() };
+        std::uniform_real_distribution<float> initDist(3.0f, 30.0f);
+
+        std::vector<WallDef> walls;
+
+        // Walls between horizontally adjacent pillars (px,py)→(px+1,py)
+        for (int px = 0; px < 2 * x_size; px++)
+        {
+            for (int py = 0; py <= 2 * y_size; py++)
+            {
+                const float midX = ((px - x_size) * 40.0f - 40.0f + (px + 1 - x_size) * 40.0f - 40.0f) / 2.0f;
+                const float midY = (py - y_size) * 40.0f - 40.0f;
+
+                for (int cx = 0; cx < x_size; cx++)
+                {
+                    for (int cy = 0; cy < y_size; cy++)
+                    {
+                        if (px < 2 * cx || px >= 2 * cx + 2) continue;
+                        if (py != 2 * cy && py != 2 * cy + 2) continue;
+
+                        const CellCardinalDirection dir = (py == 2 * cy)
+                            ? CellCardinalDirection::Down
+                            : CellCardinalDirection::Up;
+                        const bool onBorder = (py == 0) || (py == 2 * y_size);
+
+                        walls.push_back({ cx, cy, dir,
+                            glm::vec3(midX, midY, 0.0f),
+                            glm::vec3(0.0f, 90.0f, 0.0f),
+                            onBorder });
+                    }
+                }
+            }
+        }
+
+        // Walls between vertically adjacent pillars (px,py)→(px,py+1)
+        for (int px = 0; px <= 2 * x_size; px++)
+        {
+            for (int py = 0; py < 2 * y_size; py++)
+            {
+                const float midX = (px - x_size) * 40.0f - 40.0f;
+                const float midY = ((py - y_size) * 40.0f - 40.0f + (py + 1 - y_size) * 40.0f - 40.0f) / 2.0f;
+
+                for (int cx = 0; cx < x_size; cx++)
+                {
+                    for (int cy = 0; cy < y_size; cy++)
+                    {
+                        if (py < 2 * cy || py >= 2 * cy + 2) continue;
+                        if (px != 2 * cx && px != 2 * cx + 2) continue;
+
+                        const CellCardinalDirection dir = (px == 2 * cx)
+                            ? CellCardinalDirection::Left
+                            : CellCardinalDirection::Right;
+                        const bool onBorder = (px == 0) || (px == 2 * x_size);
+
+                        walls.push_back({ cx, cy, dir,
+                            glm::vec3(midX, midY, 0.0f),
+                            glm::vec3(90.0f, 0.0f, 0.0f),
+                            onBorder });
+                    }
+                }
+            }
+        }
+
+        // Spawn border/shared wall entities
+        for (auto& w : walls)
+        {
+            const int cellId = w.cellX * y_size + w.cellY;
+
+            Entity e = em.CreateEntity();
+            Transform* t = em.AddComponent<Transform>(e, Transform{});
+            t->setPosition(w.pos);
+            t->setRotation(w.rot);
+            t->setScale(glm::vec3(2.0f, 2.0f, 19.0f));
+
+            LaserWallID lwid(cellId, w.dir);
+            lwid.enabled = w.onBorder;        // borders ON, interior OFF
+            lwid.timer = initDist(initRng); // staggered so they don't all expire at once
+            em.AddComponent<LaserWallID>(e, lwid);
+        }
+
+        // Center spokes
+        for (int cx = 0; cx < x_size; cx++)
+        {
+            for (int cy = 0; cy < y_size; cy++)
+            {
+                const float centerX = (2 * cx + 1 - x_size) * 40.0f - 40.0f;
+                const float centerY = (2 * cy + 1 - y_size) * 40.0f - 40.0f;
+
+                auto makeSpoke = [&](CellCardinalDirection dir, glm::vec3 pos, glm::vec3 rot)
+                    {
+                        const int cellId = cx * y_size + cy;
+                        Entity e = em.CreateEntity();
+                        Transform* t = em.AddComponent<Transform>(e, Transform{});
+                        t->setPosition(pos);
+                        t->setRotation(rot);
+                        t->setScale(glm::vec3(2.0f, 2.0f, 19.0f));
+
+                        LaserWallID lwid(cellId, dir);
+                        lwid.enabled = false;             // spokes start OFF
+                        lwid.timer = initDist(initRng); // staggered timer
+                        em.AddComponent<LaserWallID>(e, lwid);
+                        em.AddComponent<CenterSpoke>(e, CenterSpoke{});
+                    };
+
+                {
+                    const float edgeY = (2 * cy - y_size) * 40.0f - 40.0f;
+                    makeSpoke(CellCardinalDirection::Down,
+                        glm::vec3(centerX, (centerY + edgeY) / 2.0f, 0.0f),
+                        glm::vec3(90.0f, 0.0f, 0.0f));
+                }
+                {
+                    const float edgeY = (2 * cy + 2 - y_size) * 40.0f - 40.0f;
+                    makeSpoke(CellCardinalDirection::Up,
+                        glm::vec3(centerX, (centerY + edgeY) / 2.0f, 0.0f),
+                        glm::vec3(90.0f, 0.0f, 0.0f));
+                }
+                {
+                    const float edgeX = (2 * cx - x_size) * 40.0f - 40.0f;
+                    makeSpoke(CellCardinalDirection::Left,
+                        glm::vec3((centerX + edgeX) / 2.0f, centerY, 0.0f),
+                        glm::vec3(0.0f, 90.0f, 0.0f));
+                }
+                {
+                    const float edgeX = (2 * cx + 2 - x_size) * 40.0f - 40.0f;
+                    makeSpoke(CellCardinalDirection::Right,
+                        glm::vec3((centerX + edgeX) / 2.0f, centerY, 0.0f),
+                        glm::vec3(0.0f, 90.0f, 0.0f));
+                }
+            }
+        }
 
         Entity player1 = world.GetEntityManager().CreateEntity();
         Transform* t1 = world.GetEntityManager().AddComponent<Transform>(player1, Transform{});
         t1->setPosition(glm::vec3(s->posX[0], s->posY[0], 0.0f));
         t1->setRotation(glm::vec3(0.0f, 0.0f, 0.0f));
-
-        world.GetEntityManager().AddComponent<Playable>(player1, Playable{0, MakeZeroInputBlob(), (0 == playerId ? true : false)});
-        world.GetEntityManager().AddComponent<SpaceShip>(player1, SpaceShip{100,-1,0,0,true});
+        world.GetEntityManager().AddComponent<Playable>(player1, Playable{ 0, MakeZeroInputBlob(), (0 == playerId ? true : false) });
+        world.GetEntityManager().AddComponent<SpaceShip>(player1, SpaceShip{ 100,-1,0,0,true });
 
         Entity player2 = world.GetEntityManager().CreateEntity();
         Transform* t2 = world.GetEntityManager().AddComponent<Transform>(player2, Transform{});
         t2->setPosition(glm::vec3(s->posX[1], s->posY[1], 0.0f));
         t2->setRotation(glm::vec3(0.0f, 0.0f, 180.0f));
-        
-        world.GetEntityManager().AddComponent<Playable>(player2, Playable{1, MakeZeroInputBlob(), (1 == playerId ? true : false)});
-        world.GetEntityManager().AddComponent<SpaceShip>(player2, SpaceShip{100,-1,0,0,true});
+        world.GetEntityManager().AddComponent<Playable>(player2, Playable{ 1, MakeZeroInputBlob(), (1 == playerId ? true : false) });
+        world.GetEntityManager().AddComponent<SpaceShip>(player2, SpaceShip{ 100,-1,0,0,true });
 
-        
-
-        if (isServer) 
+        if (isServer)
         {
             BoxCollider2D* collider1 = world.GetEntityManager().AddComponent<BoxCollider2D>(player1, BoxCollider2D{ glm::vec2(1.5f, 3.0f) });
             collider1->layer = CollisionLayer::PLAYER;
@@ -313,60 +518,51 @@ public:
             collider2->layer = CollisionLayer::PLAYER;
             collider2->collidesWith = CollisionLayer::BULLET;
         }
-        
-        
+
         world.AddSystem(std::make_unique<InputSystem>());
-        if (isServer) 
+        if (isServer)
         {
             world.AddSystem(std::make_unique<InputServerSystem>());
+            //world.AddSystem(std::make_unique<ArenaSystem>());
         }
-        
+
         world.AddSystem(std::make_unique<BulletSystem>());
         world.AddSystem(std::make_unique<OnDeathLogicSystem>());
 
         eventProcessor->RegisterHandler(AsteroidEventMask::SPAWN_BULLET, std::make_unique<SpawnBulletHandler>());
-        eventProcessor->RegisterHandler(AsteroidEventMask::BULLET_COLLIDES,std::make_unique<BulletCollidesHandler>());
-		eventProcessor->RegisterHandler(AsteroidEventMask::DEATH, std::make_unique<DeathHandler>());
-		eventProcessor->RegisterHandler(AsteroidEventMask::RESPAWN, std::make_unique<RespawnHandler>());
+        eventProcessor->RegisterHandler(AsteroidEventMask::BULLET_COLLIDES, std::make_unique<BulletCollidesHandler>());
+        eventProcessor->RegisterHandler(AsteroidEventMask::DEATH, std::make_unique<DeathHandler>());
+        eventProcessor->RegisterHandler(AsteroidEventMask::RESPAWN, std::make_unique<RespawnHandler>());
+        eventProcessor->RegisterHandler(AsteroidEventMask::DESTROY_TILE, std::make_unique<DestroyTileHandler>());
+        eventProcessor->RegisterHandler(AsteroidEventMask::TOGGLE_WALL, std::make_unique<ToggleWallHandler>());
 
-		deltaProcessor->RegisterHandler(DELTA_GAME_POSITIONS, std::make_unique<GamePositionsDeltaHandler>());
-        
-        
-		
+        deltaProcessor->RegisterHandler(DELTA_GAME_POSITIONS, std::make_unique<GamePositionsDeltaHandler>());
     }
 
     void HashState(const GameStateBlob& state, uint8_t(&outHash)[SHA256_DIGEST_LENGTH]) const override {
         const AsteroidShooterGameState& s =
             *reinterpret_cast<const AsteroidShooterGameState*>(state.data);
 
-        // Create a new EVP context
         EVP_MD_CTX* ctx = EVP_MD_CTX_new();
         if (!ctx) throw std::runtime_error("Failed to create EVP_MD_CTX");
 
-        // Initialize SHA-256
         if (1 != EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr)) {
             EVP_MD_CTX_free(ctx);
             throw std::runtime_error("EVP_DigestInit_ex failed");
         }
 
-        // Hash selected fields
         EVP_DigestUpdate(ctx, &s.health[0], sizeof(s.health[0]));
         EVP_DigestUpdate(ctx, &s.health[1], sizeof(s.health[1]));
-
         EVP_DigestUpdate(ctx, &s.alive[0], sizeof(s.alive[0]));
         EVP_DigestUpdate(ctx, &s.alive[1], sizeof(s.alive[1]));
-
         EVP_DigestUpdate(ctx, &s.deathCooldown[0], sizeof(s.deathCooldown[0]));
         EVP_DigestUpdate(ctx, &s.deathCooldown[1], sizeof(s.deathCooldown[1]));
 
-        // Finalize hash
         unsigned int len = 0;
         if (1 != EVP_DigestFinal_ex(ctx, outHash, &len)) {
             EVP_MD_CTX_free(ctx);
             throw std::runtime_error("EVP_DigestFinal_ex failed");
         }
-
-        // Cleanup
         EVP_MD_CTX_free(ctx);
     }
 
@@ -386,57 +582,17 @@ public:
     void printGameState(const AsteroidShooterGameState& state) const
     {
         Debug::Info("GameState") << "=== Asteroid Shooter Game State ===\n";
-
-        // Players
-        Debug::Info("GameState") << "Players:\n";
         for (int i = 0; i < 2; i++) {
             Debug::Info("GameState") << "  Player " << i << ":\n";
-            Debug::Info("GameState") << "    Position: ("
-                << state.posX[i] << ", "
-                << state.posY[i] << ")\n";
-            Debug::Info("GameState") << "    Rotation: "
-                << state.rot[i] << " degrees\n";
-            Debug::Info("GameState") << "    Health: "
-                << state.health[i] << "\n";
-            Debug::Info("GameState") << "    Alive: "
-                << (state.alive[i] ? "true" : "false") << "\n";
-            Debug::Info("GameState") << "    Remaining shoot frames: "
-                << state.remaingShootFrames[i] << "\n";
-            Debug::Info("GameState") << "    Shoot Cooldown: "
-                << state.shootCooldown[i] << "\n";
-            Debug::Info("GameState") << "    Death Cooldown: "
-                << state.deathCooldown[i] << "\n";
+            Debug::Info("GameState") << "    Position: (" << state.posX[i] << ", " << state.posY[i] << ")\n";
+            Debug::Info("GameState") << "    Rotation: " << state.rot[i] << " degrees\n";
+            Debug::Info("GameState") << "    Health: " << state.health[i] << "\n";
+            Debug::Info("GameState") << "    Alive: " << (state.alive[i] ? "true" : "false") << "\n";
+            Debug::Info("GameState") << "    Remaining shoot frames: " << state.remaingShootFrames[i] << "\n";
+            Debug::Info("GameState") << "    Shoot Cooldown: " << state.shootCooldown[i] << "\n";
+            Debug::Info("GameState") << "    Death Cooldown: " << state.deathCooldown[i] << "\n";
         }
-
-        // Bullets
-        Debug::Info("GameState") << "Bullets:\n";
-        Debug::Info("GameState") << "  Active Bullet Count: "
-            << state.bulletCount << "\n";
-
-        if (state.bulletCount > 0) {
-            Debug::Info("GameState") << "  Active Bullets:\n";
-            for (int i = 0; i < MAX_BULLETS; i++) {
-                const Bullet& b = state.bullets[i];
-                if (!b.active)
-                    continue;
-
-                Debug::Info("GameState") << "    Bullet #" << b.id << "\n";
-                Debug::Info("GameState") << "      Position: ("
-                    << b.posX << ", "
-                    << b.posY << ")\n";
-                Debug::Info("GameState") << "      Velocity: ("
-                    << b.velX << ", "
-                    << b.velY << ")\n";
-                Debug::Info("GameState") << "      Owner: Player "
-                    << b.ownerId << "\n";
-                Debug::Info("GameState") << "      Lifetime: "
-                    << b.lifetime << " frames\n";
-            }
-        }
-        else {
-            Debug::Info("GameState") << "  No active bullets\n";
-        }
-
+        Debug::Info("GameState") << "  Active Bullet Count: " << state.bulletCount << "\n";
         Debug::Info("GameState") << "===================================\n";
     }
 
@@ -447,94 +603,63 @@ public:
 
         EntityManager& em = world.GetEntityManager();
 
-        // ============================================================
-        // PLAYER STATE SYNC (authoritative)
-        // ============================================================
+        // Players
         auto playerQuery = em.CreateQuery<Transform, Playable, SpaceShip>();
-
         for (auto [entity, transform, play, ship] : playerQuery)
         {
             int p = play->playerId;
-
             transform->setPosition(glm::vec3(s.posX[p], s.posY[p], 0.0f));
             transform->setRotation(glm::vec3(0.0f, 0.0f, s.rot[p]));
-
-            
             ship->health = s.health[p];
             ship->isAlive = s.alive[p];
-
-			ship->shipZRotation = s.rot[p];
-
-			ship->isShooting = s.isShooting[p];
-			ship->isMovingForward = s.isMovingForward[p];
-			ship->shipInclination = s.shipInclination[p];
+            ship->shipZRotation = s.rot[p];
+            ship->isShooting = s.isShooting[p];
+            ship->isMovingForward = s.isMovingForward[p];
+            ship->shipInclination = s.shipInclination[p];
             ship->remainingShootFrames = s.remaingShootFrames[p];
-
             ship->shootCooldown = s.shootCooldown[p];
             ship->deathCooldown = std::max(0, s.deathCooldown[p]);
-
-            // Simple assignment - render systems will handle visuals
-            
         }
 
-        // ============================================================
-        // BULLET RECONCILIATION (authoritative)
-        // ============================================================
-
-        // Collect active bullet IDs from ECS
+        // Bullets — collect ECS ids
         std::set<int> ecsActiveBulletIds;
         {
             auto q = em.CreateQuery<ECSBullet>();
             for (auto [e, ecsb] : q)
-            {
                 ecsActiveBulletIds.insert(ecsb->id);
-            }
         }
 
-        // Collect active bullet IDs from snapshot
+        // Collect state ids
         std::set<int> stateActiveBulletIds;
         for (int i = 0; i < MAX_BULLETS; i++)
-        {
             if (s.bullets[i].active)
-            {
                 stateActiveBulletIds.insert(s.bullets[i].id);
-            }
-        }
 
-        // Remove ECS bullets not present in snapshot
+        // Remove stale bullets
         {
             auto q = em.CreateQuery<ECSBullet, MeshComponent>();
             for (auto [e, ecsb, mesh] : q)
-            {
-                if (stateActiveBulletIds.find(ecsb->id) ==
-                    stateActiveBulletIds.end())
-                {
+                if (stateActiveBulletIds.find(ecsb->id) == stateActiveBulletIds.end())
                     em.DestroyEntity(e);
-                }
-            }
         }
 
-        // Update or create bullets from snapshot
+        // Update or create bullets
         for (int i = 0; i < MAX_BULLETS; i++)
         {
             const Bullet& b = s.bullets[i];
-            if (!b.active)
-                continue;
+            if (!b.active) continue;
 
             bool found = false;
-
             auto q = em.CreateQuery<Transform, ECSBullet, MeshComponent>();
             for (auto [e, transform, ecsb, mesh] : q)
             {
                 if (ecsb->id == b.id)
                 {
                     transform->setPosition(glm::vec3(b.posX, b.posY, 0.0f));
-
                     ecsb->velX = b.velX;
                     ecsb->velY = b.velY;
                     ecsb->ownerId = b.ownerId;
                     ecsb->lifetime = b.lifetime;
-
                     found = true;
                     break;
                 }
@@ -542,46 +667,32 @@ public:
 
             if (!found)
             {
-                // Create new bullet entity
                 Entity newBullet = em.CreateEntity();
-
                 Transform* t = em.AddComponent<Transform>(newBullet, Transform{});
                 t->setPosition(glm::vec3(b.posX, b.posY, 0.0f));
 
                 auto bulletMat = std::make_shared<Material>("generic.vert", "generic.frag");
                 bulletMat->setVec3("uColor", glm::vec3(1.0f, 1.0f, 0.0f));
 
-                em.AddComponent<ECSBullet>(
-                    newBullet,
-                    ECSBullet{ b.id, b.velX, b.velY, b.ownerId, b.lifetime }
-                );
+                em.AddComponent<ECSBullet>(newBullet, ECSBullet{ b.id, b.velX, b.velY, b.ownerId, b.lifetime });
+                em.AddComponent<MeshComponent>(newBullet, MeshComponent(new Mesh("bullet.glb", bulletMat)));
 
-                Mesh* m = new Mesh("bullet.glb", bulletMat);
-                em.AddComponent<MeshComponent>(newBullet, MeshComponent(m));
-
-                // Spawn bullet sound (non-authoritative, time-limited)
                 Entity bulletSound = em.CreateEntity();
-
                 Transform* st = em.AddComponent<Transform>(bulletSound, Transform{});
                 st->setPosition(glm::vec3(b.posX, b.posY, 0.0f));
-
                 DestroyTimer* dt = em.AddComponent<DestroyTimer>(bulletSound, DestroyTimer{});
                 dt->framesRemaining = RENDER_TICKS_PER_SECOND * 3;
-
                 AudioSourceComponent* audio = em.AddComponent<AudioSourceComponent>(
-                    bulletSound,
-                    AudioSourceComponent("shoot.wav", AudioChannel::SFX, false)
-                );
+                    bulletSound, AudioSourceComponent("shoot.wav", AudioChannel::SFX, false));
                 audio->play = true;
             }
         }
+
+        // Walls managed by events (ToggleWallHandler) - do not sync from renderState.
     }
 
-
     void InitECSRenderer(const GameStateBlob& state, OpenGLWindow* window) override {
-        this->window = window;  // Store window pointer for later use
-
-        std::vector<unsigned int> triangleInds = { 0, 1, 2 };
+        this->window = window;
 
         AsteroidShooterGameState s;
         std::memcpy(&s, state.data, sizeof(AsteroidShooterGameState));
@@ -590,21 +701,23 @@ public:
         world.GetEntityManager().RegisterComponentType<ECSBullet>();
         world.GetEntityManager().RegisterComponentType<ChargingShootEffect>();
         world.GetEntityManager().RegisterComponentType<DestroyTimer>();
-		world.GetEntityManager().RegisterComponentType<ThrusterOwner>();
+        world.GetEntityManager().RegisterComponentType<TileID>();
+        world.GetEntityManager().RegisterComponentType<PillarID>();
+        world.GetEntityManager().RegisterComponentType<LaserWallID>();
+        world.GetEntityManager().RegisterComponentType<CenterSpoke>();
+        world.GetEntityManager().RegisterComponentType<ThrusterOwner>();
 
-		Entity sunEntity = world.GetEntityManager().CreateEntity();
-		Transform* sunTransform = world.GetEntityManager().AddComponent<Transform>(sunEntity, Transform{});
-		DirectionalLightComponent* sunLight = world.GetEntityManager().AddComponent<DirectionalLightComponent>(sunEntity, DirectionalLightComponent{});
-		sunLight->color = glm::vec3(1.0f, 0.95f, 0.8f);
+        Entity sunEntity = world.GetEntityManager().CreateEntity();
+        Transform* sunTransform = world.GetEntityManager().AddComponent<Transform>(sunEntity, Transform{});
+        DirectionalLightComponent* sunLight = world.GetEntityManager().AddComponent<DirectionalLightComponent>(sunEntity, DirectionalLightComponent{});
+        sunLight->color = glm::vec3(1.0f, 0.95f, 0.8f);
 
         Entity player1 = world.GetEntityManager().CreateEntity();
         Transform* t1 = world.GetEntityManager().AddComponent<Transform>(player1, Transform{});
         t1->setPosition(glm::vec3(s.posX[0], s.posY[0], 0.0f));
         t1->setRotation(glm::vec3(0.0f, 0.0f, 90.0f));
         t1->setScale(glm::vec3(5.0f, 5.0f, 5.0f));
-
         auto player1Mat = std::make_shared<Material>("ggx.vert", "ggx.frag");
-
         world.GetEntityManager().AddComponent<Playable>(player1, Playable{ 0, MakeZeroInputBlob(), (0 == playerId ? true : false) });
         world.GetEntityManager().AddComponent<SpaceShip>(player1, SpaceShip{ 100,-1,0,0,true });
         world.GetEntityManager().AddComponent<MeshComponent>(player1, MeshComponent(new Mesh("ship.glb", player1Mat)));
@@ -614,9 +727,7 @@ public:
         t2->setPosition(glm::vec3(s.posX[1], s.posY[1], 0.0f));
         t2->setRotation(glm::vec3(0.0f, 0.0f, 270.0f));
         t2->setScale(glm::vec3(5.0f, 5.0f, 5.0f));
-
         auto player2Mat = std::make_shared<Material>("ggx.vert", "ggx.frag");
-
         world.GetEntityManager().AddComponent<Playable>(player2, Playable{ 1, MakeZeroInputBlob(), (1 == playerId ? true : false) });
         world.GetEntityManager().AddComponent<SpaceShip>(player2, SpaceShip{ 100,-1,0,0,true });
         world.GetEntityManager().AddComponent<MeshComponent>(player2, MeshComponent(new Mesh("ship.glb", player2Mat)));
@@ -636,7 +747,6 @@ public:
         element->size = glm::vec2(150.0f, 40.0f);
         element->pivot = glm::vec2(0.0f, 0.0f);
         element->layer = 1;
-
         UIText* text = world.GetEntityManager().AddComponent<UIText>(healthText, UIText{});
         text->text = "Health:";
         text->fontSize = 32.0f;
@@ -647,30 +757,225 @@ public:
         Transform* tlight = world.GetEntityManager().AddComponent<Transform>(light, Transform{});
         tlight->setPosition(glm::vec3(0.0f, 0.0f, 15.0f));
         PointLightComponent* lightComp = world.GetEntityManager().AddComponent<PointLightComponent>(light, PointLightComponent{});
-		lightComp->color = glm::vec3(0.302, 0.651, 1.0);
+        lightComp->color = glm::vec3(0.302, 0.651, 1.0);
         lightComp->intensity = 1000.0f;
         lightComp->radius = 100.0f;
         lightComp->castShadows = true;
 
-        Entity escenario = world.GetEntityManager().CreateEntity();
-        Transform* tesc = world.GetEntityManager().AddComponent<Transform>(escenario, Transform{});
-        tesc->setPosition(glm::vec3(0.0f, 0.0f, 1.0f));
-        tesc->setRotation(glm::vec3(90.0f,0.0f, 0.0f));
-        tesc->setScale(glm::vec3(12.0f, 12.0f, 12.0f));
+        const int x_size = 5;
+        const int y_size = 5;
 
-        auto escenarioMat = std::make_shared<Material>("ggx.vert", "ggx.frag");
-        world.GetEntityManager().AddComponent<MeshComponent>(escenario, MeshComponent(new Mesh("escenario.glb", escenarioMat)));
+        auto& em = world.GetEntityManager();
 
-		Entity rightThrusterEntity1 = world.GetEntityManager().CreateEntity();
-		Transform* rThruster1 = world.GetEntityManager().AddComponent<Transform>(rightThrusterEntity1, Transform{});
-		rThruster1->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
+        // --- Tiles ---
+        for (int x = 0; x < x_size; x++)
+        {
+            for (int y = 0; y < y_size; y++)
+            {
+                const int cellId = x * y_size + y;
+                Entity e = em.CreateEntity();
+                Transform* t = em.AddComponent<Transform>(e, Transform{});
+                t->setPosition(glm::vec3((x - x_size / 2.0f) * 80.0f,
+                    (y - y_size / 2.0f) * 80.0f, -4.0f));
+                t->setScale(glm::vec3(1.0f));
+                em.AddComponent<TileID>(e, TileID{ cellId });
+                em.AddComponent<MeshComponent>(e, MeshComponent(
+                    new Mesh("tile.glb", std::make_shared<Material>("ggx.vert", "ggx.frag"))
+                ));
+            }
+        }
+
+        // --- Pillars ---
+        for (int px = 0; px <= 2 * x_size; px++)
+        {
+            for (int py = 0; py <= 2 * y_size; py++)
+            {
+                const bool isTileCentre = (px % 2 == 1 && py % 2 == 1);
+
+                Entity e = em.CreateEntity();
+                Transform* t = em.AddComponent<Transform>(e, Transform{});
+                t->setPosition(glm::vec3((px - x_size) * 40.0f - 40.0f,
+                    (py - y_size) * 40.0f - 40.0f, -4.0f));
+                t->setRotation(glm::vec3(90.0f, 0.0f, 0.0f));
+                t->setScale(glm::vec3(1.0f));
+
+                PillarID pid;
+                if (isTileCentre)
+                {
+                    const int cx = (px - 1) / 2;
+                    const int cy = (py - 1) / 2;
+                    pid.addCell(cx * y_size + cy);
+                }
+                else
+                {
+                    const int cx_min = (px - 2) / 2;
+                    const int cx_max = px / 2;
+                    const int cy_min = (py - 2) / 2;
+                    const int cy_max = py / 2;
+
+                    for (int cx = std::max(cx_min, 0); cx <= std::min(cx_max, x_size - 1); cx++)
+                    {
+                        for (int cy = std::max(cy_min, 0); cy <= std::min(cy_max, y_size - 1); cy++)
+                        {
+                            const bool onBorderX = (px == 2 * cx || px == 2 * cx + 1 || px == 2 * cx + 2);
+                            const bool onBorderY = (py == 2 * cy || py == 2 * cy + 1 || py == 2 * cy + 2);
+                            if (onBorderX && onBorderY)
+                                pid.addCell(cx * y_size + cy);
+                        }
+                    }
+                }
+
+                em.AddComponent<PillarID>(e, pid);
+                em.AddComponent<MeshComponent>(e, MeshComponent(
+                    new Mesh("pilar.glb", std::make_shared<Material>("ggx.vert", "ggx.frag"))
+                ));
+            }
+        }
+
+        // --- Walls ---
+        std::vector<WallDef> walls;
+
+        for (int px = 0; px < 2 * x_size; px++)
+        {
+            for (int py = 0; py <= 2 * y_size; py++)
+            {
+                const float midX = ((px - x_size) * 40.0f - 40.0f + (px + 1 - x_size) * 40.0f - 40.0f) / 2.0f;
+                const float midY = (py - y_size) * 40.0f - 40.0f;
+
+                for (int cx = 0; cx < x_size; cx++)
+                {
+                    for (int cy = 0; cy < y_size; cy++)
+                    {
+                        if (px < 2 * cx || px >= 2 * cx + 2) continue;
+                        if (py != 2 * cy && py != 2 * cy + 2) continue;
+
+                        const CellCardinalDirection dir = (py == 2 * cy)
+                            ? CellCardinalDirection::Down
+                            : CellCardinalDirection::Up;
+                        const bool onBorder = (py == 0) || (py == 2 * y_size);
+
+                        walls.push_back({ cx, cy, dir,
+                            glm::vec3(midX, midY, 0.0f),
+                            glm::vec3(0.0f, 90.0f, 0.0f),
+                            onBorder });
+                    }
+                }
+            }
+        }
+
+        for (int px = 0; px <= 2 * x_size; px++)
+        {
+            for (int py = 0; py < 2 * y_size; py++)
+            {
+                const float midX = (px - x_size) * 40.0f - 40.0f;
+                const float midY = ((py - y_size) * 40.0f - 40.0f + (py + 1 - y_size) * 40.0f - 40.0f) / 2.0f;
+
+                for (int cx = 0; cx < x_size; cx++)
+                {
+                    for (int cy = 0; cy < y_size; cy++)
+                    {
+                        if (py < 2 * cy || py >= 2 * cy + 2) continue;
+                        if (px != 2 * cx && px != 2 * cx + 2) continue;
+
+                        const CellCardinalDirection dir = (px == 2 * cx)
+                            ? CellCardinalDirection::Left
+                            : CellCardinalDirection::Right;
+                        const bool onBorder = (px == 0) || (px == 2 * x_size);
+
+                        walls.push_back({ cx, cy, dir,
+                            glm::vec3(midX, midY, 0.0f),
+                            glm::vec3(90.0f, 0.0f, 0.0f),
+                            onBorder });
+                    }
+                }
+            }
+        }
+
+        // Spawn wall entities (renderer side — enabled state comes from GameState_To_ECSWorld)
+        for (auto& w : walls)
+        {
+            const int cellId = w.cellX * y_size + w.cellY;
+
+            Entity e = em.CreateEntity();
+            Transform* t = em.AddComponent<Transform>(e, Transform{});
+            t->setPosition(w.pos);
+            t->setRotation(w.rot);
+            t->setScale(glm::vec3(2.0f, 2.0f, 19.0f));
+
+            LaserWallID lwid(cellId, w.dir);
+            lwid.enabled = w.onBorder; // will be overwritten by GameState_To_ECSWorld each frame
+            em.AddComponent<LaserWallID>(e, lwid);
+
+            Mesh* mesh = new Mesh("laser_wall.glb",
+                std::make_shared<Material>("ggx.vert", "ggx.frag"));
+            MeshComponent* mc = em.AddComponent<MeshComponent>(e, MeshComponent(mesh));
+            mc->castShadows = false;
+        }
+
+        // Center spokes (renderer side)
+        for (int cx = 0; cx < x_size; cx++)
+        {
+            for (int cy = 0; cy < y_size; cy++)
+            {
+                const float centerX = (2 * cx + 1 - x_size) * 40.0f - 40.0f;
+                const float centerY = (2 * cy + 1 - y_size) * 40.0f - 40.0f;
+
+                auto makeSpoke = [&](CellCardinalDirection dir, glm::vec3 pos, glm::vec3 rot)
+                    {
+                        const int cellId = cx * y_size + cy;
+                        Entity e = em.CreateEntity();
+                        Transform* t = em.AddComponent<Transform>(e, Transform{});
+                        t->setPosition(pos);
+                        t->setRotation(rot);
+                        t->setScale(glm::vec3(2.0f, 2.0f, 19.0f));
+
+                        LaserWallID lwid(cellId, dir);
+                        lwid.enabled = false; // will be overwritten by GameState_To_ECSWorld each frame
+                        em.AddComponent<LaserWallID>(e, lwid);
+                        em.AddComponent<CenterSpoke>(e, CenterSpoke{});
+
+                        Mesh* mesh = new Mesh("laser_wall.glb",
+                            std::make_shared<Material>("ggx.vert", "ggx.frag"));
+                        MeshComponent* mc = em.AddComponent<MeshComponent>(e, MeshComponent(mesh));
+                        mc->castShadows = false;
+                    };
+
+                {
+                    const float edgeY = (2 * cy - y_size) * 40.0f - 40.0f;
+                    makeSpoke(CellCardinalDirection::Down,
+                        glm::vec3(centerX, (centerY + edgeY) / 2.0f, 0.0f),
+                        glm::vec3(90.0f, 0.0f, 0.0f));
+                }
+                {
+                    const float edgeY = (2 * cy + 2 - y_size) * 40.0f - 40.0f;
+                    makeSpoke(CellCardinalDirection::Up,
+                        glm::vec3(centerX, (centerY + edgeY) / 2.0f, 0.0f),
+                        glm::vec3(90.0f, 0.0f, 0.0f));
+                }
+                {
+                    const float edgeX = (2 * cx - x_size) * 40.0f - 40.0f;
+                    makeSpoke(CellCardinalDirection::Left,
+                        glm::vec3((centerX + edgeX) / 2.0f, centerY, 0.0f),
+                        glm::vec3(0.0f, 90.0f, 0.0f));
+                }
+                {
+                    const float edgeX = (2 * cx + 2 - x_size) * 40.0f - 40.0f;
+                    makeSpoke(CellCardinalDirection::Right,
+                        glm::vec3((centerX + edgeX) / 2.0f, centerY, 0.0f),
+                        glm::vec3(0.0f, 90.0f, 0.0f));
+                }
+            }
+        }
+
+        // Thrusters player 1
+        Entity rightThrusterEntity1 = world.GetEntityManager().CreateEntity();
+        Transform* rThruster1 = world.GetEntityManager().AddComponent<Transform>(rightThrusterEntity1, Transform{});
+        rThruster1->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
         rThruster1->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
         rThruster1->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
-
-		auto rThrusterOwner1 = world.GetEntityManager().AddComponent<ThrusterOwner>(rightThrusterEntity1, ThrusterOwner{ 0,false,false });
-
-		auto rThrusterParticle1 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(rightThrusterEntity1, ParticlePresets::SpaceshipThruster());
-		rThrusterParticle1->emissionRate = 300.0f;
+        world.GetEntityManager().AddComponent<ThrusterOwner>(rightThrusterEntity1, ThrusterOwner{ 0,false,false });
+        auto rThrusterParticle1 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(rightThrusterEntity1, ParticlePresets::SpaceshipThruster());
+        rThrusterParticle1->emissionRate = 300.0f;
         rThrusterParticle1->startLifetime = 0.05f;
 
         Entity leftThrusterEntity1 = world.GetEntityManager().CreateEntity();
@@ -678,7 +983,7 @@ public:
         lThruster1->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
         lThruster1->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
         lThruster1->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
-        auto lThrusterOwner1 = world.GetEntityManager().AddComponent<ThrusterOwner>(leftThrusterEntity1, ThrusterOwner{ 0,false,true });
+        world.GetEntityManager().AddComponent<ThrusterOwner>(leftThrusterEntity1, ThrusterOwner{ 0,false,true });
         auto lThrusterParticle1 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(leftThrusterEntity1, ParticlePresets::SpaceshipThruster());
         lThrusterParticle1->emissionRate = 300.0f;
         lThrusterParticle1->startLifetime = 0.05f;
@@ -688,7 +993,7 @@ public:
         tLeftSmoke1->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
         tLeftSmoke1->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
         tLeftSmoke1->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
-        world.GetEntityManager().AddComponent<ThrusterOwner>(leftSmokeEntity1, ThrusterOwner{ 0,true, true });
+        world.GetEntityManager().AddComponent<ThrusterOwner>(leftSmokeEntity1, ThrusterOwner{ 0,true,true });
         auto leftSmokeParticle1 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(leftSmokeEntity1, ParticlePresets::Smoke());
         leftSmokeParticle1->emissionRate = 6.0f;
         leftSmokeParticle1->startLifetime = 2.5f;
@@ -709,7 +1014,7 @@ public:
         tRightSmoke1->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
         tRightSmoke1->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
         tRightSmoke1->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
-        world.GetEntityManager().AddComponent<ThrusterOwner>(rightSmokeEntity1, ThrusterOwner{ 0,true, false });
+        world.GetEntityManager().AddComponent<ThrusterOwner>(rightSmokeEntity1, ThrusterOwner{ 0,true,false });
         auto rightSmokeParticle1 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(rightSmokeEntity1, ParticlePresets::Smoke());
         rightSmokeParticle1->emissionRate = 6.0f;
         rightSmokeParticle1->startLifetime = 2.5f;
@@ -725,12 +1030,13 @@ public:
         rightSmokeParticle1->turbulenceStrength = 0.1f;
         rightSmokeParticle1->enabled = false;
 
+        // Thrusters player 2
         Entity rightThrusterEntity2 = world.GetEntityManager().CreateEntity();
         Transform* rThruster2 = world.GetEntityManager().AddComponent<Transform>(rightThrusterEntity2, Transform{});
         rThruster2->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
         rThruster2->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
         rThruster2->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
-        auto rThrusterOwner2 = world.GetEntityManager().AddComponent<ThrusterOwner>(rightThrusterEntity2, ThrusterOwner{ 1,false,false });
+        world.GetEntityManager().AddComponent<ThrusterOwner>(rightThrusterEntity2, ThrusterOwner{ 1,false,false });
         auto rThrusterParticle2 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(rightThrusterEntity2, ParticlePresets::SpaceshipThruster());
         rThrusterParticle2->emissionRate = 300.0f;
         rThrusterParticle2->startLifetime = 0.05f;
@@ -740,7 +1046,7 @@ public:
         lThruster2->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
         lThruster2->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
         lThruster2->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
-        auto lThrusterOwner2 = world.GetEntityManager().AddComponent<ThrusterOwner>(leftThrusterEntity2, ThrusterOwner{ 1,false,true });
+        world.GetEntityManager().AddComponent<ThrusterOwner>(leftThrusterEntity2, ThrusterOwner{ 1,false,true });
         auto lThrusterParticle2 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(leftThrusterEntity2, ParticlePresets::SpaceshipThruster());
         lThrusterParticle2->emissionRate = 300.0f;
         lThrusterParticle2->startLifetime = 0.05f;
@@ -750,7 +1056,7 @@ public:
         tLeftSmoke2->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
         tLeftSmoke2->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
         tLeftSmoke2->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
-        world.GetEntityManager().AddComponent<ThrusterOwner>(leftSmokeEntity2, ThrusterOwner{ 1,true, true });
+        world.GetEntityManager().AddComponent<ThrusterOwner>(leftSmokeEntity2, ThrusterOwner{ 1,true,true });
         auto leftSmokeParticle2 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(leftSmokeEntity2, ParticlePresets::Smoke());
         leftSmokeParticle2->emissionRate = 6.0f;
         leftSmokeParticle2->startLifetime = 2.5f;
@@ -771,7 +1077,7 @@ public:
         tRightSmoke2->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
         tRightSmoke2->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
         tRightSmoke2->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
-        world.GetEntityManager().AddComponent<ThrusterOwner>(rightSmokeEntity2, ThrusterOwner{ 1,true, false });
+        world.GetEntityManager().AddComponent<ThrusterOwner>(rightSmokeEntity2, ThrusterOwner{ 1,true,false });
         auto rightSmokeParticle2 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(rightSmokeEntity2, ParticlePresets::Smoke());
         rightSmokeParticle2->emissionRate = 6.0f;
         rightSmokeParticle2->startLifetime = 2.5f;
@@ -787,12 +1093,12 @@ public:
         rightSmokeParticle2->turbulenceStrength = 0.1f;
         rightSmokeParticle2->enabled = false;
 
-
-        // Add render systems
+        // Render systems
         world.AddSystem(std::make_unique<CameraFollowSystem>());
         world.AddSystem(std::make_unique<OnDeathRenderSystem>());
         world.AddSystem(std::make_unique<ChargingBulletRenderSystem>());
         world.AddSystem(std::make_unique<LinkThrusterToShipSystem>());
+        //world.AddSystem(std::make_unique<LaserWallRenderSystem>());
         world.AddSystem(std::make_unique<DestroyTimerSystem>());
 
         AudioListenerComponent* listener = world.GetEntityManager().AddComponent<AudioListenerComponent>(camera, AudioListenerComponent{});
@@ -801,8 +1107,15 @@ public:
         AudioManager::SetMusicVolume(0.25f);
     }
 
-    void Interpolate(const GameStateBlob& previousServerState, const GameStateBlob& currentServerState, const GameStateBlob& previousLocalState, const GameStateBlob& currentLocalState, GameStateBlob& renderState, float serverInterpolation, float localInterpolation) override {
-        // Deserializa los estados
+    void Interpolate(
+        const GameStateBlob& previousServerState,
+        const GameStateBlob& currentServerState,
+        const GameStateBlob& previousLocalState,
+        const GameStateBlob& currentLocalState,
+        GameStateBlob& renderState,
+        float serverInterpolation,
+        float localInterpolation) override
+    {
         const AsteroidShooterGameState& prevServer = *reinterpret_cast<const AsteroidShooterGameState*>(previousServerState.data);
         const AsteroidShooterGameState& currServer = *reinterpret_cast<const AsteroidShooterGameState*>(currentServerState.data);
         const AsteroidShooterGameState& prevLocal = *reinterpret_cast<const AsteroidShooterGameState*>(previousLocalState.data);
@@ -810,96 +1123,77 @@ public:
 
         AsteroidShooterGameState& rend = *reinterpret_cast<AsteroidShooterGameState*>(renderState.data);
 
-        // Interpola jugadores
         for (int i = 0; i < 2; ++i) {
             if (playerId == i)
             {
-                // Local player - use local prediction
                 rend.posX[i] = prevLocal.posX[i] + (currLocal.posX[i] - prevLocal.posX[i]) * localInterpolation;
                 rend.posY[i] = prevLocal.posY[i] + (currLocal.posY[i] - prevLocal.posY[i]) * localInterpolation;
-
-                // Rotación: interpola linealmente (con el camino más corto)
                 float delta = currLocal.rot[i] - prevLocal.rot[i];
-                // Normaliza el delta al rango [-180, 180] para tomar el camino más corto
                 while (delta > 180.0f) delta -= 360.0f;
                 while (delta < -180.0f) delta += 360.0f;
                 rend.rot[i] = prevLocal.rot[i] + delta * localInterpolation;
             }
             else
             {
-                // Remote player - use server state
+                Debug::Info("Interpolate")
+                    << "Player " << i
+                    << " | prevServer=(" << prevServer.posX[i] << "," << prevServer.posY[i] << ")"
+                    << " currServer=(" << currServer.posX[i] << "," << currServer.posY[i] << ")"
+                    << " factor=" << serverInterpolation
+                    << " prevFrame=" << previousServerState.frame
+                    << " currFrame=" << currentServerState.frame
+                    << "\n";
+
                 rend.posX[i] = prevServer.posX[i] + (currServer.posX[i] - prevServer.posX[i]) * serverInterpolation;
                 rend.posY[i] = prevServer.posY[i] + (currServer.posY[i] - prevServer.posY[i]) * serverInterpolation;
-
-                // Rotación: interpola linealmente, corrigiendo el camino más corto
                 float delta = currServer.rot[i] - prevServer.rot[i];
-                // Normaliza el delta al rango [-180, 180] para tomar el camino más corto
                 while (delta > 180.0f) delta -= 360.0f;
                 while (delta < -180.0f) delta += 360.0f;
                 rend.rot[i] = prevServer.rot[i] + delta * serverInterpolation;
             }
 
-            // Server is authority for health and cooldowns (for both players)
             rend.health[i] = currServer.health[i];
-			rend.alive[i] = currServer.alive[i];
-			rend.remaingShootFrames[i] = currServer.remaingShootFrames[i];
-			rend.isMovingForward[i] = currServer.isMovingForward[i];
-			rend.shipInclination[i] = currServer.shipInclination[i];
-			rend.isShooting[i] = currServer.isShooting[i];
+            rend.alive[i] = currServer.alive[i];
+            rend.remaingShootFrames[i] = currServer.remaingShootFrames[i];
+            rend.isMovingForward[i] = currServer.isMovingForward[i];
+            rend.shipInclination[i] = currServer.shipInclination[i];
+            rend.isShooting[i] = currServer.isShooting[i];
             rend.shootCooldown[i] = currServer.shootCooldown[i];
             rend.deathCooldown[i] = currServer.deathCooldown[i];
         }
 
-        // Interpola balas
+        // Bullets
         rend.bulletCount = currServer.bulletCount;
         for (int i = 0; i < MAX_BULLETS; ++i) {
-            const Bullet& prevServerBullet = prevServer.bullets[i];
-            const Bullet& currServerBullet = currServer.bullets[i];
-            const Bullet& prevLocalBullet = prevLocal.bullets[i];
-            const Bullet& currLocalBullet = currLocal.bullets[i];
+            const Bullet& prevB = prevServer.bullets[i];
+            const Bullet& currB = currServer.bullets[i];
+            Bullet& rendB = rend.bullets[i];
 
-            Bullet& rendBullet = rend.bullets[i];
-
-            if (currServerBullet.active)
-            {
-                if (prevServerBullet.active)
-                {
-                    // Bullet was active in both previous and current - interpolate
-                    rendBullet.id = currServerBullet.id;
-                    rendBullet.active = true;
-                    rendBullet.posX = prevServerBullet.posX + (currServerBullet.posX - prevServerBullet.posX) * serverInterpolation;
-                    rendBullet.posY = prevServerBullet.posY + (currServerBullet.posY - prevServerBullet.posY) * serverInterpolation;
-                    rendBullet.velX = prevServerBullet.velX + (currServerBullet.velX - prevServerBullet.velX) * serverInterpolation;
-                    rendBullet.velY = prevServerBullet.velY + (currServerBullet.velY - prevServerBullet.velY) * serverInterpolation;
-                    rendBullet.ownerId = currServerBullet.ownerId;
-                    rendBullet.lifetime = currServerBullet.lifetime;
+            if (currB.active) {
+                if (prevB.active) {
+                    rendB.id = currB.id;
+                    rendB.active = true;
+                    rendB.posX = prevB.posX + (currB.posX - prevB.posX) * serverInterpolation;
+                    rendB.posY = prevB.posY + (currB.posY - prevB.posY) * serverInterpolation;
+                    rendB.velX = currB.velX;
+                    rendB.velY = currB.velY;
+                    rendB.ownerId = currB.ownerId;
+                    rendB.lifetime = currB.lifetime;
                 }
-                else
-                {
-                    // Si solo está activa en el estado actual del servidor, copia el actual del servidor
-                    rendBullet = currServerBullet;
+                else {
+                    rendB = currB;
                 }
             }
-            else
-            {
-                // Bala inactiva
-                rendBullet.active = false;
+            else {
+                rendB.active = false;
             }
         }
 
-        /*/if (Input::KeyPressed(Input::CharToKeycode('p')))
-        {
-			Debug::Info("Interpolation") << "=== Prev Server Game State ===\n";
-            printGameState(prevServer);
-			Debug::Info("Interpolation") << "=== Prev Local Game State ===\n";
-            printGameState(prevLocal);
-			Debug::Info("Interpolation") << "=== Curr Server Game State ===\n";
-            printGameState(currServer);
-			Debug::Info("Interpolation") << "=== Curr Local Game State ===\n";
-            printGameState(currLocal);
-			Debug::Info("Interpolation") << "=== Rendered Game State ===\n";
-			printGameState(rend);
-        }*/
+        // Walls — use server state directly (no interpolation needed)
+        //std::memcpy(rend.hWalls, currServer.hWalls, sizeof(currServer.hWalls));
+        //std::memcpy(rend.vWalls, currServer.vWalls, sizeof(currServer.vWalls));
+        //std::memcpy(rend.cWalls, currServer.cWalls, sizeof(currServer.cWalls));
+        //std::memcpy(rend.tilesActive, currServer.tilesActive, sizeof(currServer.tilesActive));
     }
 
     ~AsteroidShooterGameRenderer() override {
@@ -907,7 +1201,7 @@ public:
     }
 
 private:
-    OpenGLWindow* window;  // Store window pointer for cleanup
+    OpenGLWindow* window;
 };
 
 #endif

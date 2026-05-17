@@ -22,29 +22,22 @@ public:
 		const GameStateBlob& currentState,
 		std::vector<DeltaStateBlob>& outDeltas) override
 	{
-		AsteroidShooterGameState prevGS = *reinterpret_cast<const AsteroidShooterGameState*>(prevState.data);
+		// Always send positions every tick so interpolation always has
+		// prev and curr data, even when players are stationary.
 		AsteroidShooterGameState currGS = *reinterpret_cast<const AsteroidShooterGameState*>(currentState.data);
 		GamePositionsDelta gpd;
-		bool changed = false;
+		gpd.posX[0] = currGS.posX[0];
+		gpd.posY[0] = currGS.posY[0];
+		gpd.rot[0] = currGS.rot[0];
+		gpd.posX[1] = currGS.posX[1];
+		gpd.posY[1] = currGS.posY[1];
+		gpd.rot[1] = currGS.rot[1];
 
-		if (prevGS.posX[0] != currGS.posX[0] || prevGS.posY[0] != currGS.posY[0] || prevGS.rot[0] != currGS.rot[0] ||
-			prevGS.posX[1] != currGS.posX[1] || prevGS.posY[1] != currGS.posY[1] || prevGS.rot[1] != currGS.rot[1]) {
-			gpd.posX[0] = currGS.posX[0];
-			gpd.posY[0] = currGS.posY[0];
-			gpd.rot[0] = currGS.rot[0];
-			gpd.posX[1] = currGS.posX[1];
-			gpd.posY[1] = currGS.posY[1];
-			gpd.rot[1] = currGS.rot[1];
-			changed = true;
-		}
-
-		if (changed) {
-			DeltaStateBlob deltaBlob;
-			deltaBlob.delta_type = DELTA_GAME_POSITIONS;
-			std::memcpy(deltaBlob.data, &gpd, sizeof(GamePositionsDelta));
-			deltaBlob.len = sizeof(GamePositionsDelta);
-			outDeltas.push_back(deltaBlob);
-		}
+		DeltaStateBlob deltaBlob;
+		deltaBlob.delta_type = DELTA_GAME_POSITIONS;
+		std::memcpy(deltaBlob.data, &gpd, sizeof(GamePositionsDelta));
+		deltaBlob.len = sizeof(GamePositionsDelta);
+		outDeltas.push_back(deltaBlob);
 	}
 
 	bool Compare(const DeltaStateBlob& delta,

@@ -454,6 +454,8 @@ private:
             int frame;
 
             net_.ParseDeltasUpdate(data, len, deltas, frame);
+            //Debug::Info("OnlineClient") << "Parsed delta packet: frame=" << frame
+            //    << " deltas=" << deltas.size() << "\n";
 
             prediction.OnServerDeltasUpdate(deltas,frame);
             cWin.setServerState(prediction.GetLatestServerState());
