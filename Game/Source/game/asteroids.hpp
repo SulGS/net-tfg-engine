@@ -27,6 +27,7 @@
 #include "EventHandlers.hpp"
 #include "Deltas.hpp"
 #include "DeltaHandler.hpp"
+#include <unordered_set>
 
 #include "OpenAL/AudioManager.hpp"
 #include "OpenAL/AudioComponents.hpp"
@@ -143,9 +144,16 @@ public:
         const int x_size = 5;
         const int y_size = 5;
 
-        // Tiles and walls are managed by events (ToggleWallHandler, DestroyTileHandler).
-        // Do NOT sync walls from renderState - renderState walls are zeroed
-        // because deltas don't include wall data, so syncing would disable all walls.
+        // Sync tile active flag from blob into logic ECS
+        {
+            auto tileQuery = world.GetEntityManager().CreateQuery<TileID>();
+            for (auto [entity, tileId] : tileQuery)
+            {
+                int cx = tileId->id / y_size;
+                int cy = tileId->id % y_size;
+                tileId->active = s.tilesActive[cx][cy];
+            }
+        }
     }
 
     void ECSWorld_To_GameState(GameStateBlob& state) {
@@ -195,6 +203,7 @@ public:
         auto tileQuery = world.GetEntityManager().CreateQuery<TileID>();
         for (auto [entity, tileId] : tileQuery)
         {
+            if (!tileId->active) continue;  // ← skip inactive
             int cx = tileId->id / y_size;
             int cy = tileId->id % y_size;
             s.tilesActive[cx][cy] = true;
@@ -523,7 +532,7 @@ public:
         if (isServer)
         {
             world.AddSystem(std::make_unique<InputServerSystem>());
-            //world.AddSystem(std::make_unique<ArenaSystem>());
+            world.AddSystem(std::make_unique<ArenaSystem>());
         }
 
         world.AddSystem(std::make_unique<BulletSystem>());
@@ -688,7 +697,61 @@ public:
             }
         }
 
-        // Walls managed by events (ToggleWallHandler) - do not sync from renderState.
+        const int x_size = 5;
+        const int y_size = 5;
+
+        // Build active tile set from renderState (authoritative source)
+        // s.tilesActive is populated by ECSWorld_To_GameState on logic side
+        // and copied into renderState via Interpolate's memcpy of currServer
+        std::unordered_set<int> activeTileIds;
+        for (int tx = 0; tx < x_size; tx++)
+            for (int ty = 0; ty < y_size; ty++)
+                if (s.tilesActive[tx][ty])
+                    activeTileIds.insert(tx * y_size + ty);
+
+        // Sync tile active flag from renderState into renderer ECS
+        {
+            auto tileQuery = em.CreateQuery<TileID>();
+            for (auto [entity, tileId] : tileQuery)
+                tileId->active = activeTileIds.count(tileId->id) > 0;
+        }
+
+        // Sync wall enabled state from renderState
+        {
+            auto wallQuery = em.CreateQuery<LaserWallID>();
+            for (auto [entity, lwid] : wallQuery)
+            {
+                if (em.GetComponent<CenterSpoke>(entity) != nullptr) continue;
+                int cx = lwid->cellId / y_size;
+                int cy = lwid->cellId % y_size;
+                switch (lwid->dir)
+                {
+                case CellCardinalDirection::Down:  lwid->enabled = s.vWalls[2 * cx][2 * cy];   break;
+                case CellCardinalDirection::Up:    lwid->enabled = s.vWalls[2 * cx][2 * cy + 2]; break;
+                case CellCardinalDirection::Left:  lwid->enabled = s.hWalls[2 * cx][2 * cy];   break;
+                case CellCardinalDirection::Right: lwid->enabled = s.hWalls[2 * cx + 2][2 * cy]; break;
+                default: break;
+                }
+            }
+            auto spokeQuery = em.CreateQuery<LaserWallID, CenterSpoke>();
+            for (auto [entity, lwid, spoke] : spokeQuery)
+            {
+                int cx = lwid->cellId / y_size;
+                int cy = lwid->cellId % y_size;
+                int dirIdx = 0;
+                switch (lwid->dir)
+                {
+                case CellCardinalDirection::Down:  dirIdx = 0; break;
+                case CellCardinalDirection::Up:    dirIdx = 1; break;
+                case CellCardinalDirection::Left:  dirIdx = 2; break;
+                case CellCardinalDirection::Right: dirIdx = 3; break;
+                default: break;
+                }
+                lwid->enabled = s.cWalls[cx][cy][dirIdx];
+            }
+        }
+
+
     }
 
     void InitECSRenderer(const GameStateBlob& state, OpenGLWindow* window) override {
@@ -1098,7 +1161,7 @@ public:
         world.AddSystem(std::make_unique<OnDeathRenderSystem>());
         world.AddSystem(std::make_unique<ChargingBulletRenderSystem>());
         world.AddSystem(std::make_unique<LinkThrusterToShipSystem>());
-        //world.AddSystem(std::make_unique<LaserWallRenderSystem>());
+        world.AddSystem(std::make_unique<LaserWallRenderSystem>());
         world.AddSystem(std::make_unique<DestroyTimerSystem>());
 
         AudioListenerComponent* listener = world.GetEntityManager().AddComponent<AudioListenerComponent>(camera, AudioListenerComponent{});
@@ -1190,10 +1253,10 @@ public:
         }
 
         // Walls — use server state directly (no interpolation needed)
-        //std::memcpy(rend.hWalls, currServer.hWalls, sizeof(currServer.hWalls));
-        //std::memcpy(rend.vWalls, currServer.vWalls, sizeof(currServer.vWalls));
-        //std::memcpy(rend.cWalls, currServer.cWalls, sizeof(currServer.cWalls));
-        //std::memcpy(rend.tilesActive, currServer.tilesActive, sizeof(currServer.tilesActive));
+        std::memcpy(rend.hWalls, currServer.hWalls, sizeof(currServer.hWalls));
+        std::memcpy(rend.vWalls, currServer.vWalls, sizeof(currServer.vWalls));
+        std::memcpy(rend.cWalls, currServer.cWalls, sizeof(currServer.cWalls));
+        std::memcpy(rend.tilesActive, currServer.tilesActive, sizeof(currServer.tilesActive));
     }
 
     ~AsteroidShooterGameRenderer() override {

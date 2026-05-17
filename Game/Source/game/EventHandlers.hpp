@@ -44,18 +44,43 @@ public:
 };
 
 class DestroyTileHandler : public IEventHandler {
+    static const int MAP_SIZE = 5;
+    static const int y_size = MAP_SIZE;
+    static const int x_size = MAP_SIZE;
+
+    // Returns the neighbour cellId in the given direction, or -1 if out of bounds
+    int NeighbourCell(int cellId, CellCardinalDirection dir)
+    {
+        int cx = cellId / y_size;
+        int cy = cellId % y_size;
+        switch (dir)
+        {
+        case CellCardinalDirection::Left:  cx--; break;
+        case CellCardinalDirection::Right: cx++; break;
+        case CellCardinalDirection::Down:  cy--; break;
+        case CellCardinalDirection::Up:    cy++; break;
+        default: break;
+        }
+        if (cx < 0 || cx >= x_size || cy < 0 || cy >= y_size) return -1;
+        return cx * y_size + cy;
+    }
+
 public:
     void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
     {
         auto ev = *reinterpret_cast<const DestroyTileEventData*>(event.data);
+        EntityManager& em = world.GetEntityManager();
 
-        auto query = world.GetEntityManager().CreateQuery<TileID>();
-        for (auto [entity, tileId] : query)
+        // Mark tile inactive - renderer and logic sync active flag via GameState_To_ECSWorld
         {
-            if (tileId->id == ev.tileId)
+            auto query = em.CreateQuery<TileID>();
+            for (auto [entity, tileId] : query)
             {
-                world.GetEntityManager().DestroyEntity(entity);
-                break;
+                if (tileId->id == ev.tileId)
+                {
+                    tileId->active = false;
+                    break;
+                }
             }
         }
     }
@@ -115,7 +140,7 @@ public:
         auto query2 = world.GetEntityManager().CreateQuery<Playable, SpaceShip>();
 
         for (auto [entity, play, ship] : query2) {
-			
+
             if (play->playerId == coll_ev.playerId && ship->isAlive) {
                 ship->health -= 5;
 
@@ -123,7 +148,7 @@ public:
 
                 if (ship->health <= 0) {
 
-                    if (isServer) 
+                    if (isServer)
                     {
 
                         EventEntry deathEvent;
@@ -134,7 +159,7 @@ public:
                         deathEvent.event.len = sizeof(DeathEventData);
                         world.GetEvents().push_back(deathEvent);
                     }
-					
+
 
                 }
             }
@@ -151,48 +176,48 @@ public:
 
 class DeathHandler : public IEventHandler {
 public:
-	void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
-	{
+    void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
+    {
 
-		auto death_ev = *reinterpret_cast<const DeathEventData*>(event.data);
-		auto query = world.GetEntityManager().CreateQuery<Playable, SpaceShip>();
-		for (auto [entity, play, ship] : query) {
-			if (play->playerId == death_ev.playerId) {
-				ship->health = 0;
-				ship->deathCooldown = 10 * TICKS_PER_SECOND;
-				ship->isAlive = false;
-				if (isServer) {
-					auto col = world.GetEntityManager().GetComponent<BoxCollider2D>(entity);
-					if (col) {
-						col->isEnabled = false;
-					}
-				}
-			}
-		}
-	}
+        auto death_ev = *reinterpret_cast<const DeathEventData*>(event.data);
+        auto query = world.GetEntityManager().CreateQuery<Playable, SpaceShip>();
+        for (auto [entity, play, ship] : query) {
+            if (play->playerId == death_ev.playerId) {
+                ship->health = 0;
+                ship->deathCooldown = 10 * TICKS_PER_SECOND;
+                ship->isAlive = false;
+                if (isServer) {
+                    auto col = world.GetEntityManager().GetComponent<BoxCollider2D>(entity);
+                    if (col) {
+                        col->isEnabled = false;
+                    }
+                }
+            }
+        }
+    }
 };
 
 class RespawnHandler : public IEventHandler {
 public:
-	void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
-	{
+    void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
+    {
 
-		auto respawn_ev = *reinterpret_cast<const RespawnEventData*>(event.data);
-		auto query = world.GetEntityManager().CreateQuery<Playable, Transform, SpaceShip>();
-		for (auto [entity, play, transform, ship] : query) {
-			if (play->playerId == respawn_ev.playerId) {
-				ship->health = 100;
-				ship->deathCooldown = 0;
-				ship->isAlive = true;
-				transform->setPosition(glm::vec3(0.0f, 0.0f, 0.0f));
-				transform->setRotation(glm::vec3(0.0f, 0.0f, 0.0f));
-				if (isServer) {
-					auto col = world.GetEntityManager().GetComponent<BoxCollider2D>(entity);
-					if (col) {
-						col->isEnabled = true;
-					}
-				}
-			}
-		}
-	}
+        auto respawn_ev = *reinterpret_cast<const RespawnEventData*>(event.data);
+        auto query = world.GetEntityManager().CreateQuery<Playable, Transform, SpaceShip>();
+        for (auto [entity, play, transform, ship] : query) {
+            if (play->playerId == respawn_ev.playerId) {
+                ship->health = 100;
+                ship->deathCooldown = 0;
+                ship->isAlive = true;
+                transform->setPosition(glm::vec3(0.0f, 0.0f, 0.0f));
+                transform->setRotation(glm::vec3(0.0f, 0.0f, 0.0f));
+                if (isServer) {
+                    auto col = world.GetEntityManager().GetComponent<BoxCollider2D>(entity);
+                    if (col) {
+                        col->isEnabled = true;
+                    }
+                }
+            }
+        }
+    }
 };

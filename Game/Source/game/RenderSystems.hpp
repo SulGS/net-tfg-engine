@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include <unordered_set>
 
 #include "netcode/netcode_common.hpp"
 #include "ecs/ecs_common.hpp"
@@ -12,6 +13,8 @@
 class CameraFollowSystem : public ISystem
 {
 public:
+    float debugZoomMultiplier = 1.0f; // 1.0 = normal, >1 = zoom out
+
     void Update(
         EntityManager& entityManager,
         std::vector<EventEntry>& events,
@@ -56,14 +59,10 @@ public:
         {
             glm::vec3 newCamPos(
                 localPos.x,
-                localPos.y - 27.0f,
-                camTrans->getPosition().z
+                localPos.y - 27.0f * debugZoomMultiplier,
+                18.0f * debugZoomMultiplier
             );
-
-            // Hard snap position
             camTrans->setPosition(newCamPos);
-
-            // Hard snap target
             cam->setTarget(localPos);
             cam->markViewDirty();
         }
@@ -232,7 +231,7 @@ public:
 
             if (destroyTimer->framesRemaining <= 0)
             {
-				
+
                 audio->pendingToDestroy = true;
             }
         }
@@ -259,7 +258,7 @@ public:
         {
             if (!ship->isAlive) continue;
             float yawRad = glm::radians(shipTransform->getRotation().z);
-            float incl = ship->shipInclination*-1.0f;
+            float incl = ship->shipInclination * -1.0f;
             glm::vec3 rotation;
             rotation.x = incl * cos(yawRad);
             rotation.y = incl * sin(yawRad);
@@ -276,13 +275,13 @@ public:
                 // --- Position (same for both thruster and smoke) ---
                 glm::vec3 localOffset = glm::vec3(-1.8f, 0.0f, 0.0f);
 
-                if (thrusterOwner->isLeftEngine) 
+                if (thrusterOwner->isLeftEngine)
                 {
-					localOffset.y = -0.75f;
-				}
-				else
-				{
-					localOffset.y = 0.75f;
+                    localOffset.y = -0.75f;
+                }
+                else
+                {
+                    localOffset.y = 0.75f;
                 }
 
 
@@ -294,7 +293,7 @@ public:
                 rot[1] = glm::normalize(rot[1]);
                 rot[2] = glm::normalize(rot[2]);
                 thrusterTransform->setPosition(shipTransform->getPosition() + rot * localOffset);
-                
+
 
                 // --- Activation ---
                 if (thrusterOwner->isSmoke)
@@ -306,7 +305,7 @@ public:
                         0.0f
                     ));
                 }
-                else 
+                else
                 {
                     thrusterEmitter->enabled = ship->isMovingForward;   // exhaust when moving
                     thrusterTransform->setRotation(glm::vec3(
@@ -315,7 +314,7 @@ public:
                         0.0f
                     ));
                 }
-                    
+
             }
         }
     }
@@ -324,17 +323,80 @@ public:
 class LaserWallRenderSystem : public ISystem
 {
 public:
-	void Update(
-		EntityManager& entityManager,
-		std::vector<EventEntry>& events,
-		bool isServer,
-		float deltaTime
-	) override
-	{
-		auto laserWallQuery = entityManager.CreateQuery<Transform, LaserWallID, MeshComponent>();
-		for (auto [entity, transform, lwID, mesh] : laserWallQuery)
-		{
-			mesh->enabled = lwID->enabled;
-		}
-	}
+    void Update(
+        EntityManager& entityManager,
+        std::vector<EventEntry>& events,
+        bool isServer,
+        float deltaTime
+    ) override
+    {
+        const int x_size = 5;
+        const int y_size = 5;
+
+        // Build active tile set
+        std::unordered_set<int> activeTileIds;
+        {
+            auto tileActiveQuery = entityManager.CreateQuery<TileID>();
+            for (auto [entity, tileId] : tileActiveQuery)
+                if (tileId->active) activeTileIds.insert(tileId->id);
+        }
+
+        // Tiles: active flag drives visibility
+        {
+            auto tileQuery = entityManager.CreateQuery<TileID, MeshComponent>();
+            for (auto [entity, tileId, mesh] : tileQuery)
+                mesh->enabled = tileId->active;
+        }
+
+        // Walls visibility rules:
+        // 1. Owning cell inactive -> always hidden
+        // 2. Owning cell active, neighbour inactive/out-of-bounds -> always shown (new border)
+        // 3. Both cells active -> driven by lwID->enabled (toggler)
+        {
+            auto laserWallQuery = entityManager.CreateQuery<LaserWallID, MeshComponent>();
+            for (auto [entity, lwID, mesh] : laserWallQuery)
+            {
+                bool ownerActive = activeTileIds.count(lwID->cellId) > 0;
+                if (!ownerActive)
+                {
+                    mesh->enabled = false; // rule 1
+                    continue;
+                }
+
+                // Compute neighbour cell
+                int cx = lwID->cellId / y_size;
+                int cy = lwID->cellId % y_size;
+                int nx = cx, ny = cy;
+                switch (lwID->dir)
+                {
+                case CellCardinalDirection::Left:  nx--; break;
+                case CellCardinalDirection::Right: nx++; break;
+                case CellCardinalDirection::Down:  ny--; break;
+                case CellCardinalDirection::Up:    ny++; break;
+                default: break;
+                }
+
+                bool neighbourInactive = nx < 0 || nx >= x_size || ny < 0 || ny >= y_size
+                    || !activeTileIds.count(nx * y_size + ny);
+
+                if (neighbourInactive)
+                    mesh->enabled = true;  // rule 2: new border wall always shown
+                else
+                    mesh->enabled = lwID->enabled; // rule 3: toggler
+            }
+        }
+
+        // Pillars: hidden when ALL their cells are inactive
+        {
+            auto pillarQuery = entityManager.CreateQuery<PillarID, MeshComponent>();
+            for (auto [entity, pid, mesh] : pillarQuery)
+            {
+                if (pid->cellsIsIn.empty()) { mesh->enabled = false; continue; }
+                bool allGone = true;
+                for (int cellId : pid->cellsIsIn)
+                    if (activeTileIds.count(cellId)) { allGone = false; break; }
+                mesh->enabled = !allGone;
+            }
+        }
+    }
 };

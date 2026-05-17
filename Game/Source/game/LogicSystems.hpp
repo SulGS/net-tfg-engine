@@ -111,7 +111,13 @@ private:
     const int x_size = MAP_SIZE;
     const int y_size = MAP_SIZE;
 
-    const float WARNING_THRESHOLD = 3.0f; // seconds before toggle to show warning
+    const float WARNING_THRESHOLD = 3.0f;      // seconds before wall toggle to warn
+    const float TILE_DESTROY_INTERVAL = 30.0f; // seconds between tile destructions
+    const float TILE_WARNING_THRESHOLD = 3.0f; // seconds before tile destruction to warn
+
+    float tileDestroyTimer = TILE_DESTROY_INTERVAL;
+    int   pendingDestroyTileId = -1;  // cellId of tile chosen to be destroyed, -1 = none
+    bool  tileWarningEmitted = false;
 
     float RandomTimer()
     {
@@ -149,35 +155,62 @@ private:
         EntityManager& entityManager,
         const std::unordered_set<Entity>& spokeEntities,
         bool hWalls[2 * MAP_SIZE + 1][2 * MAP_SIZE],
-        bool vWalls[2 * MAP_SIZE][2 * MAP_SIZE + 1])
+        bool vWalls[2 * MAP_SIZE][2 * MAP_SIZE + 1],
+        bool cWalls[MAP_SIZE][MAP_SIZE][4])
     {
         std::memset(hWalls, 0, sizeof(bool) * (2 * MAP_SIZE + 1) * (2 * MAP_SIZE));
         std::memset(vWalls, 0, sizeof(bool) * (2 * MAP_SIZE) * (2 * MAP_SIZE + 1));
+        std::memset(cWalls, 0, sizeof(bool) * MAP_SIZE * MAP_SIZE * 4);
+
+        // Build active tile set for wall map
+        std::unordered_set<int> activeTileSet;
+        {
+            auto tq = entityManager.CreateQuery<TileID>();
+            for (auto [e, tid] : tq)
+                if (tid->active) activeTileSet.insert(tid->id);
+        }
 
         auto wallQuery = entityManager.CreateQuery<LaserWallID>();
         for (auto [entity, lwid] : wallQuery)
         {
-            if (spokeEntities.count(entity)) continue;
             if (!lwid->enabled) continue;
+            if (!activeTileSet.count(lwid->cellId)) continue;
 
             int cx = lwid->cellId / y_size;
             int cy = lwid->cellId % y_size;
 
-            switch (lwid->dir)
+            if (spokeEntities.count(entity))
             {
-            case CellCardinalDirection::Down:  vWalls[2 * cx][2 * cy] = true; break;
-            case CellCardinalDirection::Up:    vWalls[2 * cx][2 * cy + 2] = true; break;
-            case CellCardinalDirection::Left:  hWalls[2 * cx][2 * cy] = true; break;
-            case CellCardinalDirection::Right: hWalls[2 * cx + 2][2 * cy] = true; break;
-            default: break;
+                switch (lwid->dir)
+                {
+                case CellCardinalDirection::Down:  cWalls[cx][cy][0] = true; break;
+                case CellCardinalDirection::Up:    cWalls[cx][cy][1] = true; break;
+                case CellCardinalDirection::Left:  cWalls[cx][cy][2] = true; break;
+                case CellCardinalDirection::Right: cWalls[cx][cy][3] = true; break;
+                default: break;
+                }
+            }
+            else
+            {
+                switch (lwid->dir)
+                {
+                case CellCardinalDirection::Down:  vWalls[2 * cx][2 * cy] = true; break;
+                case CellCardinalDirection::Up:    vWalls[2 * cx][2 * cy + 2] = true; break;
+                case CellCardinalDirection::Left:  hWalls[2 * cx][2 * cy] = true; break;
+                case CellCardinalDirection::Right: hWalls[2 * cx + 2][2 * cy] = true; break;
+                default: break;
+                }
             }
         }
     }
 
+    // Tile-level reachability: flood-fill using only edge walls (hWalls/vWalls).
+    // Spokes are decorative and do not block inter-tile movement.
     bool IsMapValid(
         const std::vector<std::pair<int, int>>& activeTiles,
         const bool hWalls[2 * MAP_SIZE + 1][2 * MAP_SIZE],
-        const bool vWalls[2 * MAP_SIZE][2 * MAP_SIZE + 1])
+        const bool vWalls[2 * MAP_SIZE][2 * MAP_SIZE + 1],
+        const bool cWalls[MAP_SIZE][MAP_SIZE][4])
     {
         if (activeTiles.empty()) return true;
 
@@ -198,21 +231,21 @@ private:
             auto tryMove = [&](int nx, int ny, bool blocked)
                 {
                     if (nx < 0 || nx >= x_size || ny < 0 || ny >= y_size) return;
-                    if (blocked || visited[nx][ny]) return;
-                    if (!tileExists[nx][ny]) return;
+                    if (!tileExists[nx][ny] || blocked || visited[nx][ny]) return;
                     visited[nx][ny] = true;
                     count++;
                     q.push({ nx, ny });
                 };
 
-            tryMove(cx + 1, cy, hWalls[2 * cx + 2][2 * cy]);
-            tryMove(cx - 1, cy, hWalls[2 * cx][2 * cy]);
-            tryMove(cx, cy + 1, vWalls[2 * cx][2 * cy + 2]);
-            tryMove(cx, cy - 1, vWalls[2 * cx][2 * cy]);
+            tryMove(cx + 1, cy, hWalls[2 * cx + 2][2 * cy]); // Right
+            tryMove(cx - 1, cy, hWalls[2 * cx][2 * cy]); // Left
+            tryMove(cx, cy + 1, vWalls[2 * cx][2 * cy + 2]); // Up
+            tryMove(cx, cy - 1, vWalls[2 * cx][2 * cy]); // Down
         }
 
         return count == (int)activeTiles.size();
     }
+
 
     void EmitToggleWall(std::vector<EventEntry>& events, int cellId,
         CellCardinalDirection dir, bool isSpoke, bool enabled,
@@ -228,6 +261,79 @@ private:
         std::memcpy(ev.event.data, &data, sizeof(ToggleWallEventData));
         ev.event.len = sizeof(ToggleWallEventData);
         events.push_back(ev);
+    }
+
+    void EmitDestroyTile(std::vector<EventEntry>& events, int tileId)
+    {
+        Debug::Info("ArenaSystem") << "[SERVER] Destroying tile id=" << tileId
+            << " cell=(" << tileId / y_size << "," << tileId % y_size << ")\n";
+        EventEntry ev;
+        ev.event.type = AsteroidEventMask::DESTROY_TILE;
+        DestroyTileEventData data;
+        data.tileId = tileId;
+        std::memcpy(ev.event.data, &data, sizeof(DestroyTileEventData));
+        ev.event.len = sizeof(DestroyTileEventData);
+        events.push_back(ev);
+    }
+
+    void EmitWarnTile(std::vector<EventEntry>& events, int tileId)
+    {
+        EventEntry ev;
+        ev.event.type = AsteroidEventMask::WARN_TILE;
+        WarnTileEventData data;
+        data.tileId = tileId;
+        std::memcpy(ev.event.data, &data, sizeof(WarnTileEventData));
+        ev.event.len = sizeof(WarnTileEventData);
+        events.push_back(ev);
+    }
+
+    // Returns true if removing this tile keeps the map 4-way connected
+    // Check if removing a tile keeps all remaining tiles 4-way connected.
+    // No wall checks needed - pure tile graph connectivity.
+    bool IsTileDestroyable(int cellId,
+        const std::vector<std::pair<int, int>>& activeTiles)
+    {
+        if (activeTiles.size() <= 1) return false;
+
+        int cx = cellId / y_size;
+        int cy = cellId % y_size;
+
+        std::vector<std::pair<int, int>> remaining;
+        remaining.reserve(activeTiles.size() - 1);
+        for (auto& t : activeTiles)
+            if (!(t.first == cx && t.second == cy))
+                remaining.push_back(t);
+
+        if (remaining.empty()) return false;
+
+        // Simple BFS on tile graph, no walls
+        bool tileExists[MAP_SIZE][MAP_SIZE] = {};
+        for (auto& t : remaining)
+            tileExists[t.first][t.second] = true;
+
+        bool visited[MAP_SIZE][MAP_SIZE] = {};
+        std::queue<std::pair<int, int>> q;
+        q.push(remaining[0]);
+        visited[remaining[0].first][remaining[0].second] = true;
+        int count = 1;
+
+        while (!q.empty())
+        {
+            auto [tx, ty] = q.front(); q.pop();
+            const int dx[] = { 1,-1,0,0 };
+            const int dy[] = { 0,0,1,-1 };
+            for (int d = 0; d < 4; d++)
+            {
+                int nx = tx + dx[d], ny = ty + dy[d];
+                if (nx < 0 || nx >= x_size || ny < 0 || ny >= y_size) continue;
+                if (!tileExists[nx][ny] || visited[nx][ny]) continue;
+                visited[nx][ny] = true;
+                count++;
+                q.push({ nx,ny });
+            }
+        }
+
+        return count == (int)remaining.size();
     }
 
 public:
@@ -250,7 +356,8 @@ public:
         {
             auto tileQuery = entityManager.CreateQuery<TileID>();
             for (auto [entity, tileId] : tileQuery)
-                activeTiles.push_back({ tileId->id / y_size, tileId->id % y_size });
+                if (tileId->active)
+                    activeTiles.push_back({ tileId->id / y_size, tileId->id % y_size });
         }
 
         // ── Step 1: update all timers and warning flags ───────────────────────
@@ -280,7 +387,8 @@ public:
         // ── Step 2: build wall map ────────────────────────────────────────────
         bool hWalls[2 * MAP_SIZE + 1][2 * MAP_SIZE];
         bool vWalls[2 * MAP_SIZE][2 * MAP_SIZE + 1];
-        BuildWallMap(entityManager, spokeEntities, hWalls, vWalls);
+        bool cWallsMap[MAP_SIZE][MAP_SIZE][4] = {};
+        BuildWallMap(entityManager, spokeEntities, hWalls, vWalls, cWallsMap);
 
         // ── Step 3: process expired non-spoke walls ───────────────────────────
         {
@@ -316,7 +424,7 @@ public:
                 default: break;
                 }
 
-                if (IsMapValid(activeTiles, hWalls, vWalls))
+                if (IsMapValid(activeTiles, hWalls, vWalls, cWallsMap))
                 {
                     lwid->enabled = newEnabled;
                     lwid->timer = RandomTimer();
@@ -355,9 +463,49 @@ public:
                 EmitToggleWall(events, lwid->cellId, lwid->dir, true, newEnabled, cx, cy);
             }
         }
+
+        // ── Step 5: tile destruction ────────────────────────────────────────
+        tileDestroyTimer -= deltaTime;
+
+        // Warning: 3s before destruction, pick the tile and emit warning
+        if (!tileWarningEmitted && tileDestroyTimer <= TILE_WARNING_THRESHOLD && pendingDestroyTileId == -1)
+        {
+            // Collect destroyable tiles
+            std::vector<int> candidates;
+            for (auto& t : activeTiles)
+            {
+                int cellId = t.first * y_size + t.second;
+                if (IsTileDestroyable(cellId, activeTiles))
+                    candidates.push_back(cellId);
+            }
+
+            if (!candidates.empty())
+            {
+                std::uniform_int_distribution<int> pick(0, (int)candidates.size() - 1);
+                pendingDestroyTileId = candidates[pick(rng)];
+                tileWarningEmitted = true;
+                EmitWarnTile(events, pendingDestroyTileId);
+            }
+            else
+            {
+                // No destroyable tile found, reset timer and try again next cycle
+                tileDestroyTimer = TILE_DESTROY_INTERVAL;
+                tileWarningEmitted = false;
+                pendingDestroyTileId = -1;
+            }
+        }
+
+        // Destruction: timer expired
+        if (tileDestroyTimer <= 0.0f)
+        {
+            if (pendingDestroyTileId != -1)
+                EmitDestroyTile(events, pendingDestroyTileId);
+            tileDestroyTimer = TILE_DESTROY_INTERVAL;
+            tileWarningEmitted = false;
+            pendingDestroyTileId = -1;
+        }
     }
 };
-
 class InputServerSystem : public ISystem {
 public:
     void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
