@@ -825,6 +825,14 @@ public:
         lightComp->radius = 100.0f;
         lightComp->castShadows = true;
 
+		Entity lavaFloor = world.GetEntityManager().CreateEntity();
+		Transform* lavaTrans = world.GetEntityManager().AddComponent<Transform>(lavaFloor, Transform{});
+		lavaTrans->setPosition(glm::vec3(-20.0f, -20.0f, -12.0f));
+		lavaTrans->setRotation(glm::vec3(90.0f, 0.0f, 0.0f));
+		lavaTrans->setScale(glm::vec3(5.0f, 5.0f, 5.0f));
+		MeshComponent* lavaMesh = world.GetEntityManager().AddComponent<MeshComponent>(lavaFloor, MeshComponent(new Mesh("lava.glb", std::make_shared<Material>("ggx.vert", "ggx.frag"))));
+		lavaMesh->castShadows = false;
+        
         const int x_size = 5;
         const int y_size = 5;
 
@@ -1029,6 +1037,7 @@ public:
                 }
             }
         }
+        
 
         // Thrusters player 1
         Entity rightThrusterEntity1 = world.GetEntityManager().CreateEntity();
@@ -1198,14 +1207,14 @@ public:
             }
             else
             {
-                Debug::Info("Interpolate")
+                /*Debug::Info("Interpolate")
                     << "Player " << i
                     << " | prevServer=(" << prevServer.posX[i] << "," << prevServer.posY[i] << ")"
                     << " currServer=(" << currServer.posX[i] << "," << currServer.posY[i] << ")"
                     << " factor=" << serverInterpolation
                     << " prevFrame=" << previousServerState.frame
                     << " currFrame=" << currentServerState.frame
-                    << "\n";
+                    << "\n";*/
 
                 rend.posX[i] = prevServer.posX[i] + (currServer.posX[i] - prevServer.posX[i]) * serverInterpolation;
                 rend.posY[i] = prevServer.posY[i] + (currServer.posY[i] - prevServer.posY[i]) * serverInterpolation;

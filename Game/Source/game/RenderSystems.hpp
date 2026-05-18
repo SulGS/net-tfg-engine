@@ -13,7 +13,7 @@
 class CameraFollowSystem : public ISystem
 {
 public:
-    float debugZoomMultiplier = 1.0f; // 1.0 = normal, >1 = zoom out
+    float debugZoomMultiplier = 1.25f; // 1.0 = normal, >1 = zoom out
 
     void Update(
         EntityManager& entityManager,
