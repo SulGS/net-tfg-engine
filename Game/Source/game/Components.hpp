@@ -75,16 +75,28 @@ public:
 	bool isShooting;
 	bool isMovingForward;
 	int shipInclination;
+	float velX;        // ← new: linear velocity X
+	float velY;        // ← new: linear velocity Y
+	float angularVel;  // ← new: angular velocity (degrees/tick)
 
 	int remainingShootFrames;
-	int shootCooldown; // frames until can shoot again
+	int shootCooldown;
 	int deathCooldown;
 	bool isAlive;
-
 	int shipZRotation;
 
-	SpaceShip() : health(100), isShooting(false), remainingShootFrames(0), shootCooldown(0), deathCooldown(0), isAlive(true), isMovingForward(false), shipInclination(0), shipZRotation(0) {}
-	SpaceShip(int h, int rsf, int cd, int dc, bool al) : health(h), isShooting(false), remainingShootFrames(rsf), shootCooldown(cd), deathCooldown(dc), isAlive(al), isMovingForward(false), shipInclination(0), shipZRotation(0) {}
+	SpaceShip() : health(100), isShooting(false), remainingShootFrames(0),
+		shootCooldown(0), deathCooldown(0), isAlive(true),
+		isMovingForward(false), shipInclination(0), shipZRotation(0),
+		velX(0.0f), velY(0.0f), angularVel(0.0f) {
+	}
+
+	SpaceShip(int h, int rsf, int cd, int dc, bool al) : health(h),
+		isShooting(false), remainingShootFrames(rsf), shootCooldown(cd),
+		deathCooldown(dc), isAlive(al), isMovingForward(false),
+		shipInclination(0), shipZRotation(0),
+		velX(0.0f), velY(0.0f), angularVel(0.0f) {
+	}
 };
 
 class ECSBullet : public IComponent {

@@ -90,6 +90,9 @@ public:
             ship->remainingShootFrames = s.remaingShootFrames[p];
             ship->deathCooldown = s.deathCooldown[p];
             ship->isAlive = s.alive[p];
+            ship->velX = s.velX[p];
+            ship->velY = s.velY[p];
+            ship->angularVel = s.angularVel[p];
         }
 
         // Collect active bullet IDs from ECS
@@ -176,6 +179,9 @@ public:
             s.health[p] = ship->health;
             s.deathCooldown[p] = ship->deathCooldown;
             s.alive[p] = ship->isAlive;
+            s.velX[p] = ship->velX;
+            s.velY[p] = ship->velY;
+            s.angularVel[p] = ship->angularVel;
         }
 
         auto bulletQuery = world.GetEntityManager().CreateQuery<Transform, ECSBullet>();
@@ -269,6 +275,10 @@ public:
         s->posX[1] = 10; s->posY[1] = 10;
         s->rot[0] = 0; s->rot[1] = 180;
 
+        s->velX[0] = 0.0f;       s->velX[1] = 0.0f;
+        s->velY[0] = 0.0f;       s->velY[1] = 0.0f;
+        s->angularVel[0] = 0.0f; s->angularVel[1] = 0.0f;
+
         for (int i = 0; i < MAX_BULLETS; i++) {
             s->bullets[i].id = -1;
             s->bullets[i].active = false;
@@ -289,6 +299,7 @@ public:
 
         s->shootCooldown[0] = 0;
         s->shootCooldown[1] = 0;
+
 
         s->health[0] = 100;
         s->health[1] = 100;
@@ -628,6 +639,9 @@ public:
             ship->remainingShootFrames = s.remaingShootFrames[p];
             ship->shootCooldown = s.shootCooldown[p];
             ship->deathCooldown = std::max(0, s.deathCooldown[p]);
+            ship->velX = s.velX[p];
+            ship->velY = s.velY[p];
+            ship->angularVel = s.angularVel[p];
         }
 
         // Bullets — collect ECS ids
@@ -1232,6 +1246,9 @@ public:
             rend.isShooting[i] = currServer.isShooting[i];
             rend.shootCooldown[i] = currServer.shootCooldown[i];
             rend.deathCooldown[i] = currServer.deathCooldown[i];
+            rend.velX[i] = currServer.velX[i];
+            rend.velY[i] = currServer.velY[i];
+            rend.angularVel[i] = currServer.angularVel[i];
         }
 
         // Bullets

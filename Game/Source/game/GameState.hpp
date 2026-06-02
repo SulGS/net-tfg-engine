@@ -20,6 +20,10 @@ struct AsteroidShooterGameState {
     float posY[2];
     float rot[2];
 
+    float velX[2];        // ← new
+    float velY[2];        // ← new
+    float angularVel[2];  // ← new
+
     int health[2];
 	bool alive[2];
 
