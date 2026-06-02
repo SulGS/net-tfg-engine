@@ -4,6 +4,7 @@
 #include "ecs/ecs_common.hpp"
 #include "Components.hpp"
 #include "GameState.hpp"
+#include "Utils/Debug/Debug.hpp"
 #include "ecs/Collisions/BoxCollider2D.hpp"
 #include <math.h>
 #include <cmath>
@@ -111,12 +112,13 @@ private:
     const int x_size = MAP_SIZE;
     const int y_size = MAP_SIZE;
 
-    const float WARNING_THRESHOLD = 3.0f;      // seconds before wall toggle to warn
-    const float TILE_DESTROY_INTERVAL = 30.0f; // seconds between tile destructions
-    const float TILE_WARNING_THRESHOLD = 3.0f; // seconds before tile destruction to warn
+    const float WARNING_THRESHOLD = 3.0f;
+    const float TILE_DESTROY_INTERVAL = 30.0f;
+    const float TILE_WARNING_THRESHOLD = 3.0f;
 
+    float debugPrintArenaTimer = 10.0f;
     float tileDestroyTimer = TILE_DESTROY_INTERVAL;
-    int   pendingDestroyTileId = -1;  // cellId of tile chosen to be destroyed, -1 = none
+    int   pendingDestroyTileId = -1;
     bool  tileWarningEmitted = false;
 
     float RandomTimer()
@@ -162,7 +164,6 @@ private:
         std::memset(vWalls, 0, sizeof(bool) * (2 * MAP_SIZE) * (2 * MAP_SIZE + 1));
         std::memset(cWalls, 0, sizeof(bool) * MAP_SIZE * MAP_SIZE * 4);
 
-        // Build active tile set for wall map
         std::unordered_set<int> activeTileSet;
         {
             auto tq = entityManager.CreateQuery<TileID>();
@@ -204,8 +205,22 @@ private:
         }
     }
 
-    // Tile-level reachability: flood-fill using only edge walls (hWalls/vWalls).
-    // Spokes are decorative and do not block inter-tile movement.
+    // Subtile-level reachability flood-fill.
+    // Each tile (cx,cy) has 4 subtiles: TL=0, TR=1, BL=2, BR=3
+    //
+    // Internal adjacency (within a tile, blocked by spokes):
+    //   TL<->TR: vSpoke    TL<->BL: hSpoke
+    //   TR<->BR: hSpoke    BL<->BR: vSpoke
+    //
+    // External adjacency (across tile edges, blocked by edge walls):
+    //   TL(cx,cy) <-> TR(cx-1,cy): hWalls[2*cx][2*cy]
+    //   TR(cx,cy) <-> TL(cx+1,cy): hWalls[2*cx+2][2*cy]
+    //   BL(cx,cy) <-> BR(cx-1,cy): hWalls[2*cx][2*cy]
+    //   BR(cx,cy) <-> BL(cx+1,cy): hWalls[2*cx+2][2*cy]
+    //   TL(cx,cy) <-> BL(cx,cy+1): vWalls[2*cx][2*cy+2]
+    //   TR(cx,cy) <-> BR(cx,cy+1): vWalls[2*cx][2*cy+2]
+    //   BL(cx,cy) <-> TL(cx,cy-1): vWalls[2*cx][2*cy]
+    //   BR(cx,cy) <-> TR(cx,cy-1): vWalls[2*cx][2*cy]
     bool IsMapValid(
         const std::vector<std::pair<int, int>>& activeTiles,
         const bool hWalls[2 * MAP_SIZE + 1][2 * MAP_SIZE],
@@ -218,34 +233,401 @@ private:
         for (auto& t : activeTiles)
             tileExists[t.first][t.second] = true;
 
-        bool visited[MAP_SIZE][MAP_SIZE] = {};
-        std::queue<std::pair<int, int>> q;
-        q.push(activeTiles[0]);
-        visited[activeTiles[0].first][activeTiles[0].second] = true;
-        int count = 1;
+        // visited[cx][cy][subtile]
+        bool visited[MAP_SIZE][MAP_SIZE][4] = {};
+
+        int total = (int)activeTiles.size() * 4;
+        int count = 0;
+
+        std::queue<std::tuple<int, int, int>> q;
+
+        // Find the first subtile that has at least one open passage (internal or external).
+        // Subtile 0 of tile 0 may be sealed by border walls + spokes, giving a false failure.
+        bool foundStart = false;
+        for (auto& [scx, scy] : activeTiles)
+        {
+            bool hSpoke = cWalls[scx][scy][0] || cWalls[scx][scy][1];
+            bool vSpoke = cWalls[scx][scy][2] || cWalls[scx][scy][3];
+            for (int sst = 0; sst < 4; sst++)
+            {
+                bool canReach = false;
+                switch (sst)
+                {
+                case 0: // TL: left exit, up exit, right(vSpoke), down(hSpoke)
+                    canReach = (!hWalls[2 * scx][2 * scy] && scx > 0 && tileExists[scx - 1][scy])
+                        || (!vWalls[2 * scx][2 * scy + 2] && scy < y_size - 1 && tileExists[scx][scy + 1])
+                        || !vSpoke || !hSpoke;
+                    break;
+                case 1: // TR: right exit, up exit, left(vSpoke), down(hSpoke)
+                    canReach = (!hWalls[2 * scx + 2][2 * scy] && scx < x_size - 1 && tileExists[scx + 1][scy])
+                        || (!vWalls[2 * scx][2 * scy + 2] && scy < y_size - 1 && tileExists[scx][scy + 1])
+                        || !vSpoke || !hSpoke;
+                    break;
+                case 2: // BL: left exit, down exit, right(vSpoke), up(hSpoke)
+                    canReach = (!hWalls[2 * scx][2 * scy] && scx > 0 && tileExists[scx - 1][scy])
+                        || (!vWalls[2 * scx][2 * scy] && scy > 0 && tileExists[scx][scy - 1])
+                        || !vSpoke || !hSpoke;
+                    break;
+                case 3: // BR: right exit, down exit, left(vSpoke), up(hSpoke)
+                    canReach = (!hWalls[2 * scx + 2][2 * scy] && scx < x_size - 1 && tileExists[scx + 1][scy])
+                        || (!vWalls[2 * scx][2 * scy] && scy > 0 && tileExists[scx][scy - 1])
+                        || !vSpoke || !hSpoke;
+                    break;
+                }
+                if (canReach)
+                {
+                    visited[scx][scy][sst] = true;
+                    q.push({ scx, scy, sst });
+                    count = 1;
+                    foundStart = true;
+                    break;
+                }
+            }
+            if (foundStart) break;
+        }
+
+        if (!foundStart) return false;
 
         while (!q.empty())
         {
-            auto [cx, cy] = q.front(); q.pop();
+            auto [cx, cy, st] = q.front(); q.pop();
 
-            auto tryMove = [&](int nx, int ny, bool blocked)
+            bool hSpoke = cWalls[cx][cy][0] || cWalls[cx][cy][1];
+            bool vSpoke = cWalls[cx][cy][2] || cWalls[cx][cy][3];
+
+            auto tryVisit = [&](int ncx, int ncy, int nst)
                 {
-                    if (nx < 0 || nx >= x_size || ny < 0 || ny >= y_size) return;
-                    if (!tileExists[nx][ny] || blocked || visited[nx][ny]) return;
-                    visited[nx][ny] = true;
+                    if (ncx < 0 || ncx >= x_size || ncy < 0 || ncy >= y_size) return;
+                    if (!tileExists[ncx][ncy]) return;
+                    if (visited[ncx][ncy][nst]) return;
+                    visited[ncx][ncy][nst] = true;
                     count++;
-                    q.push({ nx, ny });
+                    q.push({ ncx, ncy, nst });
                 };
 
-            tryMove(cx + 1, cy, hWalls[2 * cx + 2][2 * cy]); // Right
-            tryMove(cx - 1, cy, hWalls[2 * cx][2 * cy]); // Left
-            tryMove(cx, cy + 1, vWalls[2 * cx][2 * cy + 2]); // Up
-            tryMove(cx, cy - 1, vWalls[2 * cx][2 * cy]); // Down
+            // ── Internal moves (same tile, blocked by spokes) ─────────────
+            switch (st)
+            {
+            case 0: // TL
+                if (!vSpoke) tryVisit(cx, cy, 1); // TL->TR
+                if (!hSpoke) tryVisit(cx, cy, 2); // TL->BL
+                break;
+            case 1: // TR
+                if (!vSpoke) tryVisit(cx, cy, 0); // TR->TL
+                if (!hSpoke) tryVisit(cx, cy, 3); // TR->BR
+                break;
+            case 2: // BL
+                if (!hSpoke) tryVisit(cx, cy, 0); // BL->TL
+                if (!vSpoke) tryVisit(cx, cy, 3); // BL->BR
+                break;
+            case 3: // BR
+                if (!hSpoke) tryVisit(cx, cy, 1); // BR->TR
+                if (!vSpoke) tryVisit(cx, cy, 2); // BR->BL
+                break;
+            }
+
+            // ── External moves (cross tile edge, blocked by edge walls) ───
+            switch (st)
+            {
+            case 0: // TL -> TR of left neighbour / BL of top neighbour
+                if (!hWalls[2 * cx][2 * cy])     tryVisit(cx - 1, cy, 1);
+                if (!vWalls[2 * cx][2 * cy + 2])   tryVisit(cx, cy + 1, 2);
+                break;
+            case 1: // TR -> TL of right neighbour / BR of top neighbour
+                if (!hWalls[2 * cx + 2][2 * cy])   tryVisit(cx + 1, cy, 0);
+                if (!vWalls[2 * cx][2 * cy + 2])   tryVisit(cx, cy + 1, 3);
+                break;
+            case 2: // BL -> BR of left neighbour / TL of bottom neighbour
+                if (!hWalls[2 * cx][2 * cy])     tryVisit(cx - 1, cy, 3);
+                if (!vWalls[2 * cx][2 * cy])     tryVisit(cx, cy - 1, 0);
+                break;
+            case 3: // BR -> BL of right neighbour / TR of bottom neighbour
+                if (!hWalls[2 * cx + 2][2 * cy])   tryVisit(cx + 1, cy, 2);
+                if (!vWalls[2 * cx][2 * cy])     tryVisit(cx, cy - 1, 1);
+                break;
+            }
         }
 
-        return count == (int)activeTiles.size();
+        return count == total;
     }
 
+    // Check that all 4 subtiles of cell (cx,cy) can each reach at least one
+    // open exit to outside the cell, given the proposed spoke states.
+    // Used as a fast pre-check before the full IsMapValid BFS.
+    bool IsCellSubtileConnected(
+        int cx, int cy,
+        bool hSpoke,
+        bool vSpoke,
+        const bool hWalls[2 * MAP_SIZE + 1][2 * MAP_SIZE],
+        const bool vWalls[2 * MAP_SIZE][2 * MAP_SIZE + 1],
+        const std::vector<std::pair<int, int>>& activeTiles)
+    {
+        int cellId = cx * y_size + cy;
+
+        bool leftBlocked = IsBorderWall(cellId, CellCardinalDirection::Left, activeTiles) || hWalls[2 * cx][2 * cy];
+        bool rightBlocked = IsBorderWall(cellId, CellCardinalDirection::Right, activeTiles) || hWalls[2 * cx + 2][2 * cy];
+        bool downBlocked = IsBorderWall(cellId, CellCardinalDirection::Down, activeTiles) || vWalls[2 * cx][2 * cy];
+        bool upBlocked = IsBorderWall(cellId, CellCardinalDirection::Up, activeTiles) || vWalls[2 * cx][2 * cy + 2];
+
+        bool hasExit[4] = {
+            !upBlocked || !leftBlocked,   // TL
+            !upBlocked || !rightBlocked,  // TR
+            !downBlocked || !leftBlocked,   // BL
+            !downBlocked || !rightBlocked,  // BR
+        };
+
+        bool adj[4][4] = {
+            //         TL      TR       BL       BR
+            /* TL */ { false, !vSpoke, !hSpoke,  false   },
+            /* TR */ {!vSpoke, false,   false,   !hSpoke  },
+            /* BL */ {!hSpoke, false,   false,   !vSpoke  },
+            /* BR */ { false, !hSpoke, !vSpoke,  false    },
+        };
+
+        for (int start = 0; start < 4; start++)
+        {
+            bool visited[4] = {};
+            std::queue<int> q;
+            q.push(start);
+            visited[start] = true;
+
+            bool foundExit = hasExit[start];
+            while (!q.empty() && !foundExit)
+            {
+                int cur = q.front(); q.pop();
+                for (int nb = 0; nb < 4; nb++)
+                {
+                    if (adj[cur][nb] && !visited[nb])
+                    {
+                        visited[nb] = true;
+                        if (hasExit[nb]) { foundExit = true; break; }
+                        q.push(nb);
+                    }
+                }
+            }
+
+            if (!foundExit) return false;
+        }
+
+        return true;
+    }
+
+    // Returns true if enabling the wall on (cx,cy) in direction dir would seal
+    // any subtile in either of the two cells sharing that wall edge.
+    // Used as a fast pre-reject before the full IsMapValid BFS.
+    bool WouldSealSubtile(
+        int cx, int cy,
+        CellCardinalDirection dir,
+        const bool hWalls[2 * MAP_SIZE + 1][2 * MAP_SIZE],
+        const bool vWalls[2 * MAP_SIZE][2 * MAP_SIZE + 1],
+        const bool cWalls[MAP_SIZE][MAP_SIZE][4],
+        const std::vector<std::pair<int, int>>& activeTiles)
+    {
+        int nx = cx, ny = cy;
+        switch (dir)
+        {
+        case CellCardinalDirection::Left:  nx = cx - 1; break;
+        case CellCardinalDirection::Right: nx = cx + 1; break;
+        case CellCardinalDirection::Down:  ny = cy - 1; break;
+        case CellCardinalDirection::Up:    ny = cy + 1; break;
+        default: break;
+        }
+
+        auto checkCell = [&](int ccx, int ccy) -> bool
+            {
+                if (ccx < 0 || ccx >= x_size || ccy < 0 || ccy >= y_size) return true;
+                bool hSpoke = cWalls[ccx][ccy][0] || cWalls[ccx][ccy][1];
+                bool vSpoke = cWalls[ccx][ccy][2] || cWalls[ccx][ccy][3];
+                return IsCellSubtileConnected(ccx, ccy, hSpoke, vSpoke, hWalls, vWalls, activeTiles);
+            };
+
+        return !checkCell(cx, cy) || !checkCell(nx, ny);
+    }
+
+    // Prints a full ASCII snapshot of the arena.
+    //
+    // Each active cell is a 4-char-wide block with shared borders.
+    // Inactive (destroyed) cells are shown as blank space.
+    // Grid is drawn top-to-bottom (cy = MAP_SIZE-1 at top).
+    //
+    // Legend:
+    //   #   wall ON (border or toggled interior)
+    //   .   open edge
+    //   -   horizontal spoke ON
+    //   |   vertical spoke ON
+    //   +   corner/junction between two active cells (or active+border)
+    //   ' ' inactive tile interior or no junction
+    void PrintArenaState(EntityManager& entityManager)
+    {
+        // ── Gather active tiles ───────────────────────────────────────────────
+        bool tileActive[MAP_SIZE][MAP_SIZE] = {};
+        {
+            auto tq = entityManager.CreateQuery<TileID>();
+            for (auto [e, tid] : tq)
+                if (tid->active)
+                {
+                    int cx = tid->id / y_size;
+                    int cy = tid->id % y_size;
+                    if (cx < MAP_SIZE && cy < MAP_SIZE)
+                        tileActive[cx][cy] = true;
+                }
+        }
+
+        std::unordered_set<Entity> spokeEntities;
+        {
+            auto sq = entityManager.CreateQuery<LaserWallID, CenterSpoke>();
+            for (auto [e, lwid, spoke] : sq)
+                spokeEntities.insert(e);
+        }
+
+        bool hWalls[2 * MAP_SIZE + 1][2 * MAP_SIZE] = {};
+        bool vWalls[2 * MAP_SIZE][2 * MAP_SIZE + 1] = {};
+        bool cWalls[MAP_SIZE][MAP_SIZE][4] = {};
+        BuildWallMap(entityManager, spokeEntities, hWalls, vWalls, cWalls);
+
+        // Bake border walls into hWalls/vWalls for the renderer
+        {
+            std::vector<std::pair<int, int>> activeTiles;
+            for (int cx = 0; cx < MAP_SIZE; cx++)
+                for (int cy = 0; cy < MAP_SIZE; cy++)
+                    if (tileActive[cx][cy])
+                        activeTiles.push_back({ cx, cy });
+
+            for (auto& [cx, cy] : activeTiles)
+            {
+                int cellId = cx * y_size + cy;
+                if (IsBorderWall(cellId, CellCardinalDirection::Left, activeTiles)) hWalls[2 * cx][2 * cy] = true;
+                if (IsBorderWall(cellId, CellCardinalDirection::Right, activeTiles)) hWalls[2 * cx + 2][2 * cy] = true;
+                if (IsBorderWall(cellId, CellCardinalDirection::Down, activeTiles)) vWalls[2 * cx][2 * cy] = true;
+                if (IsBorderWall(cellId, CellCardinalDirection::Up, activeTiles)) vWalls[2 * cx][2 * cy + 2] = true;
+            }
+        }
+
+        // ── Helpers ───────────────────────────────────────────────────────────
+
+        // A '+' corner is printed at the grid point between cells.
+        // Show '+' if at least one of the four adjacent cells is active.
+        auto hasCorner = [&](int cx, int cy) -> bool
+            {
+                // cx,cy here are cell coordinates of the cell to the top-right of this corner
+                // Adjacent cells: (cx-1,cy-1), (cx,cy-1), (cx-1,cy), (cx,cy)
+                auto inBounds = [&](int x, int y) { return x >= 0 && x < MAP_SIZE && y >= 0 && y < MAP_SIZE; };
+                return (inBounds(cx - 1, cy - 1) && tileActive[cx - 1][cy - 1]) ||
+                    (inBounds(cx, cy - 1) && tileActive[cx][cy - 1]) ||
+                    (inBounds(cx - 1, cy) && tileActive[cx - 1][cy]) ||
+                    (inBounds(cx, cy) && tileActive[cx][cy]);
+            };
+
+        // Top wall char between corner(cx,cy) and corner(cx+1,cy):
+        // show '#' or '.' only if the cell below (cx, cy-1) is active.
+        auto topWallChar = [&](int cx, int cy) -> char
+            {
+                if (cy > 0 && tileActive[cx][cy - 1])
+                    return vWalls[2 * cx][2 * (cy - 1) + 2] ? '#' : '.';
+                if (cy < MAP_SIZE && tileActive[cx][cy])
+                    return vWalls[2 * cx][2 * cy] ? '#' : '.';
+                return ' ';
+            };
+
+        Debug::Info("Arena") << "=== Arena State (tile destroy in " << (int)tileDestroyTimer << "s) ===" << "\n";
+
+        // Each cell prints: left_wall + 3 interior chars.
+        // Then after the loop, the right wall of the last active cell is appended.
+        // This way every cell owns its left wall and the rightmost active cell
+        // closes itself — inactive cells in between contribute only spaces.
+
+        for (int cy = MAP_SIZE - 1; cy >= 0; cy--)
+        {
+            // ── Top border row ────────────────────────────────────────────────
+            {
+                std::string row;
+                for (int cx = 0; cx < MAP_SIZE; cx++)
+                {
+                    row += hasCorner(cx, cy + 1) ? '+' : ' ';
+                    bool active = tileActive[cx][cy];
+                    char tw = active ? (vWalls[2 * cx][2 * cy + 2] ? '#' : '.') : ' ';
+                    row += tw; row += tw; row += tw;
+                }
+                row += hasCorner(MAP_SIZE, cy + 1) ? '+' : ' ';
+                Debug::Info("Arena") << row << "\n";
+            }
+
+            // ── Upper subtile row (TL / TR) ───────────────────────────────────
+            {
+                std::string row;
+                for (int cx = 0; cx < MAP_SIZE; cx++)
+                {
+                    bool active = tileActive[cx][cy];
+                    bool vSpoke = active && (cWalls[cx][cy][2] || cWalls[cx][cy][3]);
+                    // left wall of this cell
+                    row += active ? (hWalls[2 * cx][2 * cy] ? '#' : '.') : ' ';
+                    row += ' ';
+                    row += (active && vSpoke) ? '|' : ' ';
+                    row += ' ';
+                    // right wall — only print if next cell is inactive or out of bounds
+                    bool printRight = (cx == MAP_SIZE - 1) || !tileActive[cx + 1][cy];
+                    if (printRight)
+                        row += active ? (hWalls[2 * cx + 2][2 * cy] ? '#' : '.') : ' ';
+                }
+                Debug::Info("Arena") << row << "\n";
+            }
+
+            // ── Center spoke row ──────────────────────────────────────────────
+            {
+                std::string row;
+                for (int cx = 0; cx < MAP_SIZE; cx++)
+                {
+                    bool active = tileActive[cx][cy];
+                    bool hSpoke = active && (cWalls[cx][cy][0] || cWalls[cx][cy][1]);
+                    bool vSpoke = active && (cWalls[cx][cy][2] || cWalls[cx][cy][3]);
+                    char sh = (active && hSpoke) ? '-' : ' ';
+                    char ctr = !active ? ' ' : (hSpoke && vSpoke) ? '+' : hSpoke ? '-' : vSpoke ? '|' : ' ';
+                    row += active ? (hWalls[2 * cx][2 * cy] ? '#' : '.') : ' ';
+                    row += sh;
+                    row += ctr;
+                    row += sh;
+                    bool printRight = (cx == MAP_SIZE - 1) || !tileActive[cx + 1][cy];
+                    if (printRight)
+                        row += active ? (hWalls[2 * cx + 2][2 * cy] ? '#' : '.') : ' ';
+                }
+                Debug::Info("Arena") << row << "\n";
+            }
+
+            // ── Lower subtile row (BL / BR) ───────────────────────────────────
+            {
+                std::string row;
+                for (int cx = 0; cx < MAP_SIZE; cx++)
+                {
+                    bool active = tileActive[cx][cy];
+                    bool vSpoke = active && (cWalls[cx][cy][2] || cWalls[cx][cy][3]);
+                    row += active ? (hWalls[2 * cx][2 * cy] ? '#' : '.') : ' ';
+                    row += ' ';
+                    row += (active && vSpoke) ? '|' : ' ';
+                    row += ' ';
+                    bool printRight = (cx == MAP_SIZE - 1) || !tileActive[cx + 1][cy];
+                    if (printRight)
+                        row += active ? (hWalls[2 * cx + 2][2 * cy] ? '#' : '.') : ' ';
+                }
+                Debug::Info("Arena") << row << "\n";
+            }
+        }
+
+        // ── Bottom border row (cy = 0) ────────────────────────────────────────
+        {
+            std::string row;
+            for (int cx = 0; cx < MAP_SIZE; cx++)
+            {
+                row += hasCorner(cx, 0) ? '+' : ' ';
+                bool active = tileActive[cx][0];
+                char bw = active ? (vWalls[2 * cx][0] ? '#' : '.') : ' ';
+                row += bw; row += bw; row += bw;
+            }
+            row += hasCorner(MAP_SIZE, 0) ? '+' : ' ';
+            Debug::Info("Arena") << row << "\n";
+        }
+
+        Debug::Info("Arena") << "========================================" << "\n";
+    }
 
     void EmitToggleWall(std::vector<EventEntry>& events, int cellId,
         CellCardinalDirection dir, bool isSpoke, bool enabled,
@@ -265,8 +647,8 @@ private:
 
     void EmitDestroyTile(std::vector<EventEntry>& events, int tileId)
     {
-        Debug::Info("ArenaSystem") << "[SERVER] Destroying tile id=" << tileId
-            << " cell=(" << tileId / y_size << "," << tileId % y_size << ")\n";
+        Debug::Info("Arena") << "[SERVER] Destroying tile id=" << tileId
+            << " cell=(" << tileId / y_size << "," << tileId % y_size << ")";
         EventEntry ev;
         ev.event.type = AsteroidEventMask::DESTROY_TILE;
         DestroyTileEventData data;
@@ -287,9 +669,6 @@ private:
         events.push_back(ev);
     }
 
-    // Returns true if removing this tile keeps the map 4-way connected
-    // Check if removing a tile keeps all remaining tiles 4-way connected.
-    // No wall checks needed - pure tile graph connectivity.
     bool IsTileDestroyable(int cellId,
         const std::vector<std::pair<int, int>>& activeTiles)
     {
@@ -306,7 +685,6 @@ private:
 
         if (remaining.empty()) return false;
 
-        // Simple BFS on tile graph, no walls
         bool tileExists[MAP_SIZE][MAP_SIZE] = {};
         for (auto& t : remaining)
             tileExists[t.first][t.second] = true;
@@ -367,7 +745,6 @@ public:
             {
                 lwid->timer -= deltaTime;
 
-                // Warning: only for non-border walls that are about to toggle
                 if (!spokeEntities.count(entity) &&
                     !IsBorderWall(lwid->cellId, lwid->dir, activeTiles))
                 {
@@ -379,7 +756,7 @@ public:
                 }
                 else
                 {
-                    lwid->warning = false; // border walls never warn
+                    lwid->warning = false;
                 }
             }
         }
@@ -390,13 +767,12 @@ public:
         bool cWallsMap[MAP_SIZE][MAP_SIZE][4] = {};
         BuildWallMap(entityManager, spokeEntities, hWalls, vWalls, cWallsMap);
 
-        // ── Step 3: process expired non-spoke walls ───────────────────────────
+        // ── Step 3: enforce border walls and process expired interior walls ────
         {
             auto wallQuery = entityManager.CreateQuery<LaserWallID>();
             for (auto [entity, lwid] : wallQuery)
             {
                 if (spokeEntities.count(entity)) continue;
-                if (lwid->timer > 0.0f) continue;
 
                 int cx = lwid->cellId / y_size;
                 int cy = lwid->cellId % y_size;
@@ -408,13 +784,15 @@ public:
                         lwid->enabled = true;
                         EmitToggleWall(events, lwid->cellId, lwid->dir, false, true, cx, cy);
                     }
-                    lwid->timer = RandomTimer();
                     lwid->warning = false;
                     continue;
                 }
 
+                if (lwid->timer > 0.0f) continue;
+
                 bool newEnabled = !lwid->enabled;
 
+                // Speculatively apply
                 switch (lwid->dir)
                 {
                 case CellCardinalDirection::Down:  vWalls[2 * cx][2 * cy] = newEnabled; break;
@@ -424,7 +802,15 @@ public:
                 default: break;
                 }
 
-                if (IsMapValid(activeTiles, hWalls, vWalls, cWallsMap))
+                // Accept if subtile-level connectivity holds across the whole map.
+                // WouldSealSubtile is a fast pre-reject before the full BFS.
+                bool valid = true;
+                if (newEnabled)
+                    valid = !WouldSealSubtile(cx, cy, lwid->dir, hWalls, vWalls, cWallsMap, activeTiles);
+                if (valid)
+                    valid = IsMapValid(activeTiles, hWalls, vWalls, cWallsMap);
+
+                if (valid)
                 {
                     lwid->enabled = newEnabled;
                     lwid->timer = RandomTimer();
@@ -433,6 +819,7 @@ public:
                 }
                 else
                 {
+                    // Revert speculative change
                     switch (lwid->dir)
                     {
                     case CellCardinalDirection::Down:  vWalls[2 * cx][2 * cy] = lwid->enabled; break;
@@ -441,13 +828,15 @@ public:
                     case CellCardinalDirection::Right: hWalls[2 * cx + 2][2 * cy] = lwid->enabled; break;
                     default: break;
                     }
-                    lwid->timer = RandomTimer();
+                    lwid->timer = 1.0f;
                     lwid->warning = false;
                 }
             }
         }
 
         // ── Step 4: center spokes ─────────────────────────────────────────────
+        // Toggle ON: fast pre-check (IsCellSubtileConnected) then full BFS.
+        // Toggle OFF: always valid — opening a passage can never disconnect.
         {
             auto spokeQuery = entityManager.CreateQuery<LaserWallID, CenterSpoke>();
             for (auto [entity, lwid, spoke] : spokeQuery)
@@ -457,6 +846,68 @@ public:
                 int cx = lwid->cellId / y_size;
                 int cy = lwid->cellId % y_size;
                 bool newEnabled = !lwid->enabled;
+
+                if (newEnabled)
+                {
+                    // Fast pre-check: would this spoke seal any subtile in its cell?
+                    bool hSpoke = cWallsMap[cx][cy][0] || cWallsMap[cx][cy][1];
+                    bool vSpoke = cWallsMap[cx][cy][2] || cWallsMap[cx][cy][3];
+
+                    switch (lwid->dir)
+                    {
+                    case CellCardinalDirection::Down:
+                    case CellCardinalDirection::Up:    hSpoke = true; break;
+                    case CellCardinalDirection::Left:
+                    case CellCardinalDirection::Right: vSpoke = true; break;
+                    default: break;
+                    }
+
+                    if (!IsCellSubtileConnected(cx, cy, hSpoke, vSpoke, hWalls, vWalls, activeTiles))
+                    {
+                        lwid->timer = 1.0f;
+                        lwid->warning = false;
+                        continue;
+                    }
+
+                    // Full subtile-level connectivity check
+                    switch (lwid->dir)
+                    {
+                    case CellCardinalDirection::Down:  cWallsMap[cx][cy][0] = true; break;
+                    case CellCardinalDirection::Up:    cWallsMap[cx][cy][1] = true; break;
+                    case CellCardinalDirection::Left:  cWallsMap[cx][cy][2] = true; break;
+                    case CellCardinalDirection::Right: cWallsMap[cx][cy][3] = true; break;
+                    default: break;
+                    }
+
+                    if (!IsMapValid(activeTiles, hWalls, vWalls, cWallsMap))
+                    {
+                        // Revert
+                        switch (lwid->dir)
+                        {
+                        case CellCardinalDirection::Down:  cWallsMap[cx][cy][0] = false; break;
+                        case CellCardinalDirection::Up:    cWallsMap[cx][cy][1] = false; break;
+                        case CellCardinalDirection::Left:  cWallsMap[cx][cy][2] = false; break;
+                        case CellCardinalDirection::Right: cWallsMap[cx][cy][3] = false; break;
+                        default: break;
+                        }
+                        lwid->timer = 1.0f;
+                        lwid->warning = false;
+                        continue;
+                    }
+                }
+                else
+                {
+                    // Toggling OFF — update cWallsMap so subsequent spokes this frame see it
+                    switch (lwid->dir)
+                    {
+                    case CellCardinalDirection::Down:  cWallsMap[cx][cy][0] = false; break;
+                    case CellCardinalDirection::Up:    cWallsMap[cx][cy][1] = false; break;
+                    case CellCardinalDirection::Left:  cWallsMap[cx][cy][2] = false; break;
+                    case CellCardinalDirection::Right: cWallsMap[cx][cy][3] = false; break;
+                    default: break;
+                    }
+                }
+
                 lwid->enabled = newEnabled;
                 lwid->timer = RandomTimer();
                 lwid->warning = false;
@@ -464,13 +915,11 @@ public:
             }
         }
 
-        // ── Step 5: tile destruction ────────────────────────────────────────
+        // ── Step 5: tile destruction ──────────────────────────────────────────
         tileDestroyTimer -= deltaTime;
 
-        // Warning: 3s before destruction, pick the tile and emit warning
         if (!tileWarningEmitted && tileDestroyTimer <= TILE_WARNING_THRESHOLD && pendingDestroyTileId == -1)
         {
-            // Collect destroyable tiles
             std::vector<int> candidates;
             for (auto& t : activeTiles)
             {
@@ -488,14 +937,12 @@ public:
             }
             else
             {
-                // No destroyable tile found, reset timer and try again next cycle
                 tileDestroyTimer = TILE_DESTROY_INTERVAL;
                 tileWarningEmitted = false;
                 pendingDestroyTileId = -1;
             }
         }
 
-        // Destruction: timer expired
         if (tileDestroyTimer <= 0.0f)
         {
             if (pendingDestroyTileId != -1)
@@ -504,8 +951,17 @@ public:
             tileWarningEmitted = false;
             pendingDestroyTileId = -1;
         }
+
+        // ── Debug print ───────────────────────────────────────────────────────
+        debugPrintArenaTimer -= deltaTime;
+        if (debugPrintArenaTimer <= 0.0f)
+        {
+            PrintArenaState(entityManager);
+            debugPrintArenaTimer = 10.0f;
+        }
     }
 };
+
 class InputServerSystem : public ISystem {
 public:
     void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {

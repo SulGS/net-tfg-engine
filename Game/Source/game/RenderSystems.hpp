@@ -356,14 +356,21 @@ public:
             auto laserWallQuery = entityManager.CreateQuery<LaserWallID, MeshComponent>();
             for (auto [entity, lwID, mesh] : laserWallQuery)
             {
+                bool isSpoke = entityManager.GetComponent<CenterSpoke>(entity) != nullptr;
+
                 bool ownerActive = activeTileIds.count(lwID->cellId) > 0;
                 if (!ownerActive)
                 {
-                    mesh->enabled = false; // rule 1
+                    mesh->enabled = false;
                     continue;
                 }
 
-                // Compute neighbour cell
+                if (isSpoke)
+                {
+                    mesh->enabled = lwID->enabled; // spokes always driven by enabled flag only
+                    continue;
+                }
+
                 int cx = lwID->cellId / y_size;
                 int cy = lwID->cellId % y_size;
                 int nx = cx, ny = cy;
@@ -380,9 +387,9 @@ public:
                     || !activeTileIds.count(nx * y_size + ny);
 
                 if (neighbourInactive)
-                    mesh->enabled = true;  // rule 2: new border wall always shown
+                    mesh->enabled = true;
                 else
-                    mesh->enabled = lwID->enabled; // rule 3: toggler
+                    mesh->enabled = lwID->enabled;
             }
         }
 

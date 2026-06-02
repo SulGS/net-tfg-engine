@@ -33,6 +33,7 @@ public:
             auto query = world.GetEntityManager().CreateQuery<LaserWallID>();
             for (auto [entity, lwid] : query)
             {
+                if (world.GetEntityManager().GetComponent<CenterSpoke>(entity) != nullptr) continue;
                 if (lwid->cellId == ev.cellId && lwid->dir == ev.dir)
                 {
                     lwid->enabled = ev.enabled;
