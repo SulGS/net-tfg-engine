@@ -11,7 +11,7 @@ public:
 		GamePositionsDelta gpd = *reinterpret_cast<const GamePositionsDelta*>(delta.data);
 		AsteroidShooterGameState* gs = reinterpret_cast<AsteroidShooterGameState*>(currentState.data);
 
-		for (int i = 0; i < 2; i++)
+		for (int i = 0; i < NUM_PLAYERS; i++)
 		{
 			gs->posX[i] = gpd.posX[i];
 			gs->posY[i] = gpd.posY[i];
@@ -26,12 +26,13 @@ public:
 		// prev and curr data, even when players are stationary.
 		AsteroidShooterGameState currGS = *reinterpret_cast<const AsteroidShooterGameState*>(currentState.data);
 		GamePositionsDelta gpd;
-		gpd.posX[0] = currGS.posX[0];
-		gpd.posY[0] = currGS.posY[0];
-		gpd.rot[0] = currGS.rot[0];
-		gpd.posX[1] = currGS.posX[1];
-		gpd.posY[1] = currGS.posY[1];
-		gpd.rot[1] = currGS.rot[1];
+
+		for (int i = 0; i < NUM_PLAYERS; i++)
+		{
+			gpd.posX[i] = currGS.posX[i];
+			gpd.posY[i] = currGS.posY[i];
+			gpd.rot[i] = currGS.rot[i];
+		}
 
 		DeltaStateBlob deltaBlob;
 		deltaBlob.delta_type = DELTA_GAME_POSITIONS;
@@ -46,7 +47,7 @@ public:
 		GamePositionsDelta gpd = *reinterpret_cast<const GamePositionsDelta*>(delta.data);
 		AsteroidShooterGameState gs = *reinterpret_cast<const AsteroidShooterGameState*>(currentState.data);
 
-		for (int i = 0; i < 2; i++)
+		for (int i = 0; i < NUM_PLAYERS; i++)
 		{
 			if (gs.posX[i] != gpd.posX[i]) return false;
 			if (gs.posY[i] != gpd.posY[i]) return false;

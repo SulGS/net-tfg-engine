@@ -5,7 +5,7 @@ enum AsteroidsDeltaTypes {
 };
 
 struct GamePositionsDelta {
-    float posX[2];
-    float posY[2];
-    float rot[2];
+    float posX[NUM_PLAYERS];
+    float posY[NUM_PLAYERS];
+    float rot[NUM_PLAYERS];
 };

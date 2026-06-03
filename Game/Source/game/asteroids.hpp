@@ -35,6 +35,56 @@
 #include <openssl/evp.h>
 
 
+
+
+// Returns the world-space centre of tile (cx, cy).
+// Matches the formula used in InitECSLogic / InitECSRenderer.
+// cx, cy are subtile coords in the 10x10 grid (each original tile split into 2x2)
+inline void SubTileCenterWorld(int cx, int cy, float& outX, float& outY)
+{
+    constexpr int x_size = 10;
+    constexpr int y_size = 10;
+    outX = (cx - x_size / 2.0f) * 40.0f - 20.0f;
+    outY = (cy - y_size / 2.0f) * 40.0f - 20.0f;
+}
+
+// Canonical per-player spawn tiles and facing angles for up to MAX_PLAYERS players.
+// Tiles are spread around the perimeter / corners of the 5x5 grid so players start
+// far apart.  The facing angle (degrees, CCW from +X) points toward the arena centre.
+struct SpawnPoint { int cx; int cy; float facingDeg; };
+
+inline SpawnPoint GetSpawnPoint(int playerIndex)
+{
+    // 12 well-separated spawn points on the 10x10 grid (0-indexed cell coords).
+    // Ordered counter-clockwise starting from bottom-left (0,0).
+    // Facing angle points roughly toward the centre cell (4.5, 4.5).
+    static const SpawnPoint table[NUM_PLAYERS] = {
+        { 0, 0,  45.0f },   // bottom-left corner        → face NE
+        { 3, 0,  83.0f },   // bottom edge, 1/3          → face N-NE
+        /*{6, 0,  97.0f},   // bottom edge, 2/3          → face N-NW
+        { 9, 0, 135.0f },   // bottom-right corner       → face NW
+        { 9, 3, 153.0f },   // right edge, 1/3           → face W-NW
+        { 9, 6, 167.0f },   // right edge, 2/3           → face W-SW
+        { 9, 9, 225.0f },   // top-right corner          → face SW
+        { 6, 9, 263.0f },   // top edge, 2/3             → face S-SW
+        { 3, 9, 277.0f },   // top edge, 1/3             → face S-SE
+        { 0, 9, 315.0f },   // top-left corner           → face SE
+        { 0, 6, 333.0f },   // left edge, 2/3            → face E-SE  (going down)
+        { 0, 3, 347.0f },   // left edge, 1/3            → face E-NE  (going down)*/
+    };
+
+    if (playerIndex < 0 || playerIndex >= NUM_PLAYERS)
+        return table[0];  // fallback
+    return table[playerIndex];
+}
+
+static void GetPlayerSpawnWorld(int playerIndex, float& outX, float& outY, float& outRot)
+{
+    SpawnPoint sp = GetSpawnPoint(playerIndex);
+    SubTileCenterWorld(sp.cx, sp.cy, outX, outY);
+    outRot = sp.facingDeg;
+}
+
 class AsteroidShooterGame : public IECSGameLogic {
 private:
     int debugTicks = 0;
@@ -43,7 +93,7 @@ public:
     void printGameState(const AsteroidShooterGameState& state) const
     {
         Debug::Info("GameState") << "=== Asteroid Shooter Game State ===\n";
-        for (int i = 0; i < 2; i++) {
+        for (int i = 0; i < NUM_PLAYERS; i++) {
             Debug::Info("GameState") << "  Player " << i << ":\n";
             Debug::Info("GameState") << "    Position: (" << state.posX[i] << ", " << state.posY[i] << ")\n";
             Debug::Info("GameState") << "    Rotation: " << state.rot[i] << " degrees\n";
@@ -80,7 +130,7 @@ public:
         for (auto [entity, transform, play, ship] : query) {
             int p = play->playerId;
             transform->setPosition(glm::vec3(s.posX[p], s.posY[p], 0.0f));
-            transform->setRotation(glm::vec3(0.0f, 0.0f, static_cast<float>(s.rot[p])));
+            transform->setRotation(glm::vec3(0.0f, 0.0f, s.rot[p]));
             ship->shipZRotation = s.rot[p];
             ship->shootCooldown = s.shootCooldown[p];
             ship->health = s.health[p];
@@ -283,43 +333,35 @@ public:
     void InitECSLogic(GameStateBlob& state) override {
         AsteroidShooterGameState* s = reinterpret_cast<AsteroidShooterGameState*>(state.data);
 
-        s->posX[0] = -10; s->posY[0] = -10;
-        s->posX[1] = 10;  s->posY[1] = 10;
-        s->rot[0] = 0;    s->rot[1] = 180;
+		float spawnX, spawnY, spawnRot;
 
-        s->velX[0] = 0.0f;       s->velX[1] = 0.0f;
-        s->velY[0] = 0.0f;       s->velY[1] = 0.0f;
-        s->angularVel[0] = 0.0f; s->angularVel[1] = 0.0f;
+
+
+		for (int i = 0; i < NUM_PLAYERS; i++) {
+			GetPlayerSpawnWorld(i, spawnX, spawnY, spawnRot);
+			s->posX[i] = spawnX;
+			s->posY[i] = spawnY;
+			s->rot[i] = spawnRot;
+
+			s->velX[i] = 0.0f;
+			s->velY[i] = 0.0f;
+			s->angularVel[i] = 0.0f;
+
+			s->remaingShootFrames[i] = 0;
+			s->isShooting[i] = false;
+			s->isMovingForward[i] = false;
+			s->shipInclination[i] = 0;
+			s->shootCooldown[i] = 0;
+			s->health[i] = 100;
+			s->alive[i] = true;
+			s->deathCooldown[i] = 0;
+		}
 
         for (int i = 0; i < MAX_BULLETS; i++) {
             s->bullets[i].id = -1;
             s->bullets[i].active = false;
         }
         s->bulletCount = 0;
-
-        s->remaingShootFrames[0] = 0;
-        s->remaingShootFrames[1] = 0;
-
-        s->isShooting[0] = false;
-        s->isShooting[1] = false;
-
-        s->isMovingForward[0] = false;
-        s->isMovingForward[1] = false;
-
-        s->shipInclination[0] = 0;
-        s->shipInclination[1] = 0;
-
-        s->shootCooldown[0] = 0;
-        s->shootCooldown[1] = 0;
-
-        s->health[0] = 100;
-        s->health[1] = 100;
-
-        s->alive[0] = true;
-        s->alive[1] = true;
-
-        s->deathCooldown[0] = 0;
-        s->deathCooldown[1] = 0;
 
         state.len = sizeof(AsteroidShooterGameState);
 
@@ -329,6 +371,25 @@ public:
         world.GetEntityManager().RegisterComponentType<PillarID>();
         world.GetEntityManager().RegisterComponentType<CenterSpoke>();
         world.GetEntityManager().RegisterComponentType<LaserWallID>();
+
+
+        for (int i = 0; i < NUM_PLAYERS; i++)
+        {
+            Entity player = world.GetEntityManager().CreateEntity();
+            Transform* t = world.GetEntityManager().AddComponent<Transform>(player, Transform{});
+            t->setPosition(glm::vec3(s->posX[i], s->posY[i], 0.0f));
+            t->setRotation(glm::vec3(0.0f, 0.0f, s->rot[i]));
+            world.GetEntityManager().AddComponent<Playable>(player, Playable{ i, MakeZeroInputBlob(), (i == playerId ? true : false) });
+            world.GetEntityManager().AddComponent<SpaceShip>(player, SpaceShip{ 100,-1,0,0,true });
+
+            if (isServer) 
+            {
+				BoxCollider2D* collider = world.GetEntityManager().AddComponent<BoxCollider2D>(player, BoxCollider2D{ glm::vec2(1.5f, 3.0f) });
+				collider->layer = CollisionLayer::PLAYER;
+				collider->collidesWith = CollisionLayer::BULLET;
+            }
+        }
+
 
         const int x_size = 5;
         const int y_size = 5;
@@ -525,30 +586,6 @@ public:
             }
         }
 
-        Entity player1 = world.GetEntityManager().CreateEntity();
-        Transform* t1 = world.GetEntityManager().AddComponent<Transform>(player1, Transform{});
-        t1->setPosition(glm::vec3(s->posX[0], s->posY[0], 0.0f));
-        t1->setRotation(glm::vec3(0.0f, 0.0f, 0.0f));
-        world.GetEntityManager().AddComponent<Playable>(player1, Playable{ 0, MakeZeroInputBlob(), (0 == playerId ? true : false) });
-        world.GetEntityManager().AddComponent<SpaceShip>(player1, SpaceShip{ 100,-1,0,0,true });
-
-        Entity player2 = world.GetEntityManager().CreateEntity();
-        Transform* t2 = world.GetEntityManager().AddComponent<Transform>(player2, Transform{});
-        t2->setPosition(glm::vec3(s->posX[1], s->posY[1], 0.0f));
-        t2->setRotation(glm::vec3(0.0f, 0.0f, 180.0f));
-        world.GetEntityManager().AddComponent<Playable>(player2, Playable{ 1, MakeZeroInputBlob(), (1 == playerId ? true : false) });
-        world.GetEntityManager().AddComponent<SpaceShip>(player2, SpaceShip{ 100,-1,0,0,true });
-
-        if (isServer)
-        {
-            BoxCollider2D* collider1 = world.GetEntityManager().AddComponent<BoxCollider2D>(player1, BoxCollider2D{ glm::vec2(1.5f, 3.0f) });
-            collider1->layer = CollisionLayer::PLAYER;
-            collider1->collidesWith = CollisionLayer::BULLET;
-
-            BoxCollider2D* collider2 = world.GetEntityManager().AddComponent<BoxCollider2D>(player2, BoxCollider2D{ glm::vec2(1.5f, 3.0f) });
-            collider2->layer = CollisionLayer::PLAYER;
-            collider2->collidesWith = CollisionLayer::BULLET;
-        }
 
         world.AddSystem(std::make_unique<InputSystem>());
         if (isServer)
@@ -805,31 +842,79 @@ public:
         world.GetEntityManager().RegisterComponentType<CenterSpoke>();
         world.GetEntityManager().RegisterComponentType<ThrusterOwner>();
 
+        // --- Sun ---
         Entity sunEntity = world.GetEntityManager().CreateEntity();
-        Transform* sunTransform = world.GetEntityManager().AddComponent<Transform>(sunEntity, Transform{});
-        DirectionalLightComponent* sunLight = world.GetEntityManager().AddComponent<DirectionalLightComponent>(sunEntity, DirectionalLightComponent{});
+        world.GetEntityManager().AddComponent<Transform>(sunEntity, Transform{});
+        DirectionalLightComponent* sunLight =
+            world.GetEntityManager().AddComponent<DirectionalLightComponent>(sunEntity, DirectionalLightComponent{});
         sunLight->color = glm::vec3(1.0f, 0.95f, 0.8f);
 
-        Entity player1 = world.GetEntityManager().CreateEntity();
-        Transform* t1 = world.GetEntityManager().AddComponent<Transform>(player1, Transform{});
-        t1->setPosition(glm::vec3(s.posX[0], s.posY[0], 0.0f));
-        t1->setRotation(glm::vec3(0.0f, 0.0f, 90.0f));
-        t1->setScale(glm::vec3(5.0f, 5.0f, 5.0f));
-        auto player1Mat = std::make_shared<Material>("ggx.vert", "ggx.frag");
-        world.GetEntityManager().AddComponent<Playable>(player1, Playable{ 0, MakeZeroInputBlob(), (0 == playerId ? true : false) });
-        world.GetEntityManager().AddComponent<SpaceShip>(player1, SpaceShip{ 100,-1,0,0,true });
-        world.GetEntityManager().AddComponent<MeshComponent>(player1, MeshComponent(new Mesh("ship.glb", player1Mat)));
+        // --- Players ---
+        for (int i = 0; i < NUM_PLAYERS; ++i)
+        {
 
-        Entity player2 = world.GetEntityManager().CreateEntity();
-        Transform* t2 = world.GetEntityManager().AddComponent<Transform>(player2, Transform{});
-        t2->setPosition(glm::vec3(s.posX[1], s.posY[1], 0.0f));
-        t2->setRotation(glm::vec3(0.0f, 0.0f, 270.0f));
-        t2->setScale(glm::vec3(5.0f, 5.0f, 5.0f));
-        auto player2Mat = std::make_shared<Material>("ggx.vert", "ggx.frag");
-        world.GetEntityManager().AddComponent<Playable>(player2, Playable{ 1, MakeZeroInputBlob(), (1 == playerId ? true : false) });
-        world.GetEntityManager().AddComponent<SpaceShip>(player2, SpaceShip{ 100,-1,0,0,true });
-        world.GetEntityManager().AddComponent<MeshComponent>(player2, MeshComponent(new Mesh("ship.glb", player2Mat)));
+            Entity player = world.GetEntityManager().CreateEntity();
+            Transform* t = world.GetEntityManager().AddComponent<Transform>(player, Transform{});
+            t->setPosition(glm::vec3(s.posX[i], s.posY[i], 0.0f));
+            t->setRotation(glm::vec3(0.0f, 0.0f, s.rot[i]));
+            t->setScale(glm::vec3(5.0f, 5.0f, 5.0f));
 
+            world.GetEntityManager().AddComponent<Playable>(
+                player, Playable{ i, MakeZeroInputBlob(), (i == playerId) });
+            world.GetEntityManager().AddComponent<SpaceShip>(player, SpaceShip{ 100, -1, 0, 0, true });
+            world.GetEntityManager().AddComponent<MeshComponent>(
+                player, MeshComponent(new Mesh("ship.glb",
+                    std::make_shared<Material>("ggx.vert", "ggx.frag"))));
+
+            // --- Thrusters for this player ---
+            struct ThrusterDef { bool isSmoke; bool isLeft; };
+            constexpr ThrusterDef thrusterDefs[] = {
+                { false, false },  // right thruster
+                { false, true  },  // left thruster
+                { true,  true  },  // left smoke
+                { true,  false },  // right smoke
+            };
+
+            for (const auto& def : thrusterDefs)
+            {
+                Entity thrusterEntity = world.GetEntityManager().CreateEntity();
+                Transform* tt = world.GetEntityManager().AddComponent<Transform>(thrusterEntity, Transform{});
+                tt->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
+                tt->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
+                tt->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
+
+                world.GetEntityManager().AddComponent<ThrusterOwner>(
+                    thrusterEntity, ThrusterOwner{ i, def.isSmoke, def.isLeft });
+
+                if (!def.isSmoke)
+                {
+                    auto* particle = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(
+                        thrusterEntity, ParticlePresets::SpaceshipThruster());
+                    particle->emissionRate = 300.0f;
+                    particle->startLifetime = 0.05f;
+                }
+                else
+                {
+                    auto* particle = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(
+                        thrusterEntity, ParticlePresets::Smoke());
+                    particle->emissionRate = 6.0f;
+                    particle->startLifetime = 2.5f;
+                    particle->startSpeed = 0.8f;
+                    particle->startSize = 0.15f;
+                    particle->endSize = 0.5f;
+                    particle->gravityModifier = 0.15f;
+                    particle->startColor = glm::vec4(0.08f, 0.08f, 0.08f, 0.8f);
+                    particle->endColor = glm::vec4(0.05f, 0.05f, 0.05f, 0.0f);
+                    particle->shape = EmitterShape::Cone;
+                    particle->shapeConeAngle = 0.2f;
+                    particle->lifetimeVariance = 0.6f;
+                    particle->turbulenceStrength = 0.1f;
+                    particle->enabled = false;
+                }
+            }
+        }
+
+        // --- Camera ---
         Entity camera = world.GetEntityManager().CreateEntity();
         Transform* camTrans = world.GetEntityManager().AddComponent<Transform>(camera, Transform{});
         camTrans->setPosition(glm::vec3(0.0f, 0.0f, 18.0f));
@@ -838,6 +923,7 @@ public:
         camSettings->setTarget(glm::vec3(0.0f, 0.0f, 0.0f));
         camSettings->setUp(glm::vec3(0.0f, 1.0f, 0.0f));
 
+        // --- Health UI ---
         Entity healthText = world.GetEntityManager().CreateEntity();
         UIElement* element = world.GetEntityManager().AddComponent<UIElement>(healthText, UIElement{});
         element->anchor = UIAnchor::TOP_LEFT;
@@ -851,32 +937,35 @@ public:
         text->SetColor(1.0f, 1.0f, 1.0f, 1.0f);
         text->SetFont("default");
 
+        // --- Point light ---
         Entity light = world.GetEntityManager().CreateEntity();
         Transform* tlight = world.GetEntityManager().AddComponent<Transform>(light, Transform{});
         tlight->setPosition(glm::vec3(0.0f, 0.0f, 15.0f));
-        PointLightComponent* lightComp = world.GetEntityManager().AddComponent<PointLightComponent>(light, PointLightComponent{});
-        lightComp->color = glm::vec3(0.302, 0.651, 1.0);
+        PointLightComponent* lightComp =
+            world.GetEntityManager().AddComponent<PointLightComponent>(light, PointLightComponent{});
+        lightComp->color = glm::vec3(0.302f, 0.651f, 1.0f);
         lightComp->intensity = 1000.0f;
         lightComp->radius = 100.0f;
         lightComp->castShadows = true;
 
+        // --- Lava floor ---
         Entity lavaFloor = world.GetEntityManager().CreateEntity();
         Transform* lavaTrans = world.GetEntityManager().AddComponent<Transform>(lavaFloor, Transform{});
         lavaTrans->setPosition(glm::vec3(-20.0f, -20.0f, -12.0f));
         lavaTrans->setRotation(glm::vec3(90.0f, 0.0f, 0.0f));
         lavaTrans->setScale(glm::vec3(5.0f, 5.0f, 5.0f));
-        MeshComponent* lavaMesh = world.GetEntityManager().AddComponent<MeshComponent>(lavaFloor, MeshComponent(new Mesh("lava.glb", std::make_shared<Material>("ggx.vert", "ggx.frag"))));
+        MeshComponent* lavaMesh = world.GetEntityManager().AddComponent<MeshComponent>(
+            lavaFloor, MeshComponent(new Mesh("lava.glb",
+                std::make_shared<Material>("ggx.vert", "ggx.frag"))));
         lavaMesh->castShadows = false;
 
         const int x_size = 5;
         const int y_size = 5;
-
         auto& em = world.GetEntityManager();
 
         // --- Tiles ---
-        for (int x = 0; x < x_size; x++)
-        {
-            for (int y = 0; y < y_size; y++)
+        for (int x = 0; x < x_size; ++x)
+            for (int y = 0; y < y_size; ++y)
             {
                 const int cellId = x * y_size + y;
                 Entity e = em.CreateEntity();
@@ -886,15 +975,12 @@ public:
                 t->setScale(glm::vec3(1.0f));
                 em.AddComponent<TileID>(e, TileID{ cellId });
                 em.AddComponent<MeshComponent>(e, MeshComponent(
-                    new Mesh("tile.glb", std::make_shared<Material>("ggx.vert", "ggx.frag"))
-                ));
+                    new Mesh("tile.glb", std::make_shared<Material>("ggx.vert", "ggx.frag"))));
             }
-        }
 
         // --- Pillars ---
-        for (int px = 0; px <= 2 * x_size; px++)
-        {
-            for (int py = 0; py <= 2 * y_size; py++)
+        for (int px = 0; px <= 2 * x_size; ++px)
+            for (int py = 0; py <= 2 * y_size; ++py)
             {
                 const bool isTileCentre = (px % 2 == 1 && py % 2 == 1);
 
@@ -918,287 +1004,123 @@ public:
                     const int cx_max = px / 2;
                     const int cy_min = (py - 2) / 2;
                     const int cy_max = py / 2;
-
-                    for (int cx = std::max(cx_min, 0); cx <= std::min(cx_max, x_size - 1); cx++)
-                    {
-                        for (int cy = std::max(cy_min, 0); cy <= std::min(cy_max, y_size - 1); cy++)
+                    for (int cx = std::max(cx_min, 0); cx <= std::min(cx_max, x_size - 1); ++cx)
+                        for (int cy = std::max(cy_min, 0); cy <= std::min(cy_max, y_size - 1); ++cy)
                         {
                             const bool onBorderX = (px == 2 * cx || px == 2 * cx + 1 || px == 2 * cx + 2);
                             const bool onBorderY = (py == 2 * cy || py == 2 * cy + 1 || py == 2 * cy + 2);
                             if (onBorderX && onBorderY)
                                 pid.addCell(cx * y_size + cy);
                         }
-                    }
                 }
-
                 em.AddComponent<PillarID>(e, pid);
                 em.AddComponent<MeshComponent>(e, MeshComponent(
-                    new Mesh("pilar.glb", std::make_shared<Material>("ggx.vert", "ggx.frag"))
-                ));
+                    new Mesh("pilar.glb", std::make_shared<Material>("ggx.vert", "ggx.frag"))));
             }
-        }
 
         // --- Walls ---
         std::vector<WallDef> walls;
 
-        for (int px = 0; px < 2 * x_size; px++)
-        {
-            for (int py = 0; py <= 2 * y_size; py++)
+        for (int px = 0; px < 2 * x_size; ++px)
+            for (int py = 0; py <= 2 * y_size; ++py)
             {
                 const float midX = ((px - x_size) * 40.0f - 40.0f + (px + 1 - x_size) * 40.0f - 40.0f) / 2.0f;
                 const float midY = (py - y_size) * 40.0f - 40.0f;
-
-                for (int cx = 0; cx < x_size; cx++)
-                {
-                    for (int cy = 0; cy < y_size; cy++)
+                for (int cx = 0; cx < x_size; ++cx)
+                    for (int cy = 0; cy < y_size; ++cy)
                     {
                         if (px < 2 * cx || px >= 2 * cx + 2) continue;
                         if (py != 2 * cy && py != 2 * cy + 2) continue;
-
                         const CellCardinalDirection dir = (py == 2 * cy)
-                            ? CellCardinalDirection::Down
-                            : CellCardinalDirection::Up;
+                            ? CellCardinalDirection::Down : CellCardinalDirection::Up;
                         const bool onBorder = (py == 0) || (py == 2 * y_size);
-
                         walls.push_back({ cx, cy, dir,
                             glm::vec3(midX, midY, 0.0f),
-                            glm::vec3(0.0f, 90.0f, 0.0f),
-                            onBorder });
+                            glm::vec3(0.0f, 90.0f, 0.0f), onBorder });
                     }
-                }
             }
-        }
 
-        for (int px = 0; px <= 2 * x_size; px++)
-        {
-            for (int py = 0; py < 2 * y_size; py++)
+        for (int px = 0; px <= 2 * x_size; ++px)
+            for (int py = 0; py < 2 * y_size; ++py)
             {
                 const float midX = (px - x_size) * 40.0f - 40.0f;
                 const float midY = ((py - y_size) * 40.0f - 40.0f + (py + 1 - y_size) * 40.0f - 40.0f) / 2.0f;
-
-                for (int cx = 0; cx < x_size; cx++)
-                {
-                    for (int cy = 0; cy < y_size; cy++)
+                for (int cx = 0; cx < x_size; ++cx)
+                    for (int cy = 0; cy < y_size; ++cy)
                     {
                         if (py < 2 * cy || py >= 2 * cy + 2) continue;
                         if (px != 2 * cx && px != 2 * cx + 2) continue;
-
                         const CellCardinalDirection dir = (px == 2 * cx)
-                            ? CellCardinalDirection::Left
-                            : CellCardinalDirection::Right;
+                            ? CellCardinalDirection::Left : CellCardinalDirection::Right;
                         const bool onBorder = (px == 0) || (px == 2 * x_size);
-
                         walls.push_back({ cx, cy, dir,
                             glm::vec3(midX, midY, 0.0f),
-                            glm::vec3(90.0f, 0.0f, 0.0f),
-                            onBorder });
+                            glm::vec3(90.0f, 0.0f, 0.0f), onBorder });
                     }
-                }
             }
-        }
 
         for (auto& w : walls)
         {
             const int cellId = w.cellX * y_size + w.cellY;
-
             Entity e = em.CreateEntity();
             Transform* t = em.AddComponent<Transform>(e, Transform{});
             t->setPosition(w.pos);
             t->setRotation(w.rot);
             t->setScale(glm::vec3(2.0f, 2.0f, 19.0f));
-
             LaserWallID lwid(cellId, w.dir);
             lwid.enabled = w.onBorder;
             em.AddComponent<LaserWallID>(e, lwid);
-
-            Mesh* mesh = new Mesh("laser_wall.glb",
-                std::make_shared<Material>("ggx.vert", "ggx.frag"));
-            MeshComponent* mc = em.AddComponent<MeshComponent>(e, MeshComponent(mesh));
+            MeshComponent* mc = em.AddComponent<MeshComponent>(e,
+                MeshComponent(new Mesh("laser_wall.glb",
+                    std::make_shared<Material>("ggx.vert", "ggx.frag"))));
             mc->castShadows = false;
         }
 
-        // Center spokes (renderer side)
-        for (int cx = 0; cx < x_size; cx++)
-        {
-            for (int cy = 0; cy < y_size; cy++)
+        // --- Center spokes ---
+        for (int cx = 0; cx < x_size; ++cx)
+            for (int cy = 0; cy < y_size; ++cy)
             {
                 const float centerX = (2 * cx + 1 - x_size) * 40.0f - 40.0f;
                 const float centerY = (2 * cy + 1 - y_size) * 40.0f - 40.0f;
+                const int cellId = cx * y_size + cy;
 
                 auto makeSpoke = [&](CellCardinalDirection dir, glm::vec3 pos, glm::vec3 rot)
                     {
-                        const int cellId = cx * y_size + cy;
                         Entity e = em.CreateEntity();
                         Transform* t = em.AddComponent<Transform>(e, Transform{});
                         t->setPosition(pos);
                         t->setRotation(rot);
                         t->setScale(glm::vec3(2.0f, 2.0f, 19.0f));
-
                         LaserWallID lwid(cellId, dir);
                         lwid.enabled = false;
                         em.AddComponent<LaserWallID>(e, lwid);
                         em.AddComponent<CenterSpoke>(e, CenterSpoke{});
-
-                        Mesh* mesh = new Mesh("laser_wall.glb",
-                            std::make_shared<Material>("ggx.vert", "ggx.frag"));
-                        MeshComponent* mc = em.AddComponent<MeshComponent>(e, MeshComponent(mesh));
+                        MeshComponent* mc = em.AddComponent<MeshComponent>(e,
+                            MeshComponent(new Mesh("laser_wall.glb",
+                                std::make_shared<Material>("ggx.vert", "ggx.frag"))));
                         mc->castShadows = false;
                     };
 
-                {
-                    const float edgeY = (2 * cy - y_size) * 40.0f - 40.0f;
-                    makeSpoke(CellCardinalDirection::Down,
-                        glm::vec3(centerX, (centerY + edgeY) / 2.0f, 0.0f),
-                        glm::vec3(90.0f, 0.0f, 0.0f));
-                }
-                {
-                    const float edgeY = (2 * cy + 2 - y_size) * 40.0f - 40.0f;
-                    makeSpoke(CellCardinalDirection::Up,
-                        glm::vec3(centerX, (centerY + edgeY) / 2.0f, 0.0f),
-                        glm::vec3(90.0f, 0.0f, 0.0f));
-                }
-                {
-                    const float edgeX = (2 * cx - x_size) * 40.0f - 40.0f;
-                    makeSpoke(CellCardinalDirection::Left,
-                        glm::vec3((centerX + edgeX) / 2.0f, centerY, 0.0f),
-                        glm::vec3(0.0f, 90.0f, 0.0f));
-                }
-                {
-                    const float edgeX = (2 * cx + 2 - x_size) * 40.0f - 40.0f;
-                    makeSpoke(CellCardinalDirection::Right,
-                        glm::vec3((centerX + edgeX) / 2.0f, centerY, 0.0f),
-                        glm::vec3(0.0f, 90.0f, 0.0f));
-                }
+                const float edgeYdown = (2 * cy - y_size) * 40.0f - 40.0f;
+                const float edgeYup = (2 * cy + 2 - y_size) * 40.0f - 40.0f;
+                const float edgeXleft = (2 * cx - x_size) * 40.0f - 40.0f;
+                const float edgeXright = (2 * cx + 2 - x_size) * 40.0f - 40.0f;
+
+                makeSpoke(CellCardinalDirection::Down,
+                    glm::vec3(centerX, (centerY + edgeYdown) / 2.0f, 0.0f),
+                    glm::vec3(90.0f, 0.0f, 0.0f));
+                makeSpoke(CellCardinalDirection::Up,
+                    glm::vec3(centerX, (centerY + edgeYup) / 2.0f, 0.0f),
+                    glm::vec3(90.0f, 0.0f, 0.0f));
+                makeSpoke(CellCardinalDirection::Left,
+                    glm::vec3((centerX + edgeXleft) / 2.0f, centerY, 0.0f),
+                    glm::vec3(0.0f, 90.0f, 0.0f));
+                makeSpoke(CellCardinalDirection::Right,
+                    glm::vec3((centerX + edgeXright) / 2.0f, centerY, 0.0f),
+                    glm::vec3(0.0f, 90.0f, 0.0f));
             }
-        }
 
-        // Thrusters player 1
-        Entity rightThrusterEntity1 = world.GetEntityManager().CreateEntity();
-        Transform* rThruster1 = world.GetEntityManager().AddComponent<Transform>(rightThrusterEntity1, Transform{});
-        rThruster1->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
-        rThruster1->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
-        rThruster1->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
-        world.GetEntityManager().AddComponent<ThrusterOwner>(rightThrusterEntity1, ThrusterOwner{ 0,false,false });
-        auto rThrusterParticle1 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(rightThrusterEntity1, ParticlePresets::SpaceshipThruster());
-        rThrusterParticle1->emissionRate = 300.0f;
-        rThrusterParticle1->startLifetime = 0.05f;
-
-        Entity leftThrusterEntity1 = world.GetEntityManager().CreateEntity();
-        Transform* lThruster1 = world.GetEntityManager().AddComponent<Transform>(leftThrusterEntity1, Transform{});
-        lThruster1->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
-        lThruster1->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
-        lThruster1->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
-        world.GetEntityManager().AddComponent<ThrusterOwner>(leftThrusterEntity1, ThrusterOwner{ 0,false,true });
-        auto lThrusterParticle1 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(leftThrusterEntity1, ParticlePresets::SpaceshipThruster());
-        lThrusterParticle1->emissionRate = 300.0f;
-        lThrusterParticle1->startLifetime = 0.05f;
-
-        Entity leftSmokeEntity1 = world.GetEntityManager().CreateEntity();
-        Transform* tLeftSmoke1 = world.GetEntityManager().AddComponent<Transform>(leftSmokeEntity1, Transform{});
-        tLeftSmoke1->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
-        tLeftSmoke1->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
-        tLeftSmoke1->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
-        world.GetEntityManager().AddComponent<ThrusterOwner>(leftSmokeEntity1, ThrusterOwner{ 0,true,true });
-        auto leftSmokeParticle1 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(leftSmokeEntity1, ParticlePresets::Smoke());
-        leftSmokeParticle1->emissionRate = 6.0f;
-        leftSmokeParticle1->startLifetime = 2.5f;
-        leftSmokeParticle1->startSpeed = 0.8f;
-        leftSmokeParticle1->startSize = 0.15f;
-        leftSmokeParticle1->endSize = 0.5f;
-        leftSmokeParticle1->gravityModifier = 0.15f;
-        leftSmokeParticle1->startColor = glm::vec4(0.08f, 0.08f, 0.08f, 0.8f);
-        leftSmokeParticle1->endColor = glm::vec4(0.05f, 0.05f, 0.05f, 0.0f);
-        leftSmokeParticle1->shape = EmitterShape::Cone;
-        leftSmokeParticle1->shapeConeAngle = 0.2f;
-        leftSmokeParticle1->lifetimeVariance = 0.6f;
-        leftSmokeParticle1->turbulenceStrength = 0.1f;
-        leftSmokeParticle1->enabled = false;
-
-        Entity rightSmokeEntity1 = world.GetEntityManager().CreateEntity();
-        Transform* tRightSmoke1 = world.GetEntityManager().AddComponent<Transform>(rightSmokeEntity1, Transform{});
-        tRightSmoke1->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
-        tRightSmoke1->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
-        tRightSmoke1->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
-        world.GetEntityManager().AddComponent<ThrusterOwner>(rightSmokeEntity1, ThrusterOwner{ 0,true,false });
-        auto rightSmokeParticle1 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(rightSmokeEntity1, ParticlePresets::Smoke());
-        rightSmokeParticle1->emissionRate = 6.0f;
-        rightSmokeParticle1->startLifetime = 2.5f;
-        rightSmokeParticle1->startSpeed = 0.8f;
-        rightSmokeParticle1->startSize = 0.15f;
-        rightSmokeParticle1->endSize = 0.5f;
-        rightSmokeParticle1->gravityModifier = 0.15f;
-        rightSmokeParticle1->startColor = glm::vec4(0.08f, 0.08f, 0.08f, 0.8f);
-        rightSmokeParticle1->endColor = glm::vec4(0.05f, 0.05f, 0.05f, 0.0f);
-        rightSmokeParticle1->shape = EmitterShape::Cone;
-        rightSmokeParticle1->shapeConeAngle = 0.2f;
-        rightSmokeParticle1->lifetimeVariance = 0.6f;
-        rightSmokeParticle1->turbulenceStrength = 0.1f;
-        rightSmokeParticle1->enabled = false;
-
-        // Thrusters player 2
-        Entity rightThrusterEntity2 = world.GetEntityManager().CreateEntity();
-        Transform* rThruster2 = world.GetEntityManager().AddComponent<Transform>(rightThrusterEntity2, Transform{});
-        rThruster2->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
-        rThruster2->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
-        rThruster2->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
-        world.GetEntityManager().AddComponent<ThrusterOwner>(rightThrusterEntity2, ThrusterOwner{ 1,false,false });
-        auto rThrusterParticle2 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(rightThrusterEntity2, ParticlePresets::SpaceshipThruster());
-        rThrusterParticle2->emissionRate = 300.0f;
-        rThrusterParticle2->startLifetime = 0.05f;
-
-        Entity leftThrusterEntity2 = world.GetEntityManager().CreateEntity();
-        Transform* lThruster2 = world.GetEntityManager().AddComponent<Transform>(leftThrusterEntity2, Transform{});
-        lThruster2->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
-        lThruster2->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
-        lThruster2->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
-        world.GetEntityManager().AddComponent<ThrusterOwner>(leftThrusterEntity2, ThrusterOwner{ 1,false,true });
-        auto lThrusterParticle2 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(leftThrusterEntity2, ParticlePresets::SpaceshipThruster());
-        lThrusterParticle2->emissionRate = 300.0f;
-        lThrusterParticle2->startLifetime = 0.05f;
-
-        Entity leftSmokeEntity2 = world.GetEntityManager().CreateEntity();
-        Transform* tLeftSmoke2 = world.GetEntityManager().AddComponent<Transform>(leftSmokeEntity2, Transform{});
-        tLeftSmoke2->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
-        tLeftSmoke2->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
-        tLeftSmoke2->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
-        world.GetEntityManager().AddComponent<ThrusterOwner>(leftSmokeEntity2, ThrusterOwner{ 1,true,true });
-        auto leftSmokeParticle2 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(leftSmokeEntity2, ParticlePresets::Smoke());
-        leftSmokeParticle2->emissionRate = 6.0f;
-        leftSmokeParticle2->startLifetime = 2.5f;
-        leftSmokeParticle2->startSpeed = 0.8f;
-        leftSmokeParticle2->startSize = 0.15f;
-        leftSmokeParticle2->endSize = 0.5f;
-        leftSmokeParticle2->gravityModifier = 0.15f;
-        leftSmokeParticle2->startColor = glm::vec4(0.08f, 0.08f, 0.08f, 0.8f);
-        leftSmokeParticle2->endColor = glm::vec4(0.05f, 0.05f, 0.05f, 0.0f);
-        leftSmokeParticle2->shape = EmitterShape::Cone;
-        leftSmokeParticle2->shapeConeAngle = 0.2f;
-        leftSmokeParticle2->lifetimeVariance = 0.6f;
-        leftSmokeParticle2->turbulenceStrength = 0.1f;
-        leftSmokeParticle2->enabled = false;
-
-        Entity rightSmokeEntity2 = world.GetEntityManager().CreateEntity();
-        Transform* tRightSmoke2 = world.GetEntityManager().AddComponent<Transform>(rightSmokeEntity2, Transform{});
-        tRightSmoke2->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
-        tRightSmoke2->setRotation(glm::vec3(0.0f, 90.0f, 0.0f));
-        tRightSmoke2->setScale(glm::vec3(8.0f, 8.0f, 8.0f));
-        world.GetEntityManager().AddComponent<ThrusterOwner>(rightSmokeEntity2, ThrusterOwner{ 1,true,false });
-        auto rightSmokeParticle2 = world.GetEntityManager().AddComponent<ParticleEmitterComponent>(rightSmokeEntity2, ParticlePresets::Smoke());
-        rightSmokeParticle2->emissionRate = 6.0f;
-        rightSmokeParticle2->startLifetime = 2.5f;
-        rightSmokeParticle2->startSpeed = 0.8f;
-        rightSmokeParticle2->startSize = 0.15f;
-        rightSmokeParticle2->endSize = 0.5f;
-        rightSmokeParticle2->gravityModifier = 0.15f;
-        rightSmokeParticle2->startColor = glm::vec4(0.08f, 0.08f, 0.08f, 0.8f);
-        rightSmokeParticle2->endColor = glm::vec4(0.05f, 0.05f, 0.05f, 0.0f);
-        rightSmokeParticle2->shape = EmitterShape::Cone;
-        rightSmokeParticle2->shapeConeAngle = 0.2f;
-        rightSmokeParticle2->lifetimeVariance = 0.6f;
-        rightSmokeParticle2->turbulenceStrength = 0.1f;
-        rightSmokeParticle2->enabled = false;
-
-        // Render systems
+        // --- Render systems ---
         world.AddSystem(std::make_unique<CameraFollowSystem>());
         world.AddSystem(std::make_unique<OnDeathRenderSystem>());
         world.AddSystem(std::make_unique<ChargingBulletRenderSystem>());
@@ -1206,7 +1128,7 @@ public:
         world.AddSystem(std::make_unique<LaserWallRenderSystem>());
         world.AddSystem(std::make_unique<DestroyTimerSystem>());
 
-        AudioListenerComponent* listener = world.GetEntityManager().AddComponent<AudioListenerComponent>(camera, AudioListenerComponent{});
+        world.GetEntityManager().AddComponent<AudioListenerComponent>(camera, AudioListenerComponent{});
         AudioManager::SetEntityManager(&world.GetEntityManager());
         AudioManager::PlayMusic("song.wav", true);
         AudioManager::SetMusicVolume(0.25f);
