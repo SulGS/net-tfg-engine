@@ -195,25 +195,16 @@ public:
         for (auto [entity, play, ship] : query2) {
 
             if (play->playerId == coll_ev.playerId && ship->isAlive) {
-                ship->health -= 5;
-
-
-
-                if (ship->health <= 0) {
-
-                    if (isServer)
-                    {
-
-                        EventEntry deathEvent;
-                        deathEvent.event.type = AsteroidEventMask::DEATH;
-                        DeathEventData deathData;
-                        deathData.playerId = play->playerId;
-                        std::memcpy(deathEvent.event.data, &deathData, sizeof(DeathEventData));
-                        deathEvent.event.len = sizeof(DeathEventData);
-                        world.GetEvents().push_back(deathEvent);
-                    }
-
-
+                // One-hit kill — emit death immediately
+                if (isServer)
+                {
+                    EventEntry deathEvent;
+                    deathEvent.event.type = AsteroidEventMask::DEATH;
+                    DeathEventData deathData;
+                    deathData.playerId = play->playerId;
+                    std::memcpy(deathEvent.event.data, &deathData, sizeof(DeathEventData));
+                    deathEvent.event.len = sizeof(DeathEventData);
+                    world.GetEvents().push_back(deathEvent);
                 }
             }
         }
@@ -231,43 +222,16 @@ class DeathHandler : public IEventHandler {
 public:
     void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
     {
-
         auto death_ev = *reinterpret_cast<const DeathEventData*>(event.data);
         auto query = world.GetEntityManager().CreateQuery<Playable, SpaceShip>();
         for (auto [entity, play, ship] : query) {
             if (play->playerId == death_ev.playerId) {
                 ship->health = 0;
-                ship->deathCooldown = 10 * TICKS_PER_SECOND;
                 ship->isAlive = false;
                 if (isServer) {
                     auto col = world.GetEntityManager().GetComponent<BoxCollider2D>(entity);
                     if (col) {
                         col->isEnabled = false;
-                    }
-                }
-            }
-        }
-    }
-};
-
-class RespawnHandler : public IEventHandler {
-public:
-    void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
-    {
-
-        auto respawn_ev = *reinterpret_cast<const RespawnEventData*>(event.data);
-        auto query = world.GetEntityManager().CreateQuery<Playable, Transform, SpaceShip>();
-        for (auto [entity, play, transform, ship] : query) {
-            if (play->playerId == respawn_ev.playerId) {
-                ship->health = 100;
-                ship->deathCooldown = 0;
-                ship->isAlive = true;
-                transform->setPosition(glm::vec3(0.0f, 0.0f, 0.0f));
-                transform->setRotation(glm::vec3(0.0f, 0.0f, 0.0f));
-                if (isServer) {
-                    auto col = world.GetEntityManager().GetComponent<BoxCollider2D>(entity);
-                    if (col) {
-                        col->isEnabled = true;
                     }
                 }
             }

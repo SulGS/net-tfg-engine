@@ -1,7 +1,9 @@
 ﻿#pragma once
 #include <unordered_set>
+#include <algorithm>
 
 #include "netcode/netcode_common.hpp"
+#include "Utils/Input.hpp"
 #include "ecs/ecs_common.hpp"
 #include "ecs/UI/UIButton.hpp"
 #include "ecs/UI/UIImage.hpp"
@@ -9,6 +11,24 @@
 #include "ecs/UI/UIElement.hpp"
 #include "Components.hpp"
 #include "GameState.hpp"
+
+// Returns the playerId of the sole surviving player, or -1 if the game is
+// still ongoing (0 or 2+ players alive).
+inline int GetWinnerId(EntityManager& entityManager)
+{
+    int aliveCount = 0;
+    int winnerId = -1;
+    int total = 0;
+
+    auto q = entityManager.CreateQuery<Playable, SpaceShip>();
+    for (auto [e, play, ship] : q)
+    {
+        total++;
+        if (ship->isAlive) { aliveCount++; winnerId = play->playerId; }
+    }
+
+    return (total >= 2 && aliveCount == 1) ? winnerId : -1;
+}
 
 class CameraFollowSystem : public ISystem
 {
@@ -27,43 +47,180 @@ public:
         if (camQuery.Count() == 0)
             return;
 
+        // Check if the local player is alive
+        bool localAlive = false;
+        bool localFound = false;
+        int  localPlayerId = -1;
         glm::vec3 localPos(0.0f);
-        bool foundLocal = false;
 
         auto playerQuery = entityManager.CreateQuery<Transform, Playable, SpaceShip>();
         for (auto [entity, playerTransform, play, ship] : playerQuery)
         {
-            if (play->isLocal && ship->isAlive)
+            if (play->isLocal)
             {
+                localFound = true;
+                localPlayerId = play->playerId;
+                localAlive = ship->isAlive;
                 localPos = playerTransform->getPosition();
-                foundLocal = true;
-
-                auto textQuery = entityManager.CreateQuery<UIElement, UIText>();
-                for (auto [entity, element, text] : textQuery)
-                {
-                    element->anchor = UIAnchor::TOP_LEFT;
-                    element->position = glm::vec2(0.0f, 0.0f);
-                    element->size = glm::vec2(150.0f, 40.0f);
-                    element->pivot = glm::vec2(0.0f, 0.0f);
-
-                    text->text = "Health: " + std::to_string(ship->health);
-                }
                 break;
             }
         }
 
-        if (!foundLocal)
+        if (!localFound)
             return;
+
+        glm::vec3 targetPos(0.0f);
+
+        // ── Game over: all players see the winner zoom regardless of alive state ──
+        int winnerId = GetWinnerId(entityManager);
+        bool gameOver = (winnerId >= 0);
+
+        if (gameOver)
+        {
+            for (auto [e2, pt2, pl2, sh2] : playerQuery)
+            {
+                if (pl2->playerId == winnerId)
+                {
+                    targetPos = pt2->getPosition();
+                    break;
+                }
+            }
+
+            // Update UI for the alive winner (dead players are handled by OnDeathRenderSystem)
+            if (localAlive)
+            {
+                auto textQuery = entityManager.CreateQuery<UIElement, UIText>();
+                for (auto [entity, element, text] : textQuery)
+                {
+                    element->anchor = UIAnchor::TOP_CENTER;
+                    element->position = glm::vec2(0.0f, 20.0f);
+                    element->size = glm::vec2(300.0f, 40.0f);
+                    element->pivot = glm::vec2(0.0f, 0.0f);
+                    text->text = "PLAYER " + std::to_string(winnerId + 1) + " WINS";
+                }
+            }
+
+            float zoom = 0.6f;
+            for (auto [camEntity, cam, camTrans] : camQuery)
+            {
+                glm::vec3 newCamPos(
+                    targetPos.x,
+                    targetPos.y - 27.0f * zoom,
+                    18.0f * zoom
+                );
+                camTrans->setPosition(newCamPos);
+                cam->setTarget(targetPos);
+                cam->markViewDirty();
+            }
+            return;
+        }
+
+        // ── Normal gameplay ───────────────────────────────────────────────────
+        if (localAlive)
+        {
+            targetPos = localPos;
+
+            int aliveCount = 0;
+            for (auto [e2, pt2, pl2, sh2] : playerQuery)
+                if (sh2->isAlive) aliveCount++;
+
+            auto textQuery = entityManager.CreateQuery<UIElement, UIText>();
+            for (auto [entity, element, text] : textQuery)
+            {
+                element->anchor = UIAnchor::TOP_LEFT;
+                element->position = glm::vec2(0.0f, 0.0f);
+                element->size = glm::vec2(300.0f, 40.0f);
+                element->pivot = glm::vec2(0.0f, 0.0f);
+                text->text = "REMAINING: " + std::to_string(aliveCount);
+            }
+        }
+        else
+        {
+            // Spectating: find the SpectatorState and follow the watched player
+            SpectatorState* spectator = nullptr;
+            for (auto [entity, playerTransform, play, ship] : playerQuery)
+            {
+                if (play->isLocal)
+                {
+                    spectator = entityManager.GetComponent<SpectatorState>(entity);
+
+                    // Lazily add SpectatorState if missing
+                    if (!spectator)
+                    {
+                        // Find first alive player to watch (skip self)
+                        int firstAlive = -1;
+                        for (auto [e2, pt2, pl2, sh2] : playerQuery)
+                        {
+                            if (pl2->playerId != localPlayerId && sh2->isAlive)
+                            {
+                                firstAlive = pl2->playerId;
+                                break;
+                            }
+                        }
+                        SpectatorState newState;
+                        newState.watchedPlayerId = (firstAlive >= 0) ? firstAlive : localPlayerId;
+                        spectator = entityManager.AddComponent<SpectatorState>(entity, newState);
+                    }
+
+                    // Cycle target with LEFT / RIGHT arrow keys — read hardware
+                    // directly here since this is renderer-only local state and
+                    // must never touch the networked input blob.
+                    bool leftNow = Input::KeyPressed(Input::ArrowLeft);
+                    bool rightNow = Input::KeyPressed(Input::ArrowRight);
+
+                    auto cycleTarget = [&](int direction)
+                        {
+                            // Collect alive player ids (excluding local)
+                            std::vector<int> alive;
+                            for (auto [e2, pt2, pl2, sh2] : playerQuery)
+                                if (pl2->playerId != localPlayerId && sh2->isAlive)
+                                    alive.push_back(pl2->playerId);
+
+                            if (alive.empty()) return;
+
+                            auto it = std::find(alive.begin(), alive.end(), spectator->watchedPlayerId);
+                            int idx = (it != alive.end()) ? (int)(it - alive.begin()) : 0;
+                            idx = (idx + direction + (int)alive.size()) % (int)alive.size();
+                            spectator->watchedPlayerId = alive[idx];
+                        };
+
+                    if (leftNow && !spectator->prevLeftHeld)  cycleTarget(-1);
+                    if (rightNow && !spectator->prevRightHeld) cycleTarget(+1);
+
+                    spectator->prevLeftHeld = leftNow;
+                    spectator->prevRightHeld = rightNow;
+
+                    break;
+                }
+            }
+
+            // Follow the watched player (or stay put if everyone is dead)
+            bool watchedFound = false;
+            if (spectator)
+            {
+                for (auto [entity, playerTransform, play, ship] : playerQuery)
+                {
+                    if (play->playerId == spectator->watchedPlayerId)
+                    {
+                        targetPos = playerTransform->getPosition();
+                        watchedFound = true;
+                        break;
+                    }
+                }
+            }
+            if (!watchedFound)
+                targetPos = localPos;
+        }
 
         for (auto [camEntity, cam, camTrans] : camQuery)
         {
             glm::vec3 newCamPos(
-                localPos.x,
-                localPos.y - 27.0f * debugZoomMultiplier,
+                targetPos.x,
+                targetPos.y - 27.0f * debugZoomMultiplier,
                 18.0f * debugZoomMultiplier
             );
             camTrans->setPosition(newCamPos);
-            cam->setTarget(localPos);
+            cam->setTarget(targetPos);
             cam->markViewDirty();
         }
     }
@@ -87,31 +244,46 @@ public:
         {
             if (play->isLocal && !ship->isAlive)
             {
-                auto textQuery = entityManager.CreateQuery<UIElement, UIText>();
+                int winnerId = GetWinnerId(entityManager);
+                bool gameOver = (winnerId >= 0);
 
+                // Find who we're spectating (only needed when game is still ongoing)
+                std::string watchedName = "";
+                if (!gameOver)
+                {
+                    SpectatorState* spectator = entityManager.GetComponent<SpectatorState>(entity);
+                    if (spectator)
+                    {
+                        auto allPlayers = entityManager.CreateQuery<Playable, SpaceShip>();
+                        for (auto [e2, pl2, sh2] : allPlayers)
+                        {
+                            if (pl2->playerId == spectator->watchedPlayerId)
+                            {
+                                watchedName = "Player " + std::to_string(spectator->watchedPlayerId + 1);
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                auto textQuery = entityManager.CreateQuery<UIElement, UIText>();
                 for (auto [uiEntity, element, text] : textQuery)
                 {
-                    element->anchor = UIAnchor::CENTER;
-                    element->position = glm::vec2(0.0f);
-                    element->size = glm::vec2(150.0f, 40.0f);
+                    element->anchor = UIAnchor::TOP_CENTER;
+                    element->position = glm::vec2(0.0f, 20.0f);
+                    element->size = glm::vec2(350.0f, 80.0f);
                     element->pivot = glm::vec2(0.5f);
 
-                    int secondsRemain =
-                        std::max(0, ship->deathCooldown / TICKS_PER_SECOND);
-
-                    text->text = std::to_string(secondsRemain + 1);
+                    if (gameOver)
+                        text->text = "PLAYER " + std::to_string(winnerId + 1) + " WINS";
+                    else if (!watchedName.empty())
+                        text->text = "SPECTATING " + watchedName;
+                    else
+                        text->text = "YOU DIED";
                 }
             }
 
-
-            if (!ship->isAlive)
-            {
-                meshC->enabled = false;
-            }
-            else
-            {
-                meshC->enabled = true;
-            }
+            meshC->enabled = ship->isAlive;
         }
     }
 };
@@ -271,6 +443,13 @@ public:
             for (auto [shipEntity, shipTransform, play, ship] : shipQuery)
             {
                 if (thrusterOwner->shipEntity != play->playerId) continue;
+
+                // Ship dead — kill emitters, skip everything else
+                if (!ship->isAlive)
+                {
+                    thrusterEmitter->enabled = false;
+                    break;
+                }
 
                 // --- Position (same for both thruster and smoke) ---
                 glm::vec3 localOffset = glm::vec3(-1.8f, 0.0f, 0.0f);

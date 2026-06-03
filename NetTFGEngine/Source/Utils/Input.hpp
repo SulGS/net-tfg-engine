@@ -7,7 +7,20 @@
 
 class Input {
 public:
-    enum class KeyState { NONE, JUST_PRESSED, PRESSED, HELD, JUST_RELEASED ,RELEASED};
+    enum class KeyState { NONE, JUST_PRESSED, PRESSED, HELD, JUST_RELEASED, RELEASED };
+
+    // --- Common special keys ---
+    static constexpr int ArrowLeft = GLFW_KEY_LEFT;
+    static constexpr int ArrowRight = GLFW_KEY_RIGHT;
+    static constexpr int ArrowUp = GLFW_KEY_UP;
+    static constexpr int ArrowDown = GLFW_KEY_DOWN;
+    static constexpr int Enter = GLFW_KEY_ENTER;
+    static constexpr int Escape = GLFW_KEY_ESCAPE;
+    static constexpr int Tab = GLFW_KEY_TAB;
+    static constexpr int Backspace = GLFW_KEY_BACKSPACE;
+    static constexpr int Shift = GLFW_KEY_LEFT_SHIFT;
+    static constexpr int Ctrl = GLFW_KEY_LEFT_CONTROL;
+    static constexpr int Alt = GLFW_KEY_LEFT_ALT;
 
     // Call once after you create the GLFW window
     static void Init(GLFWwindow* win) {

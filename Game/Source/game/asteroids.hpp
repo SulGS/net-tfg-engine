@@ -61,8 +61,8 @@ inline SpawnPoint GetSpawnPoint(int playerIndex)
     static const SpawnPoint table[NUM_PLAYERS] = {
         { 0, 0,  45.0f },   // bottom-left corner        → face NE
         { 3, 0,  83.0f },   // bottom edge, 1/3          → face N-NE
-        /*{6, 0,  97.0f},   // bottom edge, 2/3          → face N-NW
-        { 9, 0, 135.0f },   // bottom-right corner       → face NW
+        {6, 0,  97.0f},   // bottom edge, 2/3          → face N-NW
+        /*{ 9, 0, 135.0f },   // bottom-right corner       → face NW
         { 9, 3, 153.0f },   // right edge, 1/3           → face W-NW
         { 9, 6, 167.0f },   // right edge, 2/3           → face W-SW
         { 9, 9, 225.0f },   // top-right corner          → face SW
@@ -99,10 +99,10 @@ public:
             Debug::Info("GameState") << "    Rotation: " << state.rot[i] << " degrees\n";
             Debug::Info("GameState") << "    Health: " << state.health[i] << "\n";
             Debug::Info("GameState") << "    Alive: " << (state.alive[i] ? "true" : "false") << "\n";
+            Debug::Info("GameState") << "    Spectating: " << (!state.alive[i] ? "true" : "false") << "\n";
             Debug::Info("GameState") << "    Is Moving: " << (state.isMovingForward[i] ? "true" : "false") << "\n";
             Debug::Info("GameState") << "    Remaining shoot frames: " << state.remaingShootFrames[i] << "\n";
             Debug::Info("GameState") << "    Shoot Cooldown: " << state.shootCooldown[i] << "\n";
-            Debug::Info("GameState") << "    Death Cooldown: " << state.deathCooldown[i] << "\n";
         }
         Debug::Info("GameState") << "  Active Bullet Count: " << state.bulletCount << "\n";
         Debug::Info("GameState") << "===================================\n";
@@ -138,7 +138,6 @@ public:
             ship->isMovingForward = s.isMovingForward[p];
             ship->shipInclination = s.shipInclination[p];
             ship->remainingShootFrames = s.remaingShootFrames[p];
-            ship->deathCooldown = s.deathCooldown[p];
             ship->isAlive = s.alive[p];
             ship->velX = s.velX[p];
             ship->velY = s.velY[p];
@@ -228,7 +227,6 @@ public:
             s.isMovingForward[p] = ship->isMovingForward;
             s.shipInclination[p] = ship->shipInclination;
             s.health[p] = ship->health;
-            s.deathCooldown[p] = ship->deathCooldown;
             s.alive[p] = ship->isAlive;
             s.velX[p] = ship->velX;
             s.velY[p] = ship->velY;
@@ -333,29 +331,28 @@ public:
     void InitECSLogic(GameStateBlob& state) override {
         AsteroidShooterGameState* s = reinterpret_cast<AsteroidShooterGameState*>(state.data);
 
-		float spawnX, spawnY, spawnRot;
+        float spawnX, spawnY, spawnRot;
 
 
 
-		for (int i = 0; i < NUM_PLAYERS; i++) {
-			GetPlayerSpawnWorld(i, spawnX, spawnY, spawnRot);
-			s->posX[i] = spawnX;
-			s->posY[i] = spawnY;
-			s->rot[i] = spawnRot;
+        for (int i = 0; i < NUM_PLAYERS; i++) {
+            GetPlayerSpawnWorld(i, spawnX, spawnY, spawnRot);
+            s->posX[i] = spawnX;
+            s->posY[i] = spawnY;
+            s->rot[i] = spawnRot;
 
-			s->velX[i] = 0.0f;
-			s->velY[i] = 0.0f;
-			s->angularVel[i] = 0.0f;
+            s->velX[i] = 0.0f;
+            s->velY[i] = 0.0f;
+            s->angularVel[i] = 0.0f;
 
-			s->remaingShootFrames[i] = 0;
-			s->isShooting[i] = false;
-			s->isMovingForward[i] = false;
-			s->shipInclination[i] = 0;
-			s->shootCooldown[i] = 0;
-			s->health[i] = 100;
-			s->alive[i] = true;
-			s->deathCooldown[i] = 0;
-		}
+            s->remaingShootFrames[i] = 0;
+            s->isShooting[i] = false;
+            s->isMovingForward[i] = false;
+            s->shipInclination[i] = 0;
+            s->shootCooldown[i] = 0;
+            s->health[i] = 1;
+            s->alive[i] = true;
+        }
 
         for (int i = 0; i < MAX_BULLETS; i++) {
             s->bullets[i].id = -1;
@@ -371,6 +368,7 @@ public:
         world.GetEntityManager().RegisterComponentType<PillarID>();
         world.GetEntityManager().RegisterComponentType<CenterSpoke>();
         world.GetEntityManager().RegisterComponentType<LaserWallID>();
+        world.GetEntityManager().RegisterComponentType<SpectatorState>();
 
 
         for (int i = 0; i < NUM_PLAYERS; i++)
@@ -380,13 +378,13 @@ public:
             t->setPosition(glm::vec3(s->posX[i], s->posY[i], 0.0f));
             t->setRotation(glm::vec3(0.0f, 0.0f, s->rot[i]));
             world.GetEntityManager().AddComponent<Playable>(player, Playable{ i, MakeZeroInputBlob(), (i == playerId ? true : false) });
-            world.GetEntityManager().AddComponent<SpaceShip>(player, SpaceShip{ 100,-1,0,0,true });
+            world.GetEntityManager().AddComponent<SpaceShip>(player, SpaceShip{ 1, -1, 0, true });
 
-            if (isServer) 
+            if (isServer)
             {
-				BoxCollider2D* collider = world.GetEntityManager().AddComponent<BoxCollider2D>(player, BoxCollider2D{ glm::vec2(1.5f, 3.0f) });
-				collider->layer = CollisionLayer::PLAYER;
-				collider->collidesWith = CollisionLayer::BULLET;
+                BoxCollider2D* collider = world.GetEntityManager().AddComponent<BoxCollider2D>(player, BoxCollider2D{ glm::vec2(1.5f, 3.0f) });
+                collider->layer = CollisionLayer::PLAYER;
+                collider->collidesWith = CollisionLayer::BULLET;
             }
         }
 
@@ -592,6 +590,7 @@ public:
         {
             world.AddSystem(std::make_unique<InputServerSystem>());
             world.AddSystem(std::make_unique<ArenaSystem>());
+            world.AddSystem(std::make_unique<GameOverSystem>());
         }
 
         world.AddSystem(std::make_unique<BulletSystem>());
@@ -600,7 +599,6 @@ public:
         eventProcessor->RegisterHandler(AsteroidEventMask::SPAWN_BULLET, std::make_unique<SpawnBulletHandler>());
         eventProcessor->RegisterHandler(AsteroidEventMask::BULLET_COLLIDES, std::make_unique<BulletCollidesHandler>());
         eventProcessor->RegisterHandler(AsteroidEventMask::DEATH, std::make_unique<DeathHandler>());
-        eventProcessor->RegisterHandler(AsteroidEventMask::RESPAWN, std::make_unique<RespawnHandler>());
         eventProcessor->RegisterHandler(AsteroidEventMask::DESTROY_TILE, std::make_unique<DestroyTileHandler>());
         eventProcessor->RegisterHandler(AsteroidEventMask::TOGGLE_WALL, std::make_unique<ToggleWallHandler>());
         eventProcessor->RegisterHandler(AsteroidEventMask::WARN_TILE, std::make_unique<WarnTileHandler>());
@@ -625,8 +623,6 @@ public:
         EVP_DigestUpdate(ctx, &s.health[1], sizeof(s.health[1]));
         EVP_DigestUpdate(ctx, &s.alive[0], sizeof(s.alive[0]));
         EVP_DigestUpdate(ctx, &s.alive[1], sizeof(s.alive[1]));
-        EVP_DigestUpdate(ctx, &s.deathCooldown[0], sizeof(s.deathCooldown[0]));
-        EVP_DigestUpdate(ctx, &s.deathCooldown[1], sizeof(s.deathCooldown[1]));
 
         unsigned int len = 0;
         if (1 != EVP_DigestFinal_ex(ctx, outHash, &len)) {
@@ -658,9 +654,9 @@ public:
             Debug::Info("GameState") << "    Rotation: " << state.rot[i] << " degrees\n";
             Debug::Info("GameState") << "    Health: " << state.health[i] << "\n";
             Debug::Info("GameState") << "    Alive: " << (state.alive[i] ? "true" : "false") << "\n";
+            Debug::Info("GameState") << "    Spectating: " << (!state.alive[i] ? "true" : "false") << "\n";
             Debug::Info("GameState") << "    Remaining shoot frames: " << state.remaingShootFrames[i] << "\n";
             Debug::Info("GameState") << "    Shoot Cooldown: " << state.shootCooldown[i] << "\n";
-            Debug::Info("GameState") << "    Death Cooldown: " << state.deathCooldown[i] << "\n";
         }
         Debug::Info("GameState") << "  Active Bullet Count: " << state.bulletCount << "\n";
         Debug::Info("GameState") << "===================================\n";
@@ -688,7 +684,6 @@ public:
             ship->shipInclination = s.shipInclination[p];
             ship->remainingShootFrames = s.remaingShootFrames[p];
             ship->shootCooldown = s.shootCooldown[p];
-            ship->deathCooldown = std::max(0, s.deathCooldown[p]);
             ship->velX = s.velX[p];
             ship->velY = s.velY[p];
             ship->angularVel = s.angularVel[p];
@@ -841,6 +836,7 @@ public:
         world.GetEntityManager().RegisterComponentType<LaserWallID>();
         world.GetEntityManager().RegisterComponentType<CenterSpoke>();
         world.GetEntityManager().RegisterComponentType<ThrusterOwner>();
+        world.GetEntityManager().RegisterComponentType<SpectatorState>();
 
         // --- Sun ---
         Entity sunEntity = world.GetEntityManager().CreateEntity();
@@ -861,7 +857,7 @@ public:
 
             world.GetEntityManager().AddComponent<Playable>(
                 player, Playable{ i, MakeZeroInputBlob(), (i == playerId) });
-            world.GetEntityManager().AddComponent<SpaceShip>(player, SpaceShip{ 100, -1, 0, 0, true });
+            world.GetEntityManager().AddComponent<SpaceShip>(player, SpaceShip{ 1, -1, 0, true });
             world.GetEntityManager().AddComponent<MeshComponent>(
                 player, MeshComponent(new Mesh("ship.glb",
                     std::make_shared<Material>("ggx.vert", "ggx.frag"))));
@@ -1150,7 +1146,7 @@ public:
 
         AsteroidShooterGameState& rend = *reinterpret_cast<AsteroidShooterGameState*>(renderState.data);
 
-        for (int i = 0; i < 2; ++i) {
+        for (int i = 0; i < NUM_PLAYERS; ++i) {
             if (playerId == i)
             {
                 rend.posX[i] = prevLocal.posX[i] + (currLocal.posX[i] - prevLocal.posX[i]) * localInterpolation;
@@ -1177,7 +1173,6 @@ public:
             rend.shipInclination[i] = currServer.shipInclination[i];
             rend.isShooting[i] = currServer.isShooting[i];
             rend.shootCooldown[i] = currServer.shootCooldown[i];
-            rend.deathCooldown[i] = currServer.deathCooldown[i];
             rend.velX[i] = currServer.velX[i];
             rend.velY[i] = currServer.velY[i];
             rend.angularVel[i] = currServer.angularVel[i];

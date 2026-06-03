@@ -162,6 +162,7 @@ public:
 	bool isServer = false;
     int frame = 0;
     int playerId = -1;
+	boolean gameFinished = false;
 	std::vector<EventEntry> generatedEvents;
     std::vector<DeltaStateBlob> generatedDeltas;
 

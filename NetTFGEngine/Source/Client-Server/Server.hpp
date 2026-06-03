@@ -589,7 +589,7 @@ private:
             ServerNetworkThread(networkRunning);
             });
 
-        while (running_ && (activePlayerCount_ >= config_.minPlayers || !config_.stopOnBelowMin)) {
+        while (running_ && (activePlayerCount_ >= config_.minPlayers || !config_.stopOnBelowMin) && !server_.GetGameLogic()->gameFinished) {
 
             // Run game simulation tick
             StateUpdate update = server_.Tick();

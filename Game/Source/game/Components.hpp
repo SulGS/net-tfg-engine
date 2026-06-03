@@ -82,13 +82,23 @@ public:
 
 	int remainingShootFrames;
 	int shootCooldown; // frames until can shoot again
-	int deathCooldown;
 	bool isAlive;
 
 	int shipZRotation;
 
-	SpaceShip() : health(100), isShooting(false), remainingShootFrames(0), shootCooldown(0), deathCooldown(0), isAlive(true), isMovingForward(false), shipInclination(0), shipZRotation(0), velX(0.0f), velY(0.0f), angularVel(0.0f) {}
-	SpaceShip(int h, int rsf, int cd, int dc, bool al) : health(h), isShooting(false), remainingShootFrames(rsf), shootCooldown(cd), deathCooldown(dc), isAlive(al), isMovingForward(false), shipInclination(0), shipZRotation(0), velX(0.0f), velY(0.0f), angularVel(0.0f) {}
+	SpaceShip() : health(1), isShooting(false), remainingShootFrames(0), shootCooldown(0), isAlive(true), isMovingForward(false), shipInclination(0), shipZRotation(0), velX(0.0f), velY(0.0f), angularVel(0.0f) {}
+	SpaceShip(int h, int rsf, int cd, bool al) : health(h), isShooting(false), remainingShootFrames(rsf), shootCooldown(cd), isAlive(al), isMovingForward(false), shipInclination(0), shipZRotation(0), velX(0.0f), velY(0.0f), angularVel(0.0f) {}
+};
+
+// Tracks which player a dead local player is currently spectating.
+// Only present on the local player's entity (renderer side).
+class SpectatorState : public IComponent {
+public:
+	int watchedPlayerId; // playerId currently being followed
+	bool prevLeftHeld;   // edge-detection for left arrow
+	bool prevRightHeld;  // edge-detection for right arrow
+
+	SpectatorState() : watchedPlayerId(0), prevLeftHeld(false), prevRightHeld(false) {}
 };
 
 class ECSBullet : public IComponent {
