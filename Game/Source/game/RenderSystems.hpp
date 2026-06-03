@@ -322,6 +322,10 @@ public:
 
 class LaserWallRenderSystem : public ISystem
 {
+    float warningTimer = 0.0f;
+    const float WARNING_BLINK_INTERVAL = 0.25f;
+    bool warningBlinkActive = false; // flips every WARNING_BLINK_INTERVAL, used for all warning walls/spokes
+
 public:
     void Update(
         EntityManager& entityManager,
@@ -333,7 +337,15 @@ public:
         const int x_size = 5;
         const int y_size = 5;
 
-        // Build active tile set
+        // ── Advance warning blink timer ───────────────────────────────────────
+        warningTimer += deltaTime;
+        if (warningTimer >= WARNING_BLINK_INTERVAL)
+        {
+            warningTimer -= WARNING_BLINK_INTERVAL;
+            warningBlinkActive = !warningBlinkActive;
+        }
+
+        // ── Build active tile set ─────────────────────────────────────────────
         std::unordered_set<int> activeTileIds;
         {
             auto tileActiveQuery = entityManager.CreateQuery<TileID>();
@@ -341,24 +353,37 @@ public:
                 if (tileId->active) activeTileIds.insert(tileId->id);
         }
 
-        // Tiles: active flag drives visibility
+        // ── Tiles: active flag drives visibility, warning drives fall ─────────
         {
-            auto tileQuery = entityManager.CreateQuery<TileID, MeshComponent>();
-            for (auto [entity, tileId, mesh] : tileQuery)
+            auto tileQuery = entityManager.CreateQuery<TileID, MeshComponent, Transform>();
+            for (auto [entity, tileId, mesh, transform] : tileQuery)
+            {
                 mesh->enabled = tileId->active;
+
+                if (tileId->active && tileId->warning)
+                {
+                    tileId->warningFallAccum += deltaTime;
+                    float drop = tileId->warningFallAccum * tileId->warningFallAccum * 6.0f;
+                    glm::vec3 pos = transform->getPosition();
+                    transform->setPosition(glm::vec3(pos.x, pos.y, -4.0f - drop));
+                }
+                else if (tileId->active && !tileId->warning)
+                {
+                    tileId->warningFallAccum = 0.0f;
+                    glm::vec3 pos = transform->getPosition();
+                    transform->setPosition(glm::vec3(pos.x, pos.y, -4.0f));
+                }
+            }
         }
 
-        // Walls visibility rules:
-        // 1. Owning cell inactive -> always hidden
-        // 2. Owning cell active, neighbour inactive/out-of-bounds -> always shown (new border)
-        // 3. Both cells active -> driven by lwID->enabled (toggler)
+        // ── Walls and spokes ──────────────────────────────────────────────────
         {
             auto laserWallQuery = entityManager.CreateQuery<LaserWallID, MeshComponent>();
             for (auto [entity, lwID, mesh] : laserWallQuery)
             {
                 bool isSpoke = entityManager.GetComponent<CenterSpoke>(entity) != nullptr;
-
                 bool ownerActive = activeTileIds.count(lwID->cellId) > 0;
+
                 if (!ownerActive)
                 {
                     mesh->enabled = false;
@@ -367,10 +392,14 @@ public:
 
                 if (isSpoke)
                 {
-                    mesh->enabled = lwID->enabled; // spokes always driven by enabled flag only
+                    if (lwID->warning && !lwID->enabled)
+                        mesh->enabled = warningBlinkActive;
+                    else
+                        mesh->enabled = lwID->enabled;
                     continue;
                 }
 
+                // Non-spoke walls
                 int cx = lwID->cellId / y_size;
                 int cy = lwID->cellId % y_size;
                 int nx = cx, ny = cy;
@@ -387,13 +416,21 @@ public:
                     || !activeTileIds.count(nx * y_size + ny);
 
                 if (neighbourInactive)
+                {
                     mesh->enabled = true;
+                }
+                else if (lwID->warning && !lwID->enabled)
+                {
+                    mesh->enabled = warningBlinkActive;
+                }
                 else
+                {
                     mesh->enabled = lwID->enabled;
+                }
             }
         }
 
-        // Pillars: hidden when ALL their cells are inactive
+        // ── Pillars: hidden when ALL their cells are inactive ─────────────────
         {
             auto pillarQuery = entityManager.CreateQuery<PillarID, MeshComponent>();
             for (auto [entity, pid, mesh] : pillarQuery)

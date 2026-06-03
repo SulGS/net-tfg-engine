@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include "OpenGL/OpenGLIncludes.hpp"
 #include "ecs/Events/ecs_iecs_event_handler.hpp"
 #include "ecs/ecs_common.hpp"
@@ -9,6 +9,58 @@
 #include "OpenAL/AudioManager.hpp"
 #include "OpenAL/AudioComponents.hpp"
 
+
+class WarnTileHandler : public IEventHandler {
+public:
+    void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
+    {
+        auto ev = *reinterpret_cast<const WarnTileEventData*>(event.data);
+        auto query = world.GetEntityManager().CreateQuery<TileID>();
+        for (auto [entity, tileId] : query)
+        {
+            if (tileId->id == ev.tileId)
+            {
+                tileId->warning = true;
+                break;
+            }
+        }
+    }
+};
+
+class WarnWallHandler : public IEventHandler {
+public:
+    void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
+    {
+        auto ev = *reinterpret_cast<const WarnWallEventData*>(event.data);
+        EntityManager& em = world.GetEntityManager();
+
+        if (ev.isSpoke)
+        {
+            auto query = em.CreateQuery<LaserWallID, CenterSpoke>();
+            for (auto [entity, lwid, spoke] : query)
+            {
+                if (lwid->cellId == ev.cellId && lwid->dir == ev.dir)
+                {
+                    lwid->warning = ev.warning;
+                    break;
+                }
+            }
+        }
+        else
+        {
+            auto query = em.CreateQuery<LaserWallID>();
+            for (auto [entity, lwid] : query)
+            {
+                if (em.GetComponent<CenterSpoke>(entity) != nullptr) continue;
+                if (lwid->cellId == ev.cellId && lwid->dir == ev.dir)
+                {
+                    lwid->warning = ev.warning;
+                    break;
+                }
+            }
+        }
+    }
+};
 
 class ToggleWallHandler : public IEventHandler {
 public:

@@ -147,7 +147,7 @@ public:
         const int x_size = 5;
         const int y_size = 5;
 
-        // Sync tile active flag from blob into logic ECS
+        // Sync tile active + warning flags from blob into logic ECS
         {
             auto tileQuery = world.GetEntityManager().CreateQuery<TileID>();
             for (auto [entity, tileId] : tileQuery)
@@ -155,6 +155,7 @@ public:
                 int cx = tileId->id / y_size;
                 int cy = tileId->id % y_size;
                 tileId->active = s.tilesActive[cx][cy];
+                tileId->warning = s.tilesWarning[cx][cy];
             }
         }
     }
@@ -205,60 +206,71 @@ public:
         const int x_size = 5;
         const int y_size = 5;
 
-        // Tiles
-        auto tileQuery = world.GetEntityManager().CreateQuery<TileID>();
-        for (auto [entity, tileId] : tileQuery)
+        // Tiles — active and warning
         {
-            if (!tileId->active) continue;  // ← skip inactive
-            int cx = tileId->id / y_size;
-            int cy = tileId->id % y_size;
-            s.tilesActive[cx][cy] = true;
-        }
-
-        // Border/shared walls — skip spokes
-        auto wallQuery = world.GetEntityManager().CreateQuery<LaserWallID>();
-        for (auto [entity, lwid] : wallQuery)
-        {
-            if (world.GetEntityManager().GetComponent<CenterSpoke>(entity) != nullptr) continue;
-
-            int cx = lwid->cellId / y_size;
-            int cy = lwid->cellId % y_size;
-
-            switch (lwid->dir)
+            auto tileQuery = world.GetEntityManager().CreateQuery<TileID>();
+            for (auto [entity, tileId] : tileQuery)
             {
-            case CellCardinalDirection::Down:
-                s.vWalls[2 * cx][2 * cy] = lwid->enabled;
-                break;
-            case CellCardinalDirection::Up:
-                s.vWalls[2 * cx][2 * cy + 2] = lwid->enabled;
-                break;
-            case CellCardinalDirection::Left:
-                s.hWalls[2 * cx][2 * cy] = lwid->enabled;
-                break;
-            case CellCardinalDirection::Right:
-                s.hWalls[2 * cx + 2][2 * cy] = lwid->enabled;
-                break;
-            default: break;
+                int cx = tileId->id / y_size;
+                int cy = tileId->id % y_size;
+                if (tileId->active)  s.tilesActive[cx][cy] = true;
+                if (tileId->warning) s.tilesWarning[cx][cy] = true;
             }
         }
 
-        // Center spokes
-        auto spokeQuery = world.GetEntityManager().CreateQuery<LaserWallID, CenterSpoke>();
-        for (auto [entity, lwid, spoke] : spokeQuery)
+        // Border/shared walls — enabled and warning
         {
-            int cx = lwid->cellId / y_size;
-            int cy = lwid->cellId % y_size;
-
-            int dirIdx = 0;
-            switch (lwid->dir)
+            auto wallQuery = world.GetEntityManager().CreateQuery<LaserWallID>();
+            for (auto [entity, lwid] : wallQuery)
             {
-            case CellCardinalDirection::Down:  dirIdx = 0; break;
-            case CellCardinalDirection::Up:    dirIdx = 1; break;
-            case CellCardinalDirection::Left:  dirIdx = 2; break;
-            case CellCardinalDirection::Right: dirIdx = 3; break;
-            default: break;
+                if (world.GetEntityManager().GetComponent<CenterSpoke>(entity) != nullptr) continue;
+
+                int cx = lwid->cellId / y_size;
+                int cy = lwid->cellId % y_size;
+
+                switch (lwid->dir)
+                {
+                case CellCardinalDirection::Down:
+                    s.vWalls[2 * cx][2 * cy] = lwid->enabled;
+                    s.vWallsWarning[2 * cx][2 * cy] = lwid->warning;
+                    break;
+                case CellCardinalDirection::Up:
+                    s.vWalls[2 * cx][2 * cy + 2] = lwid->enabled;
+                    s.vWallsWarning[2 * cx][2 * cy + 2] = lwid->warning;
+                    break;
+                case CellCardinalDirection::Left:
+                    s.hWalls[2 * cx][2 * cy] = lwid->enabled;
+                    s.hWallsWarning[2 * cx][2 * cy] = lwid->warning;
+                    break;
+                case CellCardinalDirection::Right:
+                    s.hWalls[2 * cx + 2][2 * cy] = lwid->enabled;
+                    s.hWallsWarning[2 * cx + 2][2 * cy] = lwid->warning;
+                    break;
+                default: break;
+                }
             }
-            s.cWalls[cx][cy][dirIdx] = lwid->enabled;
+        }
+
+        // Center spokes — enabled and warning
+        {
+            auto spokeQuery = world.GetEntityManager().CreateQuery<LaserWallID, CenterSpoke>();
+            for (auto [entity, lwid, spoke] : spokeQuery)
+            {
+                int cx = lwid->cellId / y_size;
+                int cy = lwid->cellId % y_size;
+
+                int dirIdx = 0;
+                switch (lwid->dir)
+                {
+                case CellCardinalDirection::Down:  dirIdx = 0; break;
+                case CellCardinalDirection::Up:    dirIdx = 1; break;
+                case CellCardinalDirection::Left:  dirIdx = 2; break;
+                case CellCardinalDirection::Right: dirIdx = 3; break;
+                default: break;
+                }
+                s.cWalls[cx][cy][dirIdx] = lwid->enabled;
+                s.cWallsWarning[cx][cy][dirIdx] = lwid->warning;
+            }
         }
 
         state.len = sizeof(AsteroidShooterGameState);
@@ -272,8 +284,8 @@ public:
         AsteroidShooterGameState* s = reinterpret_cast<AsteroidShooterGameState*>(state.data);
 
         s->posX[0] = -10; s->posY[0] = -10;
-        s->posX[1] = 10; s->posY[1] = 10;
-        s->rot[0] = 0; s->rot[1] = 180;
+        s->posX[1] = 10;  s->posY[1] = 10;
+        s->rot[0] = 0;    s->rot[1] = 180;
 
         s->velX[0] = 0.0f;       s->velX[1] = 0.0f;
         s->velY[0] = 0.0f;       s->velY[1] = 0.0f;
@@ -299,7 +311,6 @@ public:
 
         s->shootCooldown[0] = 0;
         s->shootCooldown[1] = 0;
-
 
         s->health[0] = 100;
         s->health[1] = 100;
@@ -458,8 +469,8 @@ public:
             t->setScale(glm::vec3(2.0f, 2.0f, 19.0f));
 
             LaserWallID lwid(cellId, w.dir);
-            lwid.enabled = w.onBorder;        // borders ON, interior OFF
-            lwid.timer = initDist(initRng); // staggered so they don't all expire at once
+            lwid.enabled = w.onBorder;
+            lwid.timer = initDist(initRng);
             em.AddComponent<LaserWallID>(e, lwid);
         }
 
@@ -481,8 +492,8 @@ public:
                         t->setScale(glm::vec3(2.0f, 2.0f, 19.0f));
 
                         LaserWallID lwid(cellId, dir);
-                        lwid.enabled = false;             // spokes start OFF
-                        lwid.timer = initDist(initRng); // staggered timer
+                        lwid.enabled = false;
+                        lwid.timer = initDist(initRng);
                         em.AddComponent<LaserWallID>(e, lwid);
                         em.AddComponent<CenterSpoke>(e, CenterSpoke{});
                     };
@@ -555,6 +566,8 @@ public:
         eventProcessor->RegisterHandler(AsteroidEventMask::RESPAWN, std::make_unique<RespawnHandler>());
         eventProcessor->RegisterHandler(AsteroidEventMask::DESTROY_TILE, std::make_unique<DestroyTileHandler>());
         eventProcessor->RegisterHandler(AsteroidEventMask::TOGGLE_WALL, std::make_unique<ToggleWallHandler>());
+        eventProcessor->RegisterHandler(AsteroidEventMask::WARN_TILE, std::make_unique<WarnTileHandler>());
+        eventProcessor->RegisterHandler(AsteroidEventMask::WARN_WALL, std::make_unique<WarnWallHandler>());
 
         deltaProcessor->RegisterHandler(DELTA_GAME_POSITIONS, std::make_unique<GamePositionsDeltaHandler>());
     }
@@ -714,23 +727,19 @@ public:
         const int x_size = 5;
         const int y_size = 5;
 
-        // Build active tile set from renderState (authoritative source)
-        // s.tilesActive is populated by ECSWorld_To_GameState on logic side
-        // and copied into renderState via Interpolate's memcpy of currServer
-        std::unordered_set<int> activeTileIds;
-        for (int tx = 0; tx < x_size; tx++)
-            for (int ty = 0; ty < y_size; ty++)
-                if (s.tilesActive[tx][ty])
-                    activeTileIds.insert(tx * y_size + ty);
-
-        // Sync tile active flag from renderState into renderer ECS
+        // Sync tile active + warning flags
         {
             auto tileQuery = em.CreateQuery<TileID>();
             for (auto [entity, tileId] : tileQuery)
-                tileId->active = activeTileIds.count(tileId->id) > 0;
+            {
+                int cx = tileId->id / y_size;
+                int cy = tileId->id % y_size;
+                tileId->active = s.tilesActive[cx][cy];
+                tileId->warning = s.tilesWarning[cx][cy];
+            }
         }
 
-        // Sync wall enabled state from renderState
+        // Sync wall enabled + warning state
         {
             auto wallQuery = em.CreateQuery<LaserWallID>();
             for (auto [entity, lwid] : wallQuery)
@@ -740,13 +749,26 @@ public:
                 int cy = lwid->cellId % y_size;
                 switch (lwid->dir)
                 {
-                case CellCardinalDirection::Down:  lwid->enabled = s.vWalls[2 * cx][2 * cy];   break;
-                case CellCardinalDirection::Up:    lwid->enabled = s.vWalls[2 * cx][2 * cy + 2]; break;
-                case CellCardinalDirection::Left:  lwid->enabled = s.hWalls[2 * cx][2 * cy];   break;
-                case CellCardinalDirection::Right: lwid->enabled = s.hWalls[2 * cx + 2][2 * cy]; break;
+                case CellCardinalDirection::Down:
+                    lwid->enabled = s.vWalls[2 * cx][2 * cy];
+                    lwid->warning = s.vWallsWarning[2 * cx][2 * cy];
+                    break;
+                case CellCardinalDirection::Up:
+                    lwid->enabled = s.vWalls[2 * cx][2 * cy + 2];
+                    lwid->warning = s.vWallsWarning[2 * cx][2 * cy + 2];
+                    break;
+                case CellCardinalDirection::Left:
+                    lwid->enabled = s.hWalls[2 * cx][2 * cy];
+                    lwid->warning = s.hWallsWarning[2 * cx][2 * cy];
+                    break;
+                case CellCardinalDirection::Right:
+                    lwid->enabled = s.hWalls[2 * cx + 2][2 * cy];
+                    lwid->warning = s.hWallsWarning[2 * cx + 2][2 * cy];
+                    break;
                 default: break;
                 }
             }
+
             auto spokeQuery = em.CreateQuery<LaserWallID, CenterSpoke>();
             for (auto [entity, lwid, spoke] : spokeQuery)
             {
@@ -762,10 +784,9 @@ public:
                 default: break;
                 }
                 lwid->enabled = s.cWalls[cx][cy][dirIdx];
+                lwid->warning = s.cWallsWarning[cx][cy][dirIdx];
             }
         }
-
-
     }
 
     void InitECSRenderer(const GameStateBlob& state, OpenGLWindow* window) override {
@@ -839,14 +860,14 @@ public:
         lightComp->radius = 100.0f;
         lightComp->castShadows = true;
 
-		Entity lavaFloor = world.GetEntityManager().CreateEntity();
-		Transform* lavaTrans = world.GetEntityManager().AddComponent<Transform>(lavaFloor, Transform{});
-		lavaTrans->setPosition(glm::vec3(-20.0f, -20.0f, -12.0f));
-		lavaTrans->setRotation(glm::vec3(90.0f, 0.0f, 0.0f));
-		lavaTrans->setScale(glm::vec3(5.0f, 5.0f, 5.0f));
-		MeshComponent* lavaMesh = world.GetEntityManager().AddComponent<MeshComponent>(lavaFloor, MeshComponent(new Mesh("lava.glb", std::make_shared<Material>("ggx.vert", "ggx.frag"))));
-		lavaMesh->castShadows = false;
-        
+        Entity lavaFloor = world.GetEntityManager().CreateEntity();
+        Transform* lavaTrans = world.GetEntityManager().AddComponent<Transform>(lavaFloor, Transform{});
+        lavaTrans->setPosition(glm::vec3(-20.0f, -20.0f, -12.0f));
+        lavaTrans->setRotation(glm::vec3(90.0f, 0.0f, 0.0f));
+        lavaTrans->setScale(glm::vec3(5.0f, 5.0f, 5.0f));
+        MeshComponent* lavaMesh = world.GetEntityManager().AddComponent<MeshComponent>(lavaFloor, MeshComponent(new Mesh("lava.glb", std::make_shared<Material>("ggx.vert", "ggx.frag"))));
+        lavaMesh->castShadows = false;
+
         const int x_size = 5;
         const int y_size = 5;
 
@@ -976,7 +997,6 @@ public:
             }
         }
 
-        // Spawn wall entities (renderer side — enabled state comes from GameState_To_ECSWorld)
         for (auto& w : walls)
         {
             const int cellId = w.cellX * y_size + w.cellY;
@@ -988,7 +1008,7 @@ public:
             t->setScale(glm::vec3(2.0f, 2.0f, 19.0f));
 
             LaserWallID lwid(cellId, w.dir);
-            lwid.enabled = w.onBorder; // will be overwritten by GameState_To_ECSWorld each frame
+            lwid.enabled = w.onBorder;
             em.AddComponent<LaserWallID>(e, lwid);
 
             Mesh* mesh = new Mesh("laser_wall.glb",
@@ -1015,7 +1035,7 @@ public:
                         t->setScale(glm::vec3(2.0f, 2.0f, 19.0f));
 
                         LaserWallID lwid(cellId, dir);
-                        lwid.enabled = false; // will be overwritten by GameState_To_ECSWorld each frame
+                        lwid.enabled = false;
                         em.AddComponent<LaserWallID>(e, lwid);
                         em.AddComponent<CenterSpoke>(e, CenterSpoke{});
 
@@ -1051,7 +1071,6 @@ public:
                 }
             }
         }
-        
 
         // Thrusters player 1
         Entity rightThrusterEntity1 = world.GetEntityManager().CreateEntity();
@@ -1221,15 +1240,6 @@ public:
             }
             else
             {
-                /*Debug::Info("Interpolate")
-                    << "Player " << i
-                    << " | prevServer=(" << prevServer.posX[i] << "," << prevServer.posY[i] << ")"
-                    << " currServer=(" << currServer.posX[i] << "," << currServer.posY[i] << ")"
-                    << " factor=" << serverInterpolation
-                    << " prevFrame=" << previousServerState.frame
-                    << " currFrame=" << currentServerState.frame
-                    << "\n";*/
-
                 rend.posX[i] = prevServer.posX[i] + (currServer.posX[i] - prevServer.posX[i]) * serverInterpolation;
                 rend.posY[i] = prevServer.posY[i] + (currServer.posY[i] - prevServer.posY[i]) * serverInterpolation;
                 float delta = currServer.rot[i] - prevServer.rot[i];
@@ -1278,11 +1288,15 @@ public:
             }
         }
 
-        // Walls — use server state directly (no interpolation needed)
+        // Walls and arena state — copy directly from server (no interpolation)
         std::memcpy(rend.hWalls, currServer.hWalls, sizeof(currServer.hWalls));
         std::memcpy(rend.vWalls, currServer.vWalls, sizeof(currServer.vWalls));
         std::memcpy(rend.cWalls, currServer.cWalls, sizeof(currServer.cWalls));
         std::memcpy(rend.tilesActive, currServer.tilesActive, sizeof(currServer.tilesActive));
+        std::memcpy(rend.hWallsWarning, currServer.hWallsWarning, sizeof(currServer.hWallsWarning));
+        std::memcpy(rend.vWallsWarning, currServer.vWallsWarning, sizeof(currServer.vWallsWarning));
+        std::memcpy(rend.cWallsWarning, currServer.cWallsWarning, sizeof(currServer.cWallsWarning));
+        std::memcpy(rend.tilesWarning, currServer.tilesWarning, sizeof(currServer.tilesWarning));
     }
 
     ~AsteroidShooterGameRenderer() override {

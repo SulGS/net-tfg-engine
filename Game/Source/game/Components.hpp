@@ -35,7 +35,7 @@ public:
 	CellCardinalDirection dir;
 	float timer;
 	bool enabled;
-	bool warning;  // true when timer is close to 0
+	bool warning;
 	LaserWallID() : cellId(-1), dir(CellCardinalDirection::None), enabled(true), timer(0.0f), warning(false) {}
 	LaserWallID(int c, CellCardinalDirection d) : cellId(c), dir(d), enabled(true), timer(0.0f), warning(false) {}
 };
@@ -55,9 +55,10 @@ class TileID : public IComponent {
 public:
 	int id;
 	bool warning = false;
-	bool active = true;  // ← add this
-	TileID() : id(0), warning(false), active(true) {}
-	TileID(int id) : id(id), warning(false), active(true) {}
+	bool active = true;
+	float warningFallAccum = 0.0f; // renderer-only: accumulates fall distance during warning
+	TileID() : id(0), warning(false), active(true), warningFallAccum(0.0f) {}
+	TileID(int id) : id(id), warning(false), active(true), warningFallAccum(0.0f) {}
 };
 
 class ThrusterOwner : public IComponent {
@@ -75,28 +76,19 @@ public:
 	bool isShooting;
 	bool isMovingForward;
 	int shipInclination;
-	float velX;        // ← new: linear velocity X
-	float velY;        // ← new: linear velocity Y
-	float angularVel;  // ← new: angular velocity (degrees/tick)
+	float velX;
+	float velY;
+	float angularVel;
 
 	int remainingShootFrames;
-	int shootCooldown;
+	int shootCooldown; // frames until can shoot again
 	int deathCooldown;
 	bool isAlive;
+
 	int shipZRotation;
 
-	SpaceShip() : health(100), isShooting(false), remainingShootFrames(0),
-		shootCooldown(0), deathCooldown(0), isAlive(true),
-		isMovingForward(false), shipInclination(0), shipZRotation(0),
-		velX(0.0f), velY(0.0f), angularVel(0.0f) {
-	}
-
-	SpaceShip(int h, int rsf, int cd, int dc, bool al) : health(h),
-		isShooting(false), remainingShootFrames(rsf), shootCooldown(cd),
-		deathCooldown(dc), isAlive(al), isMovingForward(false),
-		shipInclination(0), shipZRotation(0),
-		velX(0.0f), velY(0.0f), angularVel(0.0f) {
-	}
+	SpaceShip() : health(100), isShooting(false), remainingShootFrames(0), shootCooldown(0), deathCooldown(0), isAlive(true), isMovingForward(false), shipInclination(0), shipZRotation(0), velX(0.0f), velY(0.0f), angularVel(0.0f) {}
+	SpaceShip(int h, int rsf, int cd, int dc, bool al) : health(h), isShooting(false), remainingShootFrames(rsf), shootCooldown(cd), deathCooldown(dc), isAlive(al), isMovingForward(false), shipInclination(0), shipZRotation(0), velX(0.0f), velY(0.0f), angularVel(0.0f) {}
 };
 
 class ECSBullet : public IComponent {

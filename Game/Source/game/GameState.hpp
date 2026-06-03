@@ -45,6 +45,7 @@ struct AsteroidShooterGameState {
 
 	// State of arena
     bool tilesActive[MAP_SIZE][MAP_SIZE];
+    bool tilesWarning[MAP_SIZE][MAP_SIZE];
     // bool matrix for walls
 
     // Edge between (px,py)→(px,py+1): runs along X axis (horizontal wall)
