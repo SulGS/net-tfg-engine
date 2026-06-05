@@ -126,4 +126,24 @@ public:
 	DestroyTimer(int fr) : framesRemaining(fr) {}
 };
 
+class JustDeathChecker : public IComponent {
+public:
+	bool notExecuted;
+	JustDeathChecker() : notExecuted(true) {}
+};
+
+class ExplosionPlayerID : public IComponent {
+public:
+	int playerId; // Which player's explosion sound to play
+	ExplosionPlayerID() : playerId(-1) {}
+	ExplosionPlayerID(int pid) : playerId(pid) {}
+};
+
+class LinkAudioToBullet : public IComponent {
+public:
+	int bulletId; // Which bullet this audio is linked to
+	LinkAudioToBullet() : bulletId(-1) {}
+	LinkAudioToBullet(int bid) : bulletId(bid) {}
+};
+
 #endif // COMPONENTS_ASTEROIDS

@@ -3,7 +3,6 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
 
 // =====================================================
 //  Shader sources
@@ -14,7 +13,6 @@
 static const char* kParticleVert = R"GLSL(
     #version 430 core
 
-    // Per-instance data from SSBO (std430)
     struct GPUParticle {
         vec4 positionSize; // xyz = world pos, w = size
         vec4 color;
@@ -26,10 +24,9 @@ static const char* kParticleVert = R"GLSL(
     uniform mat4 uView;
     uniform mat4 uProjection;
 
-    out vec2  vUV;
-    out vec4  vColor;
+    out vec2 vUV;
+    out vec4 vColor;
 
-    // Unit quad corners in billboard (camera) space
     const vec2 kCorners[6] = vec2[6](
         vec2(-0.5,  0.5),
         vec2(-0.5, -0.5),
@@ -49,26 +46,24 @@ static const char* kParticleVert = R"GLSL(
 
     void main()
     {
-        GPUParticle p = particles[gl_InstanceID];
-
+        GPUParticle p  = particles[gl_InstanceID];
         vec3  worldPos = p.positionSize.xyz;
         float size     = p.positionSize.w;
 
-        // Camera right/up from the view matrix rows (billboard axes)
+        // Camera right/up from view matrix rows (billboard axes)
         vec3 right = vec3(uView[0][0], uView[1][0], uView[2][0]);
         vec3 up    = vec3(uView[0][1], uView[1][1], uView[2][1]);
 
-        vec2 corner   = kCorners[gl_VertexID] * size;
-        vec3 vertPos  = worldPos + right * corner.x + up * corner.y;
+        vec2 corner  = kCorners[gl_VertexID] * size;
+        vec3 vertPos = worldPos + right * corner.x + up * corner.y;
 
-        vUV    = kUVs[gl_VertexID];
-        vColor = p.color;
-
+        vUV         = kUVs[gl_VertexID];
+        vColor      = p.color;
         gl_Position = uProjection * uView * vec4(vertPos, 1.0);
     }
 )GLSL";
 
-// Fragment shader: radial soft-edge circle, alpha from colour.
+// Fragment shader: radial soft-edge circle.
 static const char* kParticleFrag = R"GLSL(
     #version 430 core
     in  vec2 vUV;
@@ -77,12 +72,10 @@ static const char* kParticleFrag = R"GLSL(
 
     void main()
     {
-        // Signed distance from centre → soft circular billboard
-        vec2  uv   = vUV * 2.0 - 1.0;
-        float dist = length(uv);
+        vec2  uv    = vUV * 2.0 - 1.0;
+        float dist  = length(uv);
         float alpha = smoothstep(1.0, 0.5, dist);
-
-        FragColor = vec4(vColor.rgb, vColor.a * alpha);
+        FragColor   = vec4(vColor.rgb, vColor.a * alpha);
     }
 )GLSL";
 
@@ -94,13 +87,16 @@ void ParticleSystem::Init()
     CompileShader();
     InitQuadVAO();
 
-    // Create SSBO with a reasonable initial capacity
     glGenBuffers(1, &m_ssbo);
     EnsureSSBOCapacity(512);
+
+    // FIX #6 — cache uniform locations once, not every Draw() call
+    m_uView = glGetUniformLocation(m_shader, "uView");
+    m_uProjection = glGetUniformLocation(m_shader, "uProjection");
 }
 
 // =====================================================
-//  Update — simulate all emitters, upload to GPU
+//  Update — simulate all emitters, fill staging buffers
 // =====================================================
 void ParticleSystem::Update(EntityManager& entityManager,
     std::vector<EventEntry>& /*events*/,
@@ -109,78 +105,88 @@ void ParticleSystem::Update(EntityManager& entityManager,
 {
     if (isServer) return;
 
+    // FIX #8 — clear staging at the top of Update, not the bottom of Draw.
+    // If Draw() is never called (e.g. emitter is culled), the buffer won't
+    // grow without bound.
+    m_stagingAdditive.clear();
+    m_stagingAlpha.clear();
+
     auto query = entityManager.CreateQuery<ParticleEmitterComponent, Transform>();
 
     for (auto [entity, emitter, transform] : query)
     {
-
         glm::vec3 worldPos = transform->getPosition();
-
-        // Extract axes from model matrix
         glm::mat4 model = transform->getModelMatrix();
 
-        // Scale: length of each basis column
         float scaleX = glm::length(glm::vec3(model[0]));
         float scaleY = glm::length(glm::vec3(model[1]));
         float scaleZ = glm::length(glm::vec3(model[2]));
         float uniformScale = (scaleX + scaleY + scaleZ) / 3.0f;
 
-        // Forward direction: -Z column, normalised (remove scale)
         glm::vec3 worldDir = glm::normalize(glm::vec3(-model[2]));
 
         SimulateEmitter(*emitter, worldPos, worldDir, uniformScale, deltaTime);
+
+        if (emitter->done) 
+        {
+			entityManager.DestroyEntity(entity);
+        }
     }
 }
 
 // =====================================================
-//  Draw — upload staging data, one draw call per emitter
+//  Draw — upload and issue draw calls per blend mode
 // =====================================================
 void ParticleSystem::Draw(const glm::mat4& view, const glm::mat4& projection)
 {
     if (m_shader == 0) return;
+    if (m_stagingAdditive.empty() && m_stagingAlpha.empty()) return;
 
     glUseProgram(m_shader);
-    glUniformMatrix4fv(glGetUniformLocation(m_shader, "uView"), 1, GL_FALSE, glm::value_ptr(view));
-    glUniformMatrix4fv(glGetUniformLocation(m_shader, "uProjection"), 1, GL_FALSE, glm::value_ptr(projection));
+    // FIX #6 — use cached locations
+    glUniformMatrix4fv(m_uView, 1, GL_FALSE, glm::value_ptr(view));
+    glUniformMatrix4fv(m_uProjection, 1, GL_FALSE, glm::value_ptr(projection));
 
-    // Additive blending — works well for fire/sparks/magic
+    glDepthMask(GL_FALSE);
     glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
-    glDepthMask(GL_FALSE);   // don't write depth; particles are transparent
-
     glBindVertexArray(m_quadVAO);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_ssbo);
 
-    // We need access to every emitter again — store results from Update.
-    // Simple approach: re-iterate (entityManager not available here, so
-    // callers must supply particles via DrawEmitter called from Update,
-    // OR we cache the staging data per emitter below).
-    //
-    // Here we use a single merged draw strategy:
-    //   • All alive particles from all emitters are packed into m_staging.
-    //   • One draw call for all of them (no per-emitter state difference).
-    //   This works because all emitters share the same billboard shader.
-
-    if (!m_staging.empty())
-    {
-        EnsureSSBOCapacity(static_cast<int>(m_staging.size()));
-
-        glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_ssbo);
-        glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
-            m_staging.size() * sizeof(GPUParticle),
-            m_staging.data());
-
-        glDrawArraysInstanced(GL_TRIANGLES, 0,
-            6,  // 2 triangles = 6 verts per billboard
-            static_cast<GLsizei>(m_staging.size()));
-
-        m_staging.clear();
-    }
+    // FIX #7 — separate draw calls for each blend mode so smoke and fire
+    // can coexist correctly.  Alpha-blended particles are drawn first so
+    // additive particles composite on top of them.
+    FlushStagingBuffer(m_stagingAlpha,    /*additive=*/false);
+    FlushStagingBuffer(m_stagingAdditive, /*additive=*/true);
 
     glBindVertexArray(0);
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
     glUseProgram(0);
+}
+
+// =====================================================
+//  FlushStagingBuffer — upload one staging batch and draw
+// =====================================================
+void ParticleSystem::FlushStagingBuffer(std::vector<GPUParticle>& src,
+    bool additive)
+{
+    if (src.empty()) return;
+
+    // FIX #7 — set blend mode per batch
+    if (additive)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+    else
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    EnsureSSBOCapacity(static_cast<int>(src.size()));
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_ssbo);
+    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
+        src.size() * sizeof(GPUParticle),
+        src.data());
+
+    glDrawArraysInstanced(GL_TRIANGLES, 0, 6,
+        static_cast<GLsizei>(src.size()));
 }
 
 // =====================================================
@@ -193,17 +199,17 @@ void ParticleSystem::SimulateEmitter(ParticleEmitterComponent& e,
     float dt)
 {
     static const glm::vec3 kGravity(0.0f, -9.81f, 0.0f);
-    auto randF = []() { return static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX); };
+
+    EnsurePool(e);
 
     e.elapsedTime += dt;
 
     // ---- Spawn new particles ----
     if (e.enabled && (e.looping || e.elapsedTime <= e.duration))
     {
-        // Flicker: jitter emission rate +/- emissionVariance each frame
         float flickeredRate = e.emissionRate * e.speedScale;
         if (e.emissionVariance > 0.0f)
-            flickeredRate += (randF() * 2.0f - 1.0f) * e.emissionVariance;
+            flickeredRate += (RandF() * 2.0f - 1.0f) * e.emissionVariance;
         flickeredRate = std::max(0.0f, flickeredRate);
 
         e.emissionAccum += flickeredRate * dt;
@@ -216,115 +222,146 @@ void ParticleSystem::SimulateEmitter(ParticleEmitterComponent& e,
 
     // ---- Integrate alive particles ----
     e.aliveCount = 0;
-    for (auto& p : e.pool)
+
+    // Choose the right staging buffer for this emitter's blend mode
+    auto& staging = e.additiveBlend ? m_stagingAdditive : m_stagingAlpha;
+
+    for (int idx = 0; idx < static_cast<int>(e.pool.size()); ++idx)
     {
+        Particle& p = e.pool[idx];
         if (!p.alive) continue;
 
         p.age += dt;
-        if (p.age >= p.lifetime) { p.alive = false; continue; }
+        if (p.age >= p.lifetime)
+        {
+            p.alive = false;
+            // FIX #2 — return slot to free-list in O(1)
+            e.freeList.push_back(idx);
+            continue;
+        }
 
-        // Physics integration
+        // Physics
         p.velocity += kGravity * e.gravityModifier * dt;
 
-        // Turbulence: small random impulse each frame
         if (e.turbulenceStrength > 0.0f)
         {
-            glm::vec3 turbulence(
-                (randF() * 2.0f - 1.0f) * e.turbulenceStrength,
-                (randF() * 2.0f - 1.0f) * e.turbulenceStrength,
-                (randF() * 2.0f - 1.0f) * e.turbulenceStrength
+            glm::vec3 turb(
+                (RandF() * 2.0f - 1.0f) * e.turbulenceStrength,
+                (RandF() * 2.0f - 1.0f) * e.turbulenceStrength,
+                (RandF() * 2.0f - 1.0f) * e.turbulenceStrength
             );
-            p.velocity += turbulence * dt;
+            p.velocity += turb * dt;
+        }
+
+        // FIX: SimulationSpace::Local — offset particle by emitter movement
+        if (e.simulationSpace == SimulationSpace::Local)
+        {
+            // The caller passes the current world position every frame.
+            // We store the last known emitter position in the component and
+            // move all local-space particles by the delta each tick.
+            // (emitterLastPos is updated at the end of this function.)
+            p.position += emitterWorldPos - e.emitterLastPos;
         }
 
         p.position += p.velocity * dt;
 
-        // Optional custom hook
         if (e.onUpdate) e.onUpdate(p, dt);
 
         ++e.aliveCount;
 
-        // Pack into staging buffer for Draw()
-        float t = p.age / p.lifetime;
+        float     t = p.age / p.lifetime;
         glm::vec4 color = glm::mix(p.colorStart, p.colorEnd, t);
-        float size = glm::mix(p.sizeStart, p.sizeEnd, t);
+        float     size = glm::mix(p.sizeStart, p.sizeEnd, t);
 
-        m_staging.push_back({ glm::vec4(p.position, size), color });
+        staging.push_back({ glm::vec4(p.position, size), color });
+    }
+
+    // Record emitter position so Local-space particles can track it next frame
+    e.emitterLastPos = emitterWorldPos;
+
+    // Mark done once a non-looping emitter has passed its duration and every
+    // particle has died.  Game logic can poll e.done to remove/recycle the entity.
+    if (!e.looping && !e.done
+        && e.elapsedTime > e.duration
+        && e.aliveCount == 0)
+    {
+        e.done = true;
     }
 }
 
 // =====================================================
-//  SpawnParticle — find a dead slot and initialise it
+//  SpawnParticle
 // =====================================================
 void ParticleSystem::SpawnParticle(ParticleEmitterComponent& e,
     const glm::vec3& emitterWorldPos,
     const glm::vec3& emitterWorldDir,
     float uniformScale)
 {
-    // Ensure pool is sized
-    if (static_cast<int>(e.pool.size()) < e.maxParticles)
-        e.pool.resize(e.maxParticles);
+    // FIX #2 — O(1) slot lookup via free-list
+    if (e.freeList.empty()) return;  // pool exhausted
 
-    // Find first dead particle
-    Particle* slot = nullptr;
-    for (auto& p : e.pool)
-    {
-        if (!p.alive) { slot = &p; break; }
-    }
-    if (!slot) return; // pool exhausted
-
-    auto randF = []() { return static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX); };
+    int   idx = e.freeList.back();
+    e.freeList.pop_back();
+    Particle& slot = e.pool[idx];
 
     // Lifetime variance
     float lifetime = e.startLifetime * e.speedScale;
     if (e.lifetimeVariance > 0.0f)
-        lifetime += (randF() * 2.0f - 1.0f) * e.lifetimeVariance;
+        lifetime += (RandF() * 2.0f - 1.0f) * e.lifetimeVariance;
     lifetime = std::max(0.05f, lifetime);
 
     // Speed variance
     float speed = e.startSpeed;
     if (e.speedVariance > 0.0f)
-        speed += (randF() * 2.0f - 1.0f) * e.speedVariance;
+        speed += (RandF() * 2.0f - 1.0f) * e.speedVariance;
     speed = std::max(0.0f, speed);
 
-    // Color temperature: only when opted in — never override smoke/fire colors
-    glm::vec3 spawnDir = SampleSpawnVelocity(e, emitterWorldDir);
+    // FIX #3 — SampleSpawnVelocity now returns coneT (normalised angular
+    // deviation) so colorTemperature uses that directly instead of the
+    // dot-product of a direction already derived from emitterWorldDir.
+    float     coneT = 0.0f;
+    glm::vec3 spawnDir = SampleSpawnVelocity(e, emitterWorldDir, coneT);
+
+    // FIX #4 (colorTemperature) — heat is driven by coneT (0 = axis, 1 = edge)
+    // so hotter particles are those closest to the cone centre, not those
+    // whose direction accidentally dot-products high against the same axis.
     glm::vec4 spawnColor = e.startColor;
-    if (e.colorTemperature)
+    if (e.colorTemperature && e.shape == EmitterShape::Cone)
     {
-        float alignment = glm::dot(spawnDir, emitterWorldDir);
-        float heatT = glm::clamp((alignment - 0.95f) / 0.05f, 0.0f, 1.0f);
+        float heatT = 1.0f - coneT;  // axis-aligned → hottest
         glm::vec4 hotColor = glm::vec4(1.0f, 1.0f, 1.0f, e.startColor.a);
         spawnColor = glm::mix(e.startColor, hotColor, heatT);
     }
 
-    slot->alive = true;
-    slot->age = 0.0f;
-    slot->lifetime = lifetime;
-    slot->colorStart = spawnColor;
-    slot->colorEnd = e.endColor;
-    slot->sizeStart = e.startSize * uniformScale;
-    slot->sizeEnd = e.endSize * uniformScale;
-    slot->position = emitterWorldPos + SampleSpawnPosition(e, emitterWorldPos) * uniformScale;
-    slot->velocity = spawnDir * speed;
+    slot.alive = true;
+    slot.age = 0.0f;
+    slot.lifetime = lifetime;
+    slot.colorStart = spawnColor;
+    slot.colorEnd = e.endColor;
+    slot.sizeStart = e.startSize * uniformScale;
+    slot.sizeEnd = e.endSize * uniformScale;
+    // FIX: removed the misleading emitterWorldPos argument from SampleSpawnPosition
+    slot.position = emitterWorldPos + SampleSpawnPosition(e) * uniformScale;
+    slot.velocity = spawnDir * speed;
 }
 
 // =====================================================
 //  SampleSpawnPosition
+//  Returns a local-space offset (before uniformScale).
+//  emitterWorldPos is not needed here — removed from signature.
 // =====================================================
-glm::vec3 ParticleSystem::SampleSpawnPosition(const ParticleEmitterComponent& e,
-    const glm::vec3& /*emitterWorldPos*/)
+glm::vec3 ParticleSystem::SampleSpawnPosition(const ParticleEmitterComponent& e)
 {
-    auto randF = []() { return static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX); };
-
     switch (e.shape)
     {
     case EmitterShape::Sphere:
     {
-        // Uniform point in sphere (rejection sample)
+        // Uniform point inside a sphere — rejection sample
         glm::vec3 p;
         do {
-            p = glm::vec3(randF() * 2.0f - 1.0f, randF() * 2.0f - 1.0f, randF() * 2.0f - 1.0f);
+            p = glm::vec3(RandF() * 2.0f - 1.0f,
+                RandF() * 2.0f - 1.0f,
+                RandF() * 2.0f - 1.0f);
         } while (glm::dot(p, p) > 1.0f);
         return p * e.shapeRadius;
     }
@@ -337,35 +374,52 @@ glm::vec3 ParticleSystem::SampleSpawnPosition(const ParticleEmitterComponent& e,
 
 // =====================================================
 //  SampleSpawnVelocity
+//  outConeT: normalised [0,1] deviation from cone axis.
+//            0 = dead centre, 1 = cone edge.
+//            Only meaningful for EmitterShape::Cone.
 // =====================================================
 glm::vec3 ParticleSystem::SampleSpawnVelocity(const ParticleEmitterComponent& e,
-    const glm::vec3& emitterWorldDir)
+    const glm::vec3& emitterWorldDir,
+    float& outConeT)
 {
-    auto randF = []() { return static_cast<float>(std::rand()) / static_cast<float>(RAND_MAX); };
+    outConeT = 0.0f;
 
     switch (e.shape)
     {
     case EmitterShape::Cone:
     {
-        // Random direction within cone angle around emitterWorldDir
-        float angle = randF() * e.shapeConeAngle;
-        float phi = randF() * 6.2831853f;
-        // Perturb direction by constructing an arbitrary perpendicular
-        glm::vec3 perp = glm::abs(emitterWorldDir.x) < 0.9f
-            ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
+        // FIX #3 — uniform solid-angle sample within the cone.
+        // Linear angle sampling (old code) biases toward the axis because
+        // equal angle steps cover less solid angle near the centre.
+        // Correct method: sample cos(angle) uniformly in [cos(halfAngle), 1].
+        float cosMax = std::cos(e.shapeConeAngle);
+        float cosA = cosMax + RandF() * (1.0f - cosMax);  // uniform in solid angle
+        float sinA = std::sqrt(std::max(0.0f, 1.0f - cosA * cosA));
+        float phi = RandF() * 6.2831853f;
+
+        // outConeT: 0 when cosA==1 (axis), 1 when cosA==cosMax (edge)
+        outConeT = (cosA < 1.0f)
+            ? (1.0f - cosA) / (1.0f - cosMax)
+            : 0.0f;
+
+        glm::vec3 perp = (glm::abs(emitterWorldDir.x) < 0.9f)
+            ? glm::vec3(1, 0, 0)
+            : glm::vec3(0, 1, 0);
         glm::vec3 right = glm::normalize(glm::cross(emitterWorldDir, perp));
         glm::vec3 up = glm::cross(emitterWorldDir, right);
-        float s = std::sin(angle);
-        return glm::normalize(emitterWorldDir
-            + right * (s * std::cos(phi))
-            + up * (s * std::sin(phi)));
+
+        return glm::normalize(emitterWorldDir * cosA
+            + right * (sinA * std::cos(phi))
+            + up * (sinA * std::sin(phi)));
     }
     case EmitterShape::Sphere:
     {
-        // Random direction on unit sphere
+        // Uniform direction on unit sphere — rejection sample
         glm::vec3 d;
         do {
-            d = glm::vec3(randF() * 2.0f - 1.0f, randF() * 2.0f - 1.0f, randF() * 2.0f - 1.0f);
+            d = glm::vec3(RandF() * 2.0f - 1.0f,
+                RandF() * 2.0f - 1.0f,
+                RandF() * 2.0f - 1.0f);
         } while (glm::dot(d, d) < 0.0001f);
         return glm::normalize(d);
     }
@@ -376,14 +430,47 @@ glm::vec3 ParticleSystem::SampleSpawnVelocity(const ParticleEmitterComponent& e,
 }
 
 // =====================================================
+//  EnsurePool
+//  Initialises or resizes the particle pool and free-list.
+// =====================================================
+void ParticleSystem::EnsurePool(ParticleEmitterComponent& e)
+{
+    const int target = e.maxParticles;
+    const int current = static_cast<int>(e.pool.size());
+    if (current == target) return;
+
+    if (current < target)
+    {
+        // Growing: append new dead particles and add their indices to the list
+        e.pool.resize(target);
+        for (int i = current; i < target; ++i)
+        {
+            e.pool[i] = Particle{};           // ensure alive == false
+            e.freeList.push_back(i);
+        }
+    }
+    else
+    {
+        // Shrinking: kill any particles beyond the new limit and rebuild list
+        e.pool.resize(target);
+        e.freeList.clear();
+        for (int i = 0; i < target; ++i)
+            if (!e.pool[i].alive)
+                e.freeList.push_back(i);
+    }
+}
+
+// =====================================================
 //  GPU helpers
 // =====================================================
 void ParticleSystem::EnsureSSBOCapacity(int needed)
 {
     if (needed <= m_ssboCapacity) return;
 
-    // Round up to next power of two for fewer reallocations
-    int newCap = std::max(needed, 512);
+    // FIX #1 — proper power-of-two round-up.
+    // Old code set newCap = max(needed, 512) then looped while (newCap < needed),
+    // which never executed since newCap was already >= needed.
+    int newCap = 512;
     while (newCap < needed) newCap *= 2;
 
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_ssbo);
@@ -432,8 +519,7 @@ void ParticleSystem::CompileShader()
 
 void ParticleSystem::InitQuadVAO()
 {
-    // No vertex data needed — positions are built entirely in the vertex
-    // shader from gl_VertexID.  We still need a bound VAO.
+    // No vertex data — positions built entirely in the vertex shader.
     glGenVertexArrays(1, &m_quadVAO);
 }
 

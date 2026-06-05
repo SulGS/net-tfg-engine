@@ -17,7 +17,11 @@ struct AudioSourceComponent : public IComponent {
     ALuint source = 0;
     ALuint buffer = 0;
     bool initialized = false;
-	bool pendingToDestroy = false;
+    bool pendingToDestroy = false;
+
+    // Saved on device swap so looping sources resume from the same position
+    // rather than restarting from the beginning.
+    ALint savedSampleOffset = 0;
 
     AudioSourceComponent() = default;
 
@@ -28,7 +32,7 @@ struct AudioSourceComponent : public IComponent {
     }
 
     void Destroy() override {
-		//AudioSystem::AddPendingSourceString(source,filePath);
+        //AudioSystem::AddPendingSourceString(source,filePath);
     }
 };
 

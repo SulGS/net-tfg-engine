@@ -223,8 +223,8 @@ public:
     void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
     {
         auto death_ev = *reinterpret_cast<const DeathEventData*>(event.data);
-        auto query = world.GetEntityManager().CreateQuery<Playable, SpaceShip>();
-        for (auto [entity, play, ship] : query) {
+        auto query = world.GetEntityManager().CreateQuery<Transform, Playable, SpaceShip>();
+        for (auto [entity, transform, play, ship] : query) {
             if (play->playerId == death_ev.playerId) {
                 ship->health = 0;
                 ship->isAlive = false;
@@ -234,6 +234,7 @@ public:
                         col->isEnabled = false;
                     }
                 }
+				break;
             }
         }
     }

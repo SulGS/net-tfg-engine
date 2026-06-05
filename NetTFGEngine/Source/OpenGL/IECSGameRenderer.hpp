@@ -17,6 +17,7 @@
 #include "ecs/UI/UITextField.hpp"
 #include "ecs/UI/UIRenderSystem.hpp"
 #include "ecs/UI/UIUpdateSystem.hpp"
+#include "OpenAL/AudioManager.hpp"
 
 #include <functional>
 
@@ -65,6 +66,7 @@ public:
         world.AddSystem(std::make_unique<UIRenderSystem>(window->getWidth(), window->getHeight()));
 
 		ParticleSystem* particleSys = world.GetSystem<ParticleSystem>();
+        AudioManager::SetEntityManager(&world.GetEntityManager());
         particleSys->Init();
 		
 		RenderSystem* renderSys = world.GetSystem<RenderSystem>();

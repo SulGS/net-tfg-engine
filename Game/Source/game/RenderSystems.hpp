@@ -238,12 +238,64 @@ public:
     ) override
     {
         auto playerQuery =
-            entityManager.CreateQuery<Transform, Playable, SpaceShip, MeshComponent>();
+            entityManager.CreateQuery<Transform, Playable, SpaceShip, MeshComponent, JustDeathChecker>();
 
-        for (auto [entity, playerTransform, play, ship, meshC] : playerQuery)
+        for (auto [entity, playerTransform, play, ship, meshC, jdC] : playerQuery)
         {
+
+            if (!ship->isAlive)
+            {
+                if (jdC->notExecuted) {
+
+                    jdC->notExecuted = false;
+
+
+                    for (auto effect : ParticlePresets::MakeExplosion()) 
+                    {
+						Entity e = entityManager.CreateEntity();
+						Transform* t = entityManager.AddComponent<Transform>(e, Transform{});
+						t->setPosition(playerTransform->getPosition());
+						t->setScale(glm::vec3(2.0f, 2.0f,2.0f));
+						entityManager.AddComponent<ParticleEmitterComponent>(e, effect);
+						entityManager.AddComponent<ExplosionPlayerID>(e, ExplosionPlayerID{ play->playerId });
+                    }
+
+
+                    Entity audioEntity = entityManager.CreateEntity();
+                    AudioSourceComponent* audio = entityManager.AddComponent<AudioSourceComponent>(
+                        audioEntity, AudioSourceComponent("explosion.wav", AudioChannel::SFX, false));
+					audio->gain = 3.0f;
+                    audio->play = true;
+                    entityManager.AddComponent<ExplosionPlayerID>(audioEntity, ExplosionPlayerID{ play->playerId });
+                }
+            }
+            else
+            {
+				jdC->notExecuted = true; // reset for potential future deaths
+
+				auto explosionQuery = entityManager.CreateQuery<Transform, ParticleEmitterComponent, ExplosionPlayerID>();
+                for (auto [e, t, emitter, expID] : explosionQuery)
+                {
+                    if (expID->playerId == play->playerId)
+                    {
+                        entityManager.DestroyEntity(e);
+                    }
+                }
+
+				auto audioQuery = entityManager.CreateQuery<AudioSourceComponent, ExplosionPlayerID>();
+				for (auto [e, audio, expID] : audioQuery)
+				{
+					if (expID->playerId == play->playerId)
+					{
+						audio->pendingToDestroy = true;
+					}
+				}
+            }
+
+
             if (play->isLocal && !ship->isAlive)
             {
+
                 int winnerId = GetWinnerId(entityManager);
                 bool gameOver = (winnerId >= 0);
 
@@ -383,6 +435,32 @@ public:
     }
 };
 
+class LinkAudioToBulletSystem : public ISystem
+{
+public:
+	void Update(
+		EntityManager& entityManager,
+		std::vector<EventEntry>& events,
+		bool isServer,
+		float deltaTime
+	) override
+	{
+		auto audioQuery = entityManager.CreateQuery<Transform, AudioSourceComponent, LinkAudioToBullet>();
+		auto bulletQuery = entityManager.CreateQuery<Transform, ECSBullet>();
+		for (auto [audioEntity, audioTransform, audio, link] : audioQuery)
+		{
+			for (auto [bulletEntity, bulletTransform, bullet] : bulletQuery)
+			{
+				if (bullet->id == link->bulletId)
+				{
+					audioTransform->setPosition(bulletTransform->getPosition());
+					break;
+				}
+			}
+		}
+	}
+};
+
 class DestroyTimerSystem : public ISystem
 {
 public:
@@ -494,6 +572,33 @@ public:
                     ));
                 }
 
+            }
+        }
+    }
+};
+
+class UpdateListenerTransformSystem : public ISystem
+{
+public:
+    void Update(
+        EntityManager& entityManager,
+        std::vector<EventEntry>& events,
+        bool isServer,
+        float deltaTime
+    ) override
+    {
+        auto listenerQuery = entityManager.CreateQuery<Transform, AudioListenerComponent>();
+        auto playerQuery = entityManager.CreateQuery<Transform, Playable, SpaceShip>();
+        for (auto [listenerEntity, listenerTransform, listener] : listenerQuery)
+        {
+            for (auto [playerEntity, playerTransform, play, ship] : playerQuery)
+            {
+                if (play->isLocal)
+                {
+                    listenerTransform->setPosition(playerTransform->getPosition());
+					listenerTransform->setRotation(playerTransform->getRotation());
+                    break;
+                }
             }
         }
     }

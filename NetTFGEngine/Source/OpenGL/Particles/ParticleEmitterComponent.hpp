@@ -4,7 +4,6 @@
 #include <glm/glm.hpp>
 #include <functional>
 #include <vector>
-#include <string>
 
 #include "ecs/ecs.hpp"
 
@@ -19,8 +18,8 @@ struct Particle {
     glm::vec4 colorEnd = glm::vec4(1.0f, 1.0f, 1.0f, 0.0f);
     float     sizeStart = 0.1f;
     float     sizeEnd = 0.0f;
-    float     lifetime = 1.0f;   // total lifetime in seconds
-    float     age = 0.0f;   // elapsed time in seconds
+    float     lifetime = 1.0f;  // total lifetime in seconds
+    float     age = 0.0f;  // elapsed time in seconds
     bool      alive = false;
 };
 
@@ -46,7 +45,7 @@ enum class EmitterShape {
 //  Simulation space
 // -------------------------------------------------------
 enum class SimulationSpace {
-    World,   // particles keep world-space position after spawn
+    World,   // particles keep world-space positions after spawn
     Local,   // particles move with the emitter's Transform
 };
 
@@ -55,7 +54,7 @@ enum class SimulationSpace {
 //
 //  Pure data component — no virtual methods, no heap
 //  allocation except for the particle pool (resized once
-//  in ParticleSystem::OnEmitterAdded).
+//  when the first particle is spawned).
 //
 //  Create via ParticlePresets::* or configure manually.
 // -------------------------------------------------------
@@ -63,26 +62,26 @@ struct ParticleEmitterComponent : public IComponent {
     // --- Emission ------------------------------------------------
     bool  enabled = true;
     bool  looping = true;
-    float duration = 5.0f;  // seconds; ignored when looping
-    float emissionRate = 20.0f; // particles / second
+    float duration = 5.0f;   // seconds; ignored when looping
+    float emissionRate = 20.0f;  // particles / second
 
     // --- Particle lifetime / motion -----------------------------
-    float startLifetime = 1.0f;   // seconds
-    float startSpeed = 1.0f;   // world units / second along spawn direction
-    float startSize = 0.1f;   // world units
-    float gravityModifier = 0.0f; // multiplier on (0,-9.81,0)
+    float startLifetime = 1.0f;  // seconds
+    float startSpeed = 1.0f;  // world units / second along spawn direction
+    float startSize = 0.1f;  // world units
+    float gravityModifier = 0.0f;  // multiplier on (0,-9.81,0)
 
     // --- Colour over lifetime -----------------------------------
     glm::vec4 startColor = glm::vec4(1.0f);
     glm::vec4 endColor = glm::vec4(1.0f, 1.0f, 1.0f, 0.0f);
 
     // --- Size over lifetime -------------------------------------
-    float endSize = 0.0f;   // lerps startSize → endSize
+    float endSize = 0.0f;  // lerps startSize → endSize
 
     // --- Shape --------------------------------------------------
     EmitterShape shape = EmitterShape::Point;
-    float        shapeRadius = 0.5f; // Sphere radius
-    float        shapeConeAngle = 0.3f; // Cone half-angle in radians (~17°)
+    float        shapeRadius = 0.5f;   // Sphere radius
+    float        shapeConeAngle = 0.3f;   // Cone half-angle in radians (~17°)
 
     // --- Simulation space ---------------------------------------
     SimulationSpace simulationSpace = SimulationSpace::World;
@@ -95,14 +94,25 @@ struct ParticleEmitterComponent : public IComponent {
     //  emissionVariance   : emissionRate jitters +/- rand * variance per frame
     //  speedVariance      : speed = startSpeed +/- rand * variance per particle
     //  turbulenceStrength : random impulse added to velocity each frame
-    //  speedScale         : runtime multiplier — set each frame by game logic
+    //  speedScale         : runtime multiplier — set each frame by game logic;
     //                       scales both emissionRate and startLifetime
     float lifetimeVariance = 0.0f;
     float emissionVariance = 0.0f;
     float speedVariance = 0.0f;
     float turbulenceStrength = 0.0f;
     float speedScale = 1.0f;
-    bool  colorTemperature = false; // if true, cone-center particles lerp toward white-hot
+
+    // --- Blending -----------------------------------------------
+    //  true  → additive blend (GL_SRC_ALPHA, GL_ONE)       — fire, sparks, magic
+    //  false → standard alpha blend (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA) — smoke, rain
+    bool additiveBlend = true;
+
+    // --- Color temperature (cone emitters only) -----------------
+    //  Particles near the cone centre lerp toward white-hot.
+    //  Uses the angular deviation from the emitter axis, not the
+    //  dot product of the already-perturbed direction, so the
+    //  heat gradient spans the full cone range properly.
+    bool colorTemperature = false;
 
     // --- Optional custom update hook ----------------------------
     //  Called once per alive particle per frame, after the default
@@ -111,10 +121,17 @@ struct ParticleEmitterComponent : public IComponent {
     std::function<void(Particle&, float)> onUpdate = nullptr;
 
     // --- Runtime state (managed by ParticleSystem) --------------
-    std::vector<Particle> pool;       // particle pool, size = maxParticles
-    float emissionAccum = 0.0f;      // fractional-particle accumulator
-    float elapsedTime = 0.0f;      // total emitter age
-    int   aliveCount = 0;         // for stats / culling
+    std::vector<Particle> pool;           // particle pool, size = maxParticles
+    std::vector<int>      freeList;       // indices of dead slots — O(1) spawn
+    float     emissionAccum = 0.0f;     // fractional-particle accumulator
+    float     elapsedTime = 0.0f;     // total emitter age in seconds
+    int       aliveCount = 0;        // for stats / culling
+    bool      done = false;    // true once a non-looping emitter has
+    // finished emitting AND all particles
+    // have died; poll this from game logic
+    // to know when to remove/recycle
+    glm::vec3 emitterLastPos = glm::vec3(0.0f); // previous world position,
+    // used by SimulationSpace::Local
 };
 
 #endif // PARTICLE_EMITTER_COMPONENT_HPP

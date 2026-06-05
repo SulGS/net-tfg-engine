@@ -753,6 +753,8 @@ public:
                 AudioSourceComponent* audio = em.AddComponent<AudioSourceComponent>(
                     bulletSound, AudioSourceComponent("shoot.wav", AudioChannel::SFX, false));
                 audio->play = true;
+				audio->gain = 1.0f;
+				LinkAudioToBullet* link = em.AddComponent<LinkAudioToBullet>(bulletSound, LinkAudioToBullet{ b.id });
             }
         }
 
@@ -837,6 +839,9 @@ public:
         world.GetEntityManager().RegisterComponentType<CenterSpoke>();
         world.GetEntityManager().RegisterComponentType<ThrusterOwner>();
         world.GetEntityManager().RegisterComponentType<SpectatorState>();
+		world.GetEntityManager().RegisterComponentType<JustDeathChecker>();
+		world.GetEntityManager().RegisterComponentType<ExplosionPlayerID>();
+		world.GetEntityManager().RegisterComponentType<LinkAudioToBullet>();
 
         // --- Sun ---
         Entity sunEntity = world.GetEntityManager().CreateEntity();
@@ -861,6 +866,16 @@ public:
             world.GetEntityManager().AddComponent<MeshComponent>(
                 player, MeshComponent(new Mesh("ship.glb",
                     std::make_shared<Material>("ggx.vert", "ggx.frag"))));
+
+			world.GetEntityManager().AddComponent<JustDeathChecker>(player, JustDeathChecker{});
+
+            if (i == playerId)
+            {
+				Entity listenerForShipEntity = world.GetEntityManager().CreateEntity();
+                Transform* tL = world.GetEntityManager().AddComponent<Transform>(listenerForShipEntity, Transform{});
+                tL->setPosition(glm::vec3(s.posX[i], s.posY[i], 0.0f));
+                world.GetEntityManager().AddComponent<AudioListenerComponent>(listenerForShipEntity, AudioListenerComponent{});
+            }
 
             // --- Thrusters for this player ---
             struct ThrusterDef { bool isSmoke; bool isLeft; };
@@ -1122,10 +1137,10 @@ public:
         world.AddSystem(std::make_unique<ChargingBulletRenderSystem>());
         world.AddSystem(std::make_unique<LinkThrusterToShipSystem>());
         world.AddSystem(std::make_unique<LaserWallRenderSystem>());
+		world.AddSystem(std::make_unique<UpdateListenerTransformSystem>());
         world.AddSystem(std::make_unique<DestroyTimerSystem>());
 
-        world.GetEntityManager().AddComponent<AudioListenerComponent>(camera, AudioListenerComponent{});
-        AudioManager::SetEntityManager(&world.GetEntityManager());
+        //world.GetEntityManager().AddComponent<AudioListenerComponent>(camera, AudioListenerComponent{});
         AudioManager::PlayMusic("song.wav", true);
         AudioManager::SetMusicVolume(0.25f);
     }
