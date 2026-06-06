@@ -13,62 +13,53 @@ project "NetTFGEngine"
 
    -- Engine outputs to Engine subfolder
    targetdir (Directories.EngineDir)
-   objdir (Directories.IntermediateDir)
+   objdir    (Directories.IntermediateDir)
 
-   -- Windows (MSVC + vcpkg x64-windows)
+   -- Windows: vcpkg integration handled automatically by Visual Studio
    filter "system:windows"
       systemversion "latest"
-      defines { }
 
-      includedirs { "%{wks.location}/vcpkg_installed/x64-windows/include" }
-      libdirs     { "%{wks.location}/vcpkg_installed/x64-windows/lib" }
-      links
-      {
-         "freetype",
-         "GameNetworkingSockets",
-         "glew32",
-         "glfw3",
-         "OpenAL32",
-         "opengl32",
-         "SOIL2",
-         "libssl",
-         "libcrypto",
-      }
-
-   -- Linux (Clang + vcpkg x64-linux)
+   -- Linux (Clang + vcpkg installed to space-free WSL path)
    filter "system:linux"
       includedirs { "%{wks.location}/vcpkg_installed/x64-linux/include" }
       libdirs     { "%{wks.location}/vcpkg_installed/x64-linux/lib" }
       links
       {
          "freetype",
+         "png16",
+         "brotlidec",
+         "brotlicommon",
+         "bz2",
+         "z",
          "GameNetworkingSockets",
          "GLEW",
-         "glfw",
+         "glfw3",
          "openal",
          "GL",
-         "SOIL2",
+         "soil2",
          "ssl",
          "crypto",
+         "pthread",
+         "dl",
       }
 
+   -- Debug
    filter "configurations:Debug"
       defines { "DEBUG" }
       runtime "Debug"
       symbols "On"
 
-   filter { "configurations:Debug", "system:windows" }
-      libdirs { "%{wks.location}/vcpkg_installed/x64-windows/debug/lib" }
-
    filter { "configurations:Debug", "system:linux" }
       libdirs { "%{wks.location}/vcpkg_installed/x64-linux/debug/lib" }
 
+   -- Release
    filter "configurations:Release"
       defines { "RELEASE" }
       runtime "Release"
       optimize "On"
       symbols "On"
 
+   -- Dist
    filter "configurations:Dist"
       defines { "DIST" }
       runtime "Release"

@@ -4,7 +4,6 @@
 #include <GameNetworkingSockets/steam/steamnetworkingtypes.h>
 #include <GameNetworkingSockets/steam/steamnetworkingsockets.h>
 #include <GameNetworkingSockets/steam/isteamnetworkingutils.h>
-#include <conio.h>
 #include <functional>
 #include <chrono>
 #include <cstring>
@@ -23,6 +22,7 @@
 #if defined(_WIN32) || defined(_WIN64)
 #pragma comment(lib, "ws2_32.lib")
 #include <winsock2.h>
+#include <conio.h>
 #else
 #include <arpa/inet.h>
 #endif
@@ -162,7 +162,7 @@ public:
 	bool isServer = false;
     int frame = 0;
     int playerId = -1;
-	boolean gameFinished = false;
+	bool gameFinished = false;
 	std::vector<EventEntry> generatedEvents;
     std::vector<DeltaStateBlob> generatedDeltas;
 

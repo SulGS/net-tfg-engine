@@ -201,7 +201,7 @@ private:
                 instance->gStateMutex.lock();
 
                 // Calculate interpolation factors
-                auto now = std::chrono::high_resolution_clock::now();
+                auto now = std::chrono::steady_clock::now();
 
                 // Server: sweeps 0->1 over MS_PER_TICK after each new state arrives.
                 // factor=0: render at prevServer. factor=1: render at currServer.

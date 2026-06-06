@@ -4,7 +4,7 @@
 #include "ecs/ecs.hpp"
 #include "ecs/ecs_common.hpp"
 #include "ParticleEmitterComponent.hpp"
-#include "OpenGl/OpenGLIncludes.hpp"
+#include "OpenGL/OpenGLIncludes.hpp"
 #include <glm/glm.hpp>
 #include <random>
 #include <vector>

@@ -5,7 +5,10 @@
     "glew",
     "glfw3",
     "glm",
-    "openal-soft",
+    {
+      "name": "openal-soft",
+      "version>=": "1.24.0"
+    },
     "opengl",
     "soil2",
     "tinygltf",

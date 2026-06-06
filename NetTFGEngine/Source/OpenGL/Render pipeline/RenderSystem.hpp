@@ -5,8 +5,8 @@
 #include "ecs/ecs_common.hpp"
 #include "Utils/Debug/Debug.hpp"
 #include "OpenGL/Mesh.hpp"
-#include "OpenGl/Material.hpp"
-#include "OpenGl/OpenGLIncludes.hpp"
+#include "OpenGL/Material.hpp"
+#include "OpenGL/OpenGLIncludes.hpp"
 #include "RenderSettings.hpp"
 #include <glm/gtc/type_ptr.hpp>
 #include <vector>
