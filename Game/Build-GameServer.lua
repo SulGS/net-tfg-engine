@@ -23,9 +23,16 @@ project "GameServer"
    libdirs { Directories.EngineDir }
    links { "NetTFGEngine" }
 
+   -- Windows
    filter "system:windows"
       systemversion "latest"
       defines { "WINDOWS" }
+
+      includedirs { "%{wks.location}/vcpkg_installed/x64-windows/include" }
+
+   -- Linux
+   filter "system:linux"
+      includedirs { "%{wks.location}/vcpkg_installed/x64-linux/include" }
 
    filter "configurations:Debug"
       defines { "DEBUG" }

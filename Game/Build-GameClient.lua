@@ -23,15 +23,20 @@ project "GameClient"
    libdirs { Directories.EngineDir }
    links { "NetTFGEngine" }
 
+   -- Windows
    filter "system:windows"
       systemversion "latest"
       defines { "WINDOWS" }
-      
+
+      includedirs { "%{wks.location}/vcpkg_installed/x64-windows/include" }
+
       postbuildcommands {
-			'if exist "%{prj.location}/Assets" (python "%{prj.location}/../AssetsPackager.py" "%{prj.location}/Assets" "%{cfg.targetdir}")'
-		}
+         'if exist "%{prj.location}/Assets" (python "%{prj.location}/../AssetsPackager.py" "%{prj.location}/Assets" "%{cfg.targetdir}")'
+      }
 
-
+   -- Linux
+   filter "system:linux"
+      includedirs { "%{wks.location}/vcpkg_installed/x64-linux/include" }
 
    filter "configurations:Debug"
       defines { "DEBUG" }
@@ -43,11 +48,11 @@ project "GameClient"
       runtime "Release"
       optimize "On"
       symbols "On"
-	  linkoptions { "/SUBSYSTEM:WINDOWS", "/ENTRY:mainCRTStartup" }
+      linkoptions { "/SUBSYSTEM:WINDOWS", "/ENTRY:mainCRTStartup" }
 
    filter "configurations:Dist"
       defines { "DIST" }
       runtime "Release"
       optimize "On"
       symbols "Off"
-	  linkoptions { "/SUBSYSTEM:WINDOWS", "/ENTRY:mainCRTStartup" }
+      linkoptions { "/SUBSYSTEM:WINDOWS", "/ENTRY:mainCRTStartup" }
