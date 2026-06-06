@@ -262,6 +262,8 @@ public:
 
 
                     Entity audioEntity = entityManager.CreateEntity();
+					Transform* audioTransform = entityManager.AddComponent<Transform>(audioEntity, Transform{});
+					audioTransform->setPosition(playerTransform->getPosition());
                     AudioSourceComponent* audio = entityManager.AddComponent<AudioSourceComponent>(
                         audioEntity, AudioSourceComponent("explosion.wav", AudioChannel::SFX, false));
 					audio->gain = 3.0f;
