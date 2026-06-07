@@ -66,6 +66,8 @@ public:
     virtual void InitECSLogic(GameStateBlob& state) = 0;
 
     void Init(GameStateBlob& state) override {
+        world.Reset();
+
 		eventProcessor = new EventProcessor(world, isServer);
 		deltaProcessor = new DeltaProcessor(isServer);
 
@@ -100,7 +102,7 @@ public:
 
         ProcessEvents(events);
 		ProcessInputs(inputs);
-        world.Update(isServer, 1.0f / TICKS_PER_SECOND);
+        gameFinished = world.Update(isServer, 1.0f / TICKS_PER_SECOND);
         
         ECSWorld_To_GameState(state);
 

@@ -11,6 +11,7 @@ struct AudioSourceComponent : public IComponent {
     bool loop = false;
     bool play = false;
     float gain = 1.0f;
+    float pitch = 1.0f;
 
     AudioChannel channel = AudioChannel::SFX;
 

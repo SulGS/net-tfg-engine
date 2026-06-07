@@ -26,9 +26,9 @@ class IECSGameRenderer : public IGameRenderer {
 protected:
     ECSWorld world;
 
-	int frameCount = 0;
+    int frameCount = 0;
 
-    std::function<void(IECSGameLogic* logic,IECSGameRenderer* renderer)> renderDataTransferToLogicCallback;
+    std::function<void(IECSGameLogic* logic, IECSGameRenderer* renderer)> renderDataTransferToLogicCallback;
 
 public:
 
@@ -37,46 +37,48 @@ public:
     virtual void GameState_To_ECSWorld(const GameStateBlob& state) = 0;
 
     void Init(const GameStateBlob& state, OpenGLWindow* window) override {
+        world.Reset();
+
         world.GetEntityManager().RegisterComponentType<Transform>();
         world.GetEntityManager().RegisterComponentType<Playable>();
         world.GetEntityManager().RegisterComponentType<MeshComponent>();
         world.GetEntityManager().RegisterComponentType<Camera>();
-        
+
         world.GetEntityManager().RegisterComponentType<UIElement>();
         world.GetEntityManager().RegisterComponentType<UIButton>();
         world.GetEntityManager().RegisterComponentType<UIImage>();
         world.GetEntityManager().RegisterComponentType<UIText>();
-		world.GetEntityManager().RegisterComponentType<UITextField>();
+        world.GetEntityManager().RegisterComponentType<UITextField>();
 
-		world.GetEntityManager().RegisterComponentType<DirectionalLightComponent>();
-		world.GetEntityManager().RegisterComponentType<PointLightComponent>();
+        world.GetEntityManager().RegisterComponentType<DirectionalLightComponent>();
+        world.GetEntityManager().RegisterComponentType<PointLightComponent>();
 
         world.GetEntityManager().RegisterComponentType<AudioSourceComponent>();
         world.GetEntityManager().RegisterComponentType<AudioListenerComponent>();
 
-		world.GetEntityManager().RegisterComponentType<ParticleEmitterComponent>();
-        
+        world.GetEntityManager().RegisterComponentType<ParticleEmitterComponent>();
+
         world.AddSystem(std::make_unique<DestroyingSystem>());
 
         InitECSRenderer(state, window);
-        
-        world.AddSystem(std::make_unique<CameraSystem>());
-		world.AddSystem(std::make_unique<ParticleSystem>());
-        world.AddSystem(std::make_unique<RenderSystem>());
-        world.AddSystem(std::make_unique<UIRenderSystem>(window->getWidth(), window->getHeight()));
 
-		ParticleSystem* particleSys = world.GetSystem<ParticleSystem>();
+        world.AddSystem(std::make_unique<CameraSystem>());
+        world.AddSystem(std::make_unique<ParticleSystem>());
+        world.AddSystem(std::make_unique<RenderSystem>());
+        world.AddSystem(std::make_unique<UIRenderSystem>(window->getLogicalWidth(), window->getLogicalHeight()));
+
+        ParticleSystem* particleSys = world.GetSystem<ParticleSystem>();
         AudioManager::SetEntityManager(&world.GetEntityManager());
         particleSys->Init();
-		
-		RenderSystem* renderSys = world.GetSystem<RenderSystem>();
-		renderSys->Init(window->getWidth(), window->getHeight());
-		renderSys->SetParticleSystem(particleSys);
+
+        RenderSystem* renderSys = world.GetSystem<RenderSystem>();
+        renderSys->Init(window->getWidth(), window->getHeight());
+        renderSys->SetParticleSystem(particleSys);
 
 
         UIRenderSystem* uir = world.GetSystem<UIRenderSystem>();
 
-        world.AddSystem(std::make_unique<UIUpdateSystem>(window->getWidth(), window->getHeight(), window->getWindow(),uir->GetFontManager()));
+        world.AddSystem(std::make_unique<UIUpdateSystem>(window->getLogicalWidth(), window->getLogicalHeight(), window->getWindow(), uir->GetFontManager()));
 
         uir->LoadFont("default", "C:/Windows/Fonts/arial.ttf", 32);
     }
@@ -84,22 +86,22 @@ public:
     void Render(const GameStateBlob& state, OpenGLWindow* window) override {
         GameState_To_ECSWorld(state);
 
-		RenderSystem* renderSys = world.GetSystem<RenderSystem>();
+        RenderSystem* renderSys = world.GetSystem<RenderSystem>();
 
-        if (window->wasResized()) 
+        if (window->wasResized())
         {
-			renderSys->Resize(window->getWidth(), window->getHeight());
+            renderSys->Resize(window->getWidth(), window->getHeight());
         }
 
-		auto activeCamera = world.GetEntityManager().CreateQuery<Camera, Transform>();
+        auto activeCamera = world.GetEntityManager().CreateQuery<Camera, Transform>();
 
-		for (auto [entity, camera, transform] : activeCamera) {
-			camera->updateAspectRatio(static_cast<float>(window->getWidth()) / window->getHeight());
-			break; // Only one camera supported for now
-		}
+        for (auto [entity, camera, transform] : activeCamera) {
+            camera->updateAspectRatio(static_cast<float>(window->getWidth()) / window->getHeight());
+            break; // Only one camera supported for now
+        }
 
         UIRenderSystem* ui_system = world.GetSystem<UIRenderSystem>();
-        ui_system->UpdateScreenSize(window->getWidth(),window->getHeight());
+        ui_system->UpdateScreenSize(window->getLogicalWidth(), window->getLogicalHeight());
 
         auto t1 = std::chrono::high_resolution_clock::now();
         world.Update(false, 1.0f / RENDER_TICKS_PER_SECOND);
@@ -107,17 +109,17 @@ public:
         //Debug::Info("Render") << "world.Update: "
         //    << std::chrono::duration<float, std::milli>(t2 - t1).count() << "ms\n";
 
-		if (renderDataTransferToLogicCallback) {
-			IECSGameLogic* logic = static_cast<IECSGameLogic*>(GetGameLogic());
-			renderDataTransferToLogicCallback(logic, this);
-		}
+        if (renderDataTransferToLogicCallback) {
+            IECSGameLogic* logic = static_cast<IECSGameLogic*>(GetGameLogic());
+            renderDataTransferToLogicCallback(logic, this);
+        }
 
-		frameCount++;
+        frameCount++;
 
-		if (frameCount >= RENDER_TICKS_PER_SECOND*25 ) {
-			frameCount = 0;
+        if (frameCount >= RENDER_TICKS_PER_SECOND * 25) {
+            frameCount = 0;
             //renderSys->DumpBuffers();
-		}
+        }
     }
 
 };

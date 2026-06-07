@@ -25,14 +25,14 @@
 class OnlineClient : public Client {
 public:
     OnlineClient(std::unique_ptr<IGameLogic> gameLogic,
-        std::unique_ptr<IGameRenderer> gameRenderer,std::string binFileName)
+        std::unique_ptr<IGameRenderer> gameRenderer, std::string binFileName)
         : gameLogic_(std::move(gameLogic))
         , gameRenderer_(std::move(gameRenderer))
         , assignedPlayerId_(-1)
         , isReconnection_(false)
         , serverConnection_(k_HSteamNetConnection_Invalid)
     {
-		binName = binFileName;
+        binName = binFileName;
     }
 
     ConnectionCode SetupClient(const std::string& hostStr = "0.0.0.0", uint16_t port = 0, const std::string& customClientId = "") override {
@@ -41,6 +41,13 @@ public:
         }
 
         clientId_ = customClientId.empty() ? GenerateClientId() : customClientId;
+
+        // Guard against being called while a previous session is still live
+        if (cWindow_) {
+            cWindow_->deactivate();
+            delete cWindow_;
+            cWindow_ = nullptr;
+        }
 
         cWindow_ = new ClientWindow(
             [this](GameStateBlob& state, OpenGLWindow* win) {
@@ -94,7 +101,7 @@ public:
 
         cWindow_->activate();
 
-		networkRunning_.store(true);
+        networkRunning_.store(true);
         networkThread_ = std::thread([this]() {
             NetworkThread(*prediction_, *cWindow_, networkRunning_);
             });
@@ -105,10 +112,10 @@ public:
 
         return CONN_SUCCESS;
     }
-    
+
 
     void TickClient() override {
-        
+
 
         InputBlob localInput = prediction_->GetGameLogic()->GenerateLocalInput();
         int frameToSubmit = prediction_->SubmitLocalInput(localInput);
@@ -118,12 +125,12 @@ public:
         prediction_->Tick();
         cWindow_->setLocalState(prediction_->GetCurrentState());
 
-		HashPacket hashPacket;
-		GameStateBlob currentServerState = prediction_->GetLatestServerState();
-		hashPacket.frame = currentServerState.frame;
-		prediction_->GetGameLogic()->HashState(currentServerState, hashPacket.hash);
+        HashPacket hashPacket;
+        GameStateBlob currentServerState = prediction_->GetLatestServerState();
+        hashPacket.frame = currentServerState.frame;
+        prediction_->GetGameLogic()->HashState(currentServerState, hashPacket.hash);
 
-		net_.SendHashPacket(serverConnection_, hashPacket, hashPacket.frame);
+        net_.SendHashPacket(serverConnection_, hashPacket, hashPacket.frame);
 
         // ===== Debug output every 30 frames =====
         if (frameToSubmit % 30 == 0) {
@@ -139,27 +146,42 @@ public:
             net_.SendInputDelaySync(serverConnection_, packet);
         }
 
-        
+
     }
 
-	void CloseClient() override {
-        // Clean shutdown
+    void CloseClient() override {
+        // Stop network thread first
         networkRunning_.store(false);
-        networkThread_.join();
+        if (networkThread_.joinable())
+            networkThread_.join();
 
         cWindow_->deactivate();
+        delete cWindow_;
+        cWindow_ = nullptr;
 
-		delete cWindow_;
-		delete prediction_;
+        // Recover gameLogic_ from prediction before destroying it.
+        // SetupClient does std::move(gameLogic_) into prediction_, leaving
+        // gameLogic_ null. If we just delete prediction_ the logic is gone
+        // and the second SetupClient call crashes at line 85.
+        if (prediction_) {
+            gameLogic_ = prediction_->ReleaseGameLogic();
+            delete prediction_;
+            prediction_ = nullptr;
+        }
 
         if (serverConnection_ != k_HSteamNetConnection_Invalid) {
             net_.GetSockets()->CloseConnection(serverConnection_,
                 k_ESteamNetConnectionEnd_App_Generic, nullptr, false);
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            serverConnection_ = k_HSteamNetConnection_Invalid;
         }
 
-        Debug::Info("OnlineClient") << "[ONLINE] Online client finalished\n";
-	}
+        // Reset per-session state so the next SetupClient starts clean
+        assignedPlayerId_ = -1;
+        isReconnection_ = false;
+
+        Debug::Info("OnlineClient") << "[ONLINE] Online client finished\n";
+    }
 
     const std::string& GetClientId() const { return clientId_; }
 
@@ -173,8 +195,8 @@ private:
     bool isReconnection_;
     HSteamNetConnection serverConnection_;
 
-	ClientPredictionNetcode* prediction_ = nullptr;
-	ClientWindow* cWindow_ = nullptr;
+    ClientPredictionNetcode* prediction_ = nullptr;
+    ClientWindow* cWindow_ = nullptr;
 
     std::atomic<bool> networkRunning_;
     std::thread networkThread_;
@@ -207,32 +229,32 @@ private:
         return true;
     }
 
-	bool WaitForStateUpdateAfterReconnection(ClientPredictionNetcode& prediction) {
-		bool stateReceived = false;
-		bool running = true;
-		auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-		while (!stateReceived && running) {
-			if (std::chrono::steady_clock::now() > timeout) {
-				Debug::Info("OnlineClient") << "Timeout waiting for state update after reconnection\n";
-				return false;
-			}
-			net_.PumpCallbacks();
-			net_.Poll([&](const uint8_t* data, int len, HSteamNetConnection conn) {
-				if (len < 1) {
-					return;
-				}
-				uint8_t type = data[0];
-				if (type == PACKET_STATE_UPDATE) {
-					StateUpdate update = net_.ParseStateUpdate(data, len);
-					prediction.OnServerStateUpdate(update);
-					stateReceived = true;
-					Debug::Info("OnlineClient") << "Received state update after reconnection\n";
-				}
-				}, true);
-			std::this_thread::sleep_for(std::chrono::milliseconds(50));
-		}
-		return running && stateReceived;
-	}
+    bool WaitForStateUpdateAfterReconnection(ClientPredictionNetcode& prediction) {
+        bool stateReceived = false;
+        bool running = true;
+        auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!stateReceived && running) {
+            if (std::chrono::steady_clock::now() > timeout) {
+                Debug::Info("OnlineClient") << "Timeout waiting for state update after reconnection\n";
+                return false;
+            }
+            net_.PumpCallbacks();
+            net_.Poll([&](const uint8_t* data, int len, HSteamNetConnection conn) {
+                if (len < 1) {
+                    return;
+                }
+                uint8_t type = data[0];
+                if (type == PACKET_STATE_UPDATE) {
+                    StateUpdate update = net_.ParseStateUpdate(data, len);
+                    prediction.OnServerStateUpdate(update);
+                    stateReceived = true;
+                    Debug::Info("OnlineClient") << "Received state update after reconnection\n";
+                }
+                }, true);
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        return running && stateReceived;
+    }
 
     bool HandleServerAccept(const uint8_t* data, int len) {
         if (len < sizeof(ServerAcceptPacket)) {
@@ -397,13 +419,13 @@ private:
 
             net_.PumpCallbacks();
             net_.Poll([&](const uint8_t* data, int len, HSteamNetConnection conn) {
-                    if (!gameStarted) {
-                        bool serverAccepted = false;
-                        if (!HandleReceiveEvent(data, len, gameStarted, serverAccepted)) {
-                            running = false;
-                        }
+                if (!gameStarted) {
+                    bool serverAccepted = false;
+                    if (!HandleReceiveEvent(data, len, gameStarted, serverAccepted)) {
+                        running = false;
                     }
-                },true);
+                }
+                }, true);
 
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
@@ -416,7 +438,7 @@ private:
     // ============================================================================
 
     void ProcessIncomingPacket(ClientPredictionNetcode& prediction,
-		ClientWindow& cWin,
+        ClientWindow& cWin,
         const uint8_t* data,
         int len,
         HSteamNetConnection conn)
@@ -443,7 +465,7 @@ private:
                 StateUpdate update = net_.ParseStateUpdate(data, len);
 
                 prediction.OnServerStateUpdate(update);
-				cWin.setServerState(prediction.GetLatestServerState());
+                cWin.setServerState(prediction.GetLatestServerState());
             }
             else {
                 Debug::Info("OnlineClient") << "[CLIENT] Received malformed PACKET_STATE_UPDATE, len=" << len << "\n";
@@ -457,7 +479,7 @@ private:
             //Debug::Info("OnlineClient") << "Parsed delta packet: frame=" << frame
             //    << " deltas=" << deltas.size() << "\n";
 
-            prediction.OnServerDeltasUpdate(deltas,frame);
+            prediction.OnServerDeltasUpdate(deltas, frame);
             cWin.setServerState(prediction.GetLatestServerState());
         }
         else if (type == PACKET_INPUT_UPDATE) {
@@ -471,22 +493,22 @@ private:
                 prediction.OnServerInputUpdate(ie);
             }
         }
-        else if (type == PACKET_EVENT_UPDATE)  {
-			const size_t EXPECTED_MIN_LEN = 1 + 4 + 4;
-			if (len < EXPECTED_MIN_LEN) {
-				Debug::Info("OnlineClient") << "[CLIENT] Malformed event packet, len=" << len << "\n";
-			}
-			else {
-				EventEntry event = net_.ParseEventEntryPacket(data, len);
-				prediction.OnServerEventUpdate(event);
-			}
+        else if (type == PACKET_EVENT_UPDATE) {
+            const size_t EXPECTED_MIN_LEN = 1 + 4 + 4;
+            if (len < EXPECTED_MIN_LEN) {
+                Debug::Info("OnlineClient") << "[CLIENT] Malformed event packet, len=" << len << "\n";
+            }
+            else {
+                EventEntry event = net_.ParseEventEntryPacket(data, len);
+                prediction.OnServerEventUpdate(event);
+            }
         }
         else if (type == PACKET_INPUT_DELAY) {
             // ===== FIX: Validate RTT with bounds checking =====
             InputDelayPacket packet = net_.ParseInputDelaySync(data, len);
             inputDelayCalc.UpdateRtt(packet.timestamp, TICKS_PER_SECOND);
 
-			prediction.UpdateCurrentFrame(inputDelayCalc.GetInputDelayFrames());
+            prediction.UpdateCurrentFrame(inputDelayCalc.GetInputDelayFrames());
         }
     }
 

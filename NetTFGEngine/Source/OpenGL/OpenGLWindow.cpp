@@ -19,8 +19,8 @@ OpenGLWindow::OpenGLWindow(int width, int height, const std::string& title)
     initializeGLEW();
     setupOpenGL();
 
-    glfwSetWindowUserPointer(window, this);  
-    // Framebuffer resize callback
+    glfwSetWindowUserPointer(window, this);
+    // Framebuffer resize callback — physical pixels, used for glViewport
     glfwSetFramebufferSizeCallback(window, [](GLFWwindow* win, int w, int h) {
         glViewport(0, 0, w, h);
         auto* self = static_cast<OpenGLWindow*>(glfwGetWindowUserPointer(win));
@@ -29,9 +29,18 @@ OpenGLWindow::OpenGLWindow(int width, int height, const std::string& title)
         self->resized = true;
         });
 
+    // Window size callback — logical pixels, matches glfwGetCursorPos space
+    glfwSetWindowSizeCallback(window, [](GLFWwindow* win, int w, int h) {
+        auto* self = static_cast<OpenGLWindow*>(glfwGetWindowUserPointer(win));
+        self->logicalWidth = w;
+        self->logicalHeight = h;
+        });
+
     int w, h;
     glfwGetFramebufferSize(window, &currentWidth, &currentHeight);
     glViewport(0, 0, currentWidth, currentHeight);
+
+    glfwGetWindowSize(window, &logicalWidth, &logicalHeight);
 }
 
 OpenGLWindow::~OpenGLWindow() {
@@ -41,20 +50,20 @@ OpenGLWindow::~OpenGLWindow() {
 
 // -------------------- Window Operations --------------------
 
-void OpenGLWindow::swapBuffers() { 
-    glfwSwapBuffers(window); 
+void OpenGLWindow::swapBuffers() {
+    glfwSwapBuffers(window);
 }
 
-void OpenGLWindow::pollEvents() { 
-    glfwPollEvents(); 
+void OpenGLWindow::pollEvents() {
+    glfwPollEvents();
 }
 
-bool OpenGLWindow::shouldClose() const { 
-    return glfwWindowShouldClose(window); 
+bool OpenGLWindow::shouldClose() const {
+    return glfwWindowShouldClose(window);
 }
 
-void OpenGLWindow::makeContextCurrent() { 
-    glfwMakeContextCurrent(window); 
+void OpenGLWindow::makeContextCurrent() {
+    glfwMakeContextCurrent(window);
 }
 
 // Add to OpenGLWindow.hpp
@@ -62,13 +71,15 @@ void OpenGLWindow::releaseContext() {
     glfwMakeContextCurrent(nullptr);
 }
 
-void OpenGLWindow::close() { 
-    glfwSetWindowShouldClose(window, GLFW_TRUE); 
+void OpenGLWindow::close() {
+    glfwSetWindowShouldClose(window, GLFW_TRUE);
 }
 
 // -------------------- Window Info --------------------
 int OpenGLWindow::getWidth()  const { return currentWidth; }
 int OpenGLWindow::getHeight() const { return currentHeight; }
+int OpenGLWindow::getLogicalWidth()  const { return logicalWidth; }
+int OpenGLWindow::getLogicalHeight() const { return logicalHeight; }
 
 bool OpenGLWindow::wasResized() {
     bool r = resized;
@@ -85,9 +96,9 @@ float OpenGLWindow::getAspectRatio() const {
 // -------------------- OpenGL Setup --------------------
 
 void OpenGLWindow::initializeGLFW() {
-    if (!glfwInit()) 
+    if (!glfwInit())
         throw std::runtime_error("Failed to initialize GLFW");
-    
+
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);

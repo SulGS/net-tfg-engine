@@ -34,6 +34,8 @@
 
 #include <openssl/evp.h>
 
+#include "NetTFG_Engine.hpp"
+
 
 
 
@@ -369,6 +371,10 @@ public:
         world.GetEntityManager().RegisterComponentType<CenterSpoke>();
         world.GetEntityManager().RegisterComponentType<LaserWallID>();
         world.GetEntityManager().RegisterComponentType<SpectatorState>();
+		world.GetEntityManager().RegisterComponentType<ExitButtonChecker>();
+
+		Entity exitCheckerEntity = world.GetEntityManager().CreateEntity();
+        world.GetEntityManager().AddComponent<ExitButtonChecker>(exitCheckerEntity, ExitButtonChecker{});
 
 
         for (int i = 0; i < NUM_PLAYERS; i++)
@@ -595,6 +601,7 @@ public:
 
         world.AddSystem(std::make_unique<BulletSystem>());
         world.AddSystem(std::make_unique<OnDeathLogicSystem>());
+		world.AddSystem(std::make_unique<ExitCheckerSystem>());
 
         eventProcessor->RegisterHandler(AsteroidEventMask::SPAWN_BULLET, std::make_unique<SpawnBulletHandler>());
         eventProcessor->RegisterHandler(AsteroidEventMask::BULLET_COLLIDES, std::make_unique<BulletCollidesHandler>());
@@ -842,6 +849,7 @@ public:
 		world.GetEntityManager().RegisterComponentType<JustDeathChecker>();
 		world.GetEntityManager().RegisterComponentType<ExplosionPlayerID>();
 		world.GetEntityManager().RegisterComponentType<LinkAudioToBullet>();
+		world.GetEntityManager().RegisterComponentType<ExitButtonChecker>();
 
         // --- Sun ---
         Entity sunEntity = world.GetEntityManager().CreateEntity();
@@ -947,6 +955,65 @@ public:
         text->fontSize = 32.0f;
         text->SetColor(1.0f, 1.0f, 1.0f, 1.0f);
         text->SetFont("default");
+
+		// Exit button
+		Entity exitButton = world.GetEntityManager().CreateEntity();
+		ExitButtonChecker* exitChecker = world.GetEntityManager().AddComponent<ExitButtonChecker>(exitButton, ExitButtonChecker{});
+		UIElement* exitElement = world.GetEntityManager().AddComponent<UIElement>(exitButton, UIElement{});
+		exitElement->anchor = UIAnchor::BOTTOM_CENTER;
+		exitElement->position = glm::vec2(0.0f, -20.0f);
+		exitElement->size = glm::vec2(200.0f, 50.0f);
+		exitElement->pivot = glm::vec2(0.5f, 1.0f);
+		exitElement->layer = 1;
+		exitElement->isVisible = false; // Initially hidden, shown on game over
+		UIButton* exitBtnComp = world.GetEntityManager().AddComponent<UIButton>(exitButton, UIButton{});
+		exitBtnComp->text = "Exit";
+		exitBtnComp->fontSize = 28.0f;
+		exitBtnComp->onClick = [this, exitBtnComp, exitChecker]() {
+            Debug::Info("Asteroids") << "Exit button clicked. Exiting to menu.\n";
+			exitBtnComp->isInteractable = false; // Prevent multiple clicks
+			exitChecker->exitPressed = true;
+		};
+
+        renderDataTransferToLogicCallback = [](IECSGameLogic* logic, IECSGameRenderer* renderer) {
+                if (!logic) {
+                    return;
+                }
+
+                AsteroidShooterGame* gameLogic = dynamic_cast<AsteroidShooterGame*>(logic);
+                AsteroidShooterGameRenderer* gameRenderer = dynamic_cast<AsteroidShooterGameRenderer*>(renderer);
+
+                if (!gameLogic || !gameRenderer) {
+
+					// Debugs whick is nullptr
+
+					if (!gameLogic) {
+						Debug::Error("Asteroids") << "Logic pointer is null in renderDataTransferToLogicCallback.\n";
+					}
+					if (!gameRenderer) {
+						Debug::Error("Asteroids") << "Renderer pointer is null in renderDataTransferToLogicCallback.\n";
+					}
+
+                    return;
+                }
+
+				//Debug::Info("Asteroids") << "Transferring data from renderer to logic.\n";
+
+				auto& entityManagerLogic = gameLogic->world.GetEntityManager();
+				auto& entityManagerRenderer = gameRenderer->world.GetEntityManager();
+
+                // Sync ExitButtonChecker value
+				auto exitButtonQueryLogic = entityManagerLogic.CreateQuery<ExitButtonChecker>();
+				auto exitButtonQueryRenderer = entityManagerRenderer.CreateQuery<ExitButtonChecker>();
+
+				for (auto [entityLogic, exitCheckerLogic] : exitButtonQueryLogic) {
+					for (auto [entityRenderer, exitCheckerRenderer] : exitButtonQueryRenderer) {
+						//Debug::Info("Asteroids") << "Syncing exit button state: " << exitCheckerRenderer->exitPressed << "\n";
+                        exitCheckerLogic->exitPressed = exitCheckerRenderer->exitPressed;
+					}
+				}
+            };
+		
 
         // --- Point light ---
         Entity light = world.GetEntityManager().CreateEntity();

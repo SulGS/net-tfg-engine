@@ -365,9 +365,6 @@ public:
             // DEBUG: log listener spatial state every tick
             glm::vec3 lp = listenerT->getPosition();
             glm::vec3 lr = listenerT->getRotation();
-            Debug::Info("AudioSystem")
-                << "[LISTENER] pos=(" << lp.x << "," << lp.y << "," << lp.z << ")"
-                << " rot=(" << lr.x << "," << lr.y << "," << lr.z << ")\n";
         }
 
         /* -----------------------------
@@ -407,12 +404,10 @@ public:
 
             // DEBUG: log source spatial state every tick
             glm::vec3 sp = t->getPosition();
-            Debug::Info("AudioSystem")
-                << "[SOURCE " << audio->source << "] file=" << audio->filePath
-                << " pos=(" << sp.x << "," << sp.y << "," << sp.z << ")\n";
 
             float finalGain = audio->gain * channels.GetVolume(audio->channel);
             alSourcef(audio->source, AL_GAIN, finalGain);
+            alSourcef(audio->source, AL_PITCH, audio->pitch);
 
             if (audio->play) {
                 alSourcePlay(audio->source);
@@ -570,21 +565,6 @@ private:
         glm::vec3 fwdAL = toAL(fwdEngine);
         glm::vec3 upAL = toAL(upEngine);
 
-        Debug::Info("AudioSystem")
-            << "[LISTENER] enginePos=(" << pos.x << "," << pos.y << "," << pos.z << ")"
-            << " eulerDeg=(" << deg.x << "," << deg.y << "," << deg.z << ")"
-            << " fwdEngine=(" << fwdEngine.x << "," << fwdEngine.y << "," << fwdEngine.z << ")"
-            << " upEngine=(" << upEngine.x << "," << upEngine.y << "," << upEngine.z << ")"
-            << " posAL=(" << posAL.x << "," << posAL.y << "," << posAL.z << ")"
-            << " fwdAL=(" << fwdAL.x << "," << fwdAL.y << "," << fwdAL.z << ")"
-            << " upAL=(" << upAL.x << "," << upAL.y << "," << upAL.z << ")"
-            << "\n";
-
-        Debug::Info("AudioSystem")
-            << "[LISTENER AL] posAL=(" << posAL.x << "," << posAL.y << "," << posAL.z << ")"
-            << " fwdAL=(" << fwdAL.x << "," << fwdAL.y << "," << fwdAL.z << ")"
-            << " upAL=(" << upAL.x << "," << upAL.y << "," << upAL.z << ")\n";
-
         ALfloat ori[] = { fwdAL.x, fwdAL.y, fwdAL.z, upAL.x, upAL.y, upAL.z };
 
         alListener3f(AL_POSITION, posAL.x, posAL.y, posAL.z);
@@ -687,10 +667,6 @@ private:
             };
 
         glm::vec3 posAL = toAL(newPos);
-
-        Debug::Info("AudioSystem")
-            << "[SOURCE AL " << ac.source << "] posAL=("
-            << posAL.x << "," << posAL.y << "," << posAL.z << ")\n";
 
         alSource3f(ac.source, AL_POSITION, posAL.x, posAL.y, posAL.z);
     }

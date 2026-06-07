@@ -146,4 +146,10 @@ public:
 	LinkAudioToBullet(int bid) : bulletId(bid) {}
 };
 
+class ExitButtonChecker : public IComponent {
+public:
+	bool exitPressed;
+	ExitButtonChecker() : exitPressed(false) {}
+};
+
 #endif // COMPONENTS_ASTEROIDS

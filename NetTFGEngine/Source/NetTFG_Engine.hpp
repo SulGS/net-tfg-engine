@@ -88,7 +88,7 @@ public:
         size_t index = it->second;
         Client* client = ClientManager::Get().GetClient(index);
 
-		AssetManager::instance().unloadBin(client->binName);
+        AssetManager::instance().unloadBin(client->binName);
 
         if (client) {
             // Close the client properly
@@ -105,6 +105,14 @@ public:
 
         Debug::Info("NetTFG_Engine") << "Deactivated client " << id << " (index " << index << ")\n";
         return true;
+    }
+
+    // ---- Deferred deactivation (safe to call from inside a TickClient) ----
+    // Queues a deactivation that will be applied by the main loop between ticks,
+    // never while any client's TickClient() is still on the call stack.
+    void RequestDeactivateClient(int id) {
+        std::lock_guard<std::mutex> lock(pendingDeactivationsMutex_);
+        pendingDeactivations_.push_back(id);
     }
 
     void DeactivateAllClients() {
@@ -155,6 +163,22 @@ public:
                         Debug::Error("NetTFG_Engine") << "Exception in client tick: " << e.what() << "\n";
                         // Optionally deactivate the problematic client
                     }
+                }
+            }
+
+            // ---- Flush deferred deactivations ----
+            // Applied here, after all ticks have returned, so no client is
+            // mid-tick when CloseClient() runs. This is the only safe place
+            // to call DeactivateClient when the request comes from inside a
+            // TickClient (e.g. ExitCheckerSystem, StartScreenInputSystem).
+            {
+                std::vector<int> toDeactivate;
+                {
+                    std::lock_guard<std::mutex> lock(pendingDeactivationsMutex_);
+                    toDeactivate.swap(pendingDeactivations_);
+                }
+                for (int id : toDeactivate) {
+                    DeactivateClient(id);
                 }
             }
 
@@ -707,10 +731,10 @@ private:
 
         AssetManager::instance().registerType<AudioBuffer>(
             // Loader
-			[](const uint8_t* data, size_t size) -> AudioBuffer
+            [](const uint8_t* data, size_t size) -> AudioBuffer
             {
-				AudioBuffer buffer;
-				buffer.value = loadWavALFromMemory(data, size);
+                AudioBuffer buffer;
+                buffer.value = loadWavALFromMemory(data, size);
                 return buffer;
             },
 
@@ -727,7 +751,7 @@ private:
             {
 
                 TextureID texture;
-				texture.value = 0;
+                texture.value = 0;
 
                 GLuint textureID = SOIL_load_OGL_texture_from_memory(
                     data,
@@ -754,7 +778,7 @@ private:
                 Debug::Info("AssetManager")
                     << "Successfully loaded texture from memory (ID: " << textureID << ")\n";
 
-				texture.value = textureID;
+                texture.value = textureID;
 
                 return texture;
             },
@@ -815,7 +839,7 @@ private:
 
         Debug::Info("NetTFG_Engine") << "Setting up client " << id << "...\n";
 
-		AssetManager::instance().loadBin(client->binName);
+        AssetManager::instance().loadBin(client->binName);
 
         // Setup the client with connection parameters (may block)
         ConnectionCode result = client->SetupClient(host, port, customClientId);
@@ -873,4 +897,12 @@ private:
     std::unordered_map<size_t, ConnectionInfo> clientConnections;  // Connection info per client index
     std::unordered_map<size_t, ConnectionCode> clientErrorCodes_;  // Last error code per client index
     mutable std::mutex connectionsMutex_;  // Protect clientConnections and clientErrorCodes_ for async access
+
+    // ---- Deferred deactivation queue ----
+    // Callbacks from ActivateClientAsync fire on a background thread and must
+    // not call DeactivateClient directly (the target client may be mid-tick).
+    // Instead they call RequestDeactivateClient, which pushes here, and the
+    // main loop in Start() drains this vector after every round of ticks.
+    std::vector<int> pendingDeactivations_;
+    std::mutex pendingDeactivationsMutex_;
 };

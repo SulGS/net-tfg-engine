@@ -18,12 +18,14 @@ public:
     void close();
 
     // Window info
-    int getWidth() const;
+    int getWidth() const;          // framebuffer size (physical pixels) — use for glViewport
     int getHeight() const;
+    int getLogicalWidth() const;   // window size (logical pixels) — use for UI hit-testing
+    int getLogicalHeight() const;
     float getAspectRatio() const;
     GLFWwindow* getWindow() { return window; }
 
-    
+
 
     // Public
     bool wasResized();  // returns true once, then resets the flag
@@ -36,8 +38,10 @@ private:
     GLFWwindow* window;
 
     // Private members
-    int currentWidth;
+    int currentWidth;   // framebuffer size (physical pixels) — for glViewport
     int currentHeight;
+    int logicalWidth;   // window size (logical pixels) — matches glfwGetCursorPos
+    int logicalHeight;
     bool resized = false;
 };
 

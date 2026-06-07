@@ -12,6 +12,7 @@
 #include <queue>
 #include <unordered_set>
 #include "Events.hpp"
+#include "NetTFG_Engine.hpp"
 
 enum InputMask : uint8_t {
     INPUT_NONE = 0,
@@ -1198,7 +1199,43 @@ public:
         {
             timerFired = true;
 
-            // ── TODO: handle end-of-game here (return to lobby, show scoreboard…) ──
+            emitGameFinishEvent = true;
         }
     }
+};
+
+class ExitCheckerSystem : public ISystem {
+public:
+    void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
+        if (isServer) return;
+        if (switchRequested_) return;  // only fire once
+
+        auto query = entityManager.CreateQuery<ExitButtonChecker>();
+        for (auto [entity, checker] : query)
+        {
+            if (checker->exitPressed)
+            {
+                switchRequested_ = true;
+                Debug::Info("Asteroids") << "Exit button pressed, switching back to lobby...\n";
+                // Deactivate 1 FIRST, then activate 0 — handled atomically by the engine loop
+                NetTFG_Engine::Get().ActivateClientAsync(0,
+                    [](int id, ConnectionCode code) {
+                        if (code == CONN_SUCCESS)
+                        {
+                            Debug::Info("Asteroids") << "Switched back to client " << id << "\n";
+                            // Use RequestDeactivateClient instead of DeactivateClient:
+                            // this callback runs on a background thread while client 1
+                            // may still be mid-tick on the main thread. The deferred
+                            // version is applied by the engine loop between ticks, which
+                            // is the only safe place to call CloseClient().
+                            NetTFG_Engine::Get().RequestDeactivateClient(1);
+                        }
+                        else
+                            Debug::Error("Asteroids") << "Failed to switch to client " << id << ": " << code << "\n";
+                    });
+            }
+        }
+    }
+private:
+    bool switchRequested_ = false;
 };

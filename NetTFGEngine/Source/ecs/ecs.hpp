@@ -27,12 +27,12 @@ public:
     virtual IComponent* GetComponent(Entity entity) = 0;
     virtual bool HasComponent(Entity entity) const = 0;
     virtual void* GetComponentRaw(Entity entity) = 0;
+    virtual void Clear() = 0;  // Destroy and remove all components
 };
 
 template<typename T>
 class ComponentArray : public IComponentArray {
     static_assert(std::is_base_of<IComponent, T>::value, "ComponentArray<T>: T must derive from IComponent");
-    // Store components polymorphically to allow abstract interface types
     std::unordered_map<Entity, std::unique_ptr<T>> components;
 
     friend class EntityManager;
@@ -41,15 +41,13 @@ public:
         if (!component) throw std::invalid_argument("AddComponent: null component");
         T* derived = dynamic_cast<T*>(component.get());
         if (!derived) throw std::invalid_argument("AddComponent: component type mismatch");
-
-        // Transfer ownership into the map as a unique_ptr<T>
         components[entity] = std::unique_ptr<T>(static_cast<T*>(component.release()));
     }
 
     void RemoveComponent(Entity entity) override {
-		if (components.find(entity) != components.end()) {
-			components.at(entity).get()->Destroy();
-		}
+        if (components.find(entity) != components.end()) {
+            components.at(entity).get()->Destroy();
+        }
         components.erase(entity);
     }
 
@@ -69,6 +67,14 @@ public:
     bool HasComponent(Entity entity) const override {
         return components.find(entity) != components.end();
     }
+
+    // Remove all components, calling Destroy() on each.
+    void Clear() {
+        for (auto& [entity, comp] : components) {
+            if (comp) comp->Destroy();
+        }
+        components.clear();
+    }
 };
 
 
@@ -77,44 +83,66 @@ class EntityManager {
     std::vector<bool> activeEntities;
     std::queue<Entity> availableEntityIds;
     std::queue<Entity> entitiesToDestroy;
-    Entity nextEntityId = 1; // Start from 1, reserve 0 as NULL_ENTITY
+    Entity nextEntityId = 1;
     size_t entityCount = 0;
 
-	std::mutex entityMutex;
+    std::mutex entityMutex;
 
 public:
 
-	void acquireMutex() {
-		entityMutex.lock();
-	}
+    void acquireMutex() {
+        entityMutex.lock();
+    }
 
-	void releaseMutex() {
-		entityMutex.unlock();
-	}
+    void releaseMutex() {
+        entityMutex.unlock();
+    }
+
+    // Reset to a completely clean state.
+    // Calls Destroy() on every live component, clears all entities and
+    // component arrays, and resets all ID counters.
+    // Registered component types are also cleared so InitECSLogic /
+    // InitECSRenderer can RegisterComponentType again from scratch.
+    void Reset() {
+        // Destroy all components in every array
+        for (auto& [typeIndex, array] : componentArrays) {
+            array->Clear();
+        }
+
+        componentArrays.clear();
+        activeEntities.clear();
+
+        // Drain the pending-destroy queue
+        while (!entitiesToDestroy.empty()) entitiesToDestroy.pop();
+        // Drain the recycled-ID queue
+        while (!availableEntityIds.empty()) availableEntityIds.pop();
+
+        nextEntityId = 1;
+        entityCount = 0;
+    }
 
     Entity CreateEntity() {
         Entity entityId;
-        
-        // Reuse available IDs first
+
         if (!availableEntityIds.empty()) {
             entityId = availableEntityIds.front();
             availableEntityIds.pop();
             activeEntities[entityId] = true;
-        } else {
+        }
+        else {
             entityId = nextEntityId++;
             if (entityId >= activeEntities.size()) {
                 activeEntities.resize(entityId + 1, false);
             }
             activeEntities[entityId] = true;
         }
-        
+
         entityCount++;
         return entityId;
     }
 
     void DestroyEntity(Entity entity) {
-        if(IsEntityValid(entity))
-        {
+        if (IsEntityValid(entity)) {
             entitiesToDestroy.push(entity);
         }
     }
@@ -127,7 +155,6 @@ public:
                 continue;
             }
 
-            // Remove all components associated with this entity
             for (auto& [typeIndex, componentArray] : componentArrays) {
                 if (componentArray->HasComponent(entity)) {
                     componentArray->RemoveComponent(entity);
@@ -141,9 +168,9 @@ public:
     }
 
     bool IsEntityValid(Entity entity) const {
-        return entity != NULL_ENTITY && 
-               entity < activeEntities.size() && 
-               activeEntities[entity];
+        return entity != NULL_ENTITY &&
+            entity < activeEntities.size() &&
+            activeEntities[entity];
     }
 
     size_t GetEntityCount() const {
@@ -183,10 +210,8 @@ public:
         auto component = std::make_unique<T>(std::forward<Args>(args)...);
         T* ptr = component.get();
         componentArray->AddComponent(entity, std::move(component));
-        // componentArray now owns the component in its unique_ptr map
         return componentArray->components[entity].get();
     }
-
 
     template<typename T>
     bool RemoveComponent(Entity entity) {
@@ -240,7 +265,6 @@ public:
         return it->second->HasComponent(entity);
     }
 
-    // Query builder for filtering entities by components
     template<typename... Components>
     class Query {
         EntityManager* manager;
@@ -250,16 +274,15 @@ public:
     public:
         explicit Query(EntityManager* mgr) : manager(mgr) {}
 
-        // Iterator for range-based for loops
         class Iterator {
             EntityManager* manager;
             std::vector<Entity>::const_iterator entityIt;
 
         public:
-            Iterator(EntityManager* mgr, std::vector<Entity>::const_iterator it) 
-                : manager(mgr), entityIt(it) {}
+            Iterator(EntityManager* mgr, std::vector<Entity>::const_iterator it)
+                : manager(mgr), entityIt(it) {
+            }
 
-            // Returns tuple with Entity first, then component pointers
             std::tuple<Entity, Components*...> operator*() const {
                 Entity entity = *entityIt;
                 return std::make_tuple(entity, manager->GetComponent<Components>(entity)...);
@@ -280,33 +303,22 @@ public:
         };
 
         Iterator begin() {
-            if (cacheDirty) {
-                UpdateCache();
-            }
+            if (cacheDirty) UpdateCache();
             return Iterator(manager, cachedEntities.begin());
         }
 
         Iterator end() {
-            if (cacheDirty) {
-                UpdateCache();
-            }
+            if (cacheDirty) UpdateCache();
             return Iterator(manager, cachedEntities.end());
         }
 
-        // Force cache update
-        void Refresh() {
-            cacheDirty = true;
-        }
+        void Refresh() { cacheDirty = true; }
 
-        // Get count of matching entities
         size_t Count() {
-            if (cacheDirty) {
-                UpdateCache();
-            }
+            if (cacheDirty) UpdateCache();
             return cachedEntities.size();
         }
 
-        // Execute callback for each matching entity
         template<typename Func>
         void ForEach(Func&& func) {
             for (auto it = begin(); it != end(); ++it) {
@@ -314,7 +326,6 @@ public:
             }
         }
 
-        // Execute callback with entity ID
         template<typename Func>
         void ForEachEntity(Func&& func) {
             for (auto it = begin(); it != end(); ++it) {
@@ -325,24 +336,16 @@ public:
     private:
         void UpdateCache() {
             cachedEntities.clear();
-            
-            // Iterate through all active entities
             for (Entity entity = 1; entity < manager->activeEntities.size(); ++entity) {
-                if (!manager->IsEntityValid(entity)) {
-                    continue;
-                }
-
-                // Check if entity has all required components
+                if (!manager->IsEntityValid(entity)) continue;
                 if ((manager->HasComponent<Components>(entity) && ...)) {
                     cachedEntities.push_back(entity);
                 }
             }
-            
             cacheDirty = false;
         }
     };
 
-    // Create a query for entities with specific components
     template<typename... Components>
     Query<Components...> CreateQuery() {
         static_assert((std::is_base_of_v<IComponent, Components> && ...),
@@ -350,14 +353,12 @@ public:
         return Query<Components...>(this);
     }
 
-    // Helper: Execute callback for all entities with specific components
     template<typename... Components, typename Func>
     void ForEach(Func&& func) {
         auto query = CreateQuery<Components...>();
         query.ForEach(std::forward<Func>(func));
     }
 
-    // Helper: Execute callback with entity ID
     template<typename... Components, typename Func>
     void ForEachEntity(Func&& func) {
         auto query = CreateQuery<Components...>();
@@ -367,6 +368,8 @@ public:
 
 class ISystem {
 public:
+    bool emitGameFinishEvent = false;
+
     virtual ~ISystem() = default;
     virtual void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) = 0;
 };
@@ -374,7 +377,7 @@ public:
 class ECSWorld {
     EntityManager entityManager;
     std::vector<std::unique_ptr<ISystem>> systems;
-	std::vector<EventEntry> events;
+    std::vector<EventEntry> events;
 
 public:
     EntityManager& GetEntityManager() {
@@ -385,18 +388,27 @@ public:
         systems.push_back(std::move(system));
     }
 
-    void Update(bool isServer, float deltaTime) {
-        for (auto& system : systems) {
-            system->Update(entityManager,events, isServer, deltaTime);
-        }
-		//	<< systems.size() << " systems, "
-		//	<< events.size() << " events generated.\n";
+    // Reset the entire world to a blank slate.
+    // Destroys all components (calling Destroy() on each), clears all entities,
+    // clears all systems, and clears all registered component types.
+    // After this call the world is in the same state as a freshly constructed one,
+    // so InitECSLogic / InitECSRenderer can run again without double-registering.
+    void Reset() {
+        events.clear();
+        systems.clear();
+        entityManager.Reset();
     }
 
-    /*void Clear() {
-        entityManager = EntityManager();
-        systems.clear();
-    }*/
+    bool Update(bool isServer, float deltaTime) {
+        bool gameFinished = false;
+
+        for (auto& system : systems) {
+            system->Update(entityManager, events, isServer, deltaTime);
+            if (system->emitGameFinishEvent) gameFinished = true;
+        }
+
+        return gameFinished;
+    }
 
     template<typename T>
     T* GetSystem() {
@@ -406,17 +418,16 @@ public:
                 return casted;
             }
         }
-        return nullptr; // Not found
+        return nullptr;
     }
 
-	std::vector<EventEntry>& GetEvents() {
-		return events;
-	}
+    std::vector<EventEntry>& GetEvents() {
+        return events;
+    }
 
-	void ClearEvents() {
-		events.clear();
-	}
-
+    void ClearEvents() {
+        events.clear();
+    }
 };
 
 class DestroyingSystem : public ISystem {

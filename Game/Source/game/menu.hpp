@@ -32,67 +32,67 @@ public:
     std::string ip;
     std::string port;
     std::string clientName;
-	bool goingToConnect = false;
-	bool connecting = false;
-	bool errorConnecting = false;
+    bool goingToConnect = false;
+    bool connecting = false;
+    bool errorConnecting = false;
 
-	ConnectionData() : ip(""), port(""), clientName(""), goingToConnect(false), connecting(false) {}
-	ConnectionData(const std::string& ip, const std::string& port, const std::string& clientName)
-		: ip(ip), port(port), clientName(clientName), goingToConnect(false), connecting(false) {
-	}
+    ConnectionData() : ip(""), port(""), clientName(""), goingToConnect(false), connecting(false) {}
+    ConnectionData(const std::string& ip, const std::string& port, const std::string& clientName)
+        : ip(ip), port(port), clientName(clientName), goingToConnect(false), connecting(false) {
+    }
 };
 
 class TextAnimationData : public IComponent {
 public:
-	bool active = false;
+    bool active = false;
     int remainTicks = RENDER_TICKS_PER_SECOND / 4;
     int currentState = 0;
 
-	std::string errorMessage = "";
+    std::string errorMessage = "";
 };
 
 class TextAnimationSystem : public ISystem {
-	void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
-		auto query = entityManager.CreateQuery<UIElement, UIText, TextAnimationData>();
+    void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
+        auto query = entityManager.CreateQuery<UIElement, UIText, TextAnimationData>();
 
         auto buttonQuery = entityManager.CreateQuery<UIButton>();
-		UIButton* button = nullptr;
+        UIButton* button = nullptr;
 
-		for (auto [buttonEntity, btn] : buttonQuery) {
-			button = btn;
-		}
+        for (auto [buttonEntity, btn] : buttonQuery) {
+            button = btn;
+        }
 
-		for (auto [entity, element, text, animData] : query) {
-            if (!animData->active) 
+        for (auto [entity, element, text, animData] : query) {
+            if (!animData->active)
             {
                 text->text = animData->errorMessage;
-				button->isInteractable = true;
-				continue;
+                button->isInteractable = true;
+                continue;
             }
 
-			if(button) button->isInteractable = false;
+            if (button) button->isInteractable = false;
 
-			animData->remainTicks--;
-			if (animData->remainTicks <= 0) {
-				animData->currentState = (animData->currentState + 1) % 4;
-				animData->remainTicks = RENDER_TICKS_PER_SECOND / 4;
-				switch (animData->currentState) {
-				case 0:
-					text->text = "Conectando.";
-					break;
-				case 1:
+            animData->remainTicks--;
+            if (animData->remainTicks <= 0) {
+                animData->currentState = (animData->currentState + 1) % 4;
+                animData->remainTicks = RENDER_TICKS_PER_SECOND / 4;
+                switch (animData->currentState) {
+                case 0:
+                    text->text = "Conectando.";
+                    break;
+                case 1:
                     text->text = "Conectando..";
-					break;
-				case 2:
+                    break;
+                case 2:
                     text->text = "Conectando...";
-					break;
+                    break;
                 case 3:
                     text->text = "Conectando";
-					break;
-				}
-			}
-		}
-	}
+                    break;
+                }
+            }
+        }
+    }
 };
 
 // System to detect space key press
@@ -104,22 +104,27 @@ public:
         for (auto [entity, conn] : query) {
 
             if (conn->goingToConnect && !conn->connecting) {
-				Debug::Info("StartScreen") << "Connecting to server at " << conn->ip << ":" << conn->port << "\n";
+                Debug::Info("StartScreen") << "Connecting to server at " << conn->ip << ":" << conn->port << "\n";
                 NetTFG_Engine::Get().ActivateClientAsync(1,
                     [conn](int id, ConnectionCode code) {
                         if (code == CONN_SUCCESS) {
                             Debug::Info("StartScreen") << "Client " << id << " activated!\n";
-							NetTFG_Engine::Get().DeactivateClient(0);
+                            // Use RequestDeactivateClient instead of DeactivateClient:
+                            // this callback runs on a background thread while client 0
+                            // may still be mid-tick on the main thread. The deferred
+                            // version is applied by the engine loop between ticks, which
+                            // is the only safe place to call CloseClient().
+                            NetTFG_Engine::Get().RequestDeactivateClient(0);
                         }
                         else {
                             Debug::Error("StartScreen") << "Client " << id << " failed: " << code << "\n";
-							conn->errorConnecting = true;
-							conn->connecting = false;
-							conn->goingToConnect = false;
-							
+                            conn->errorConnecting = true;
+                            conn->connecting = false;
+                            conn->goingToConnect = false;
+
                         }
-                    }, conn->ip,stoi(conn->port),conn->clientName);
-				conn->connecting = true;
+                    }, conn->ip, stoi(conn->port), conn->clientName);
+                conn->connecting = true;
             }
 
         }
@@ -144,7 +149,7 @@ public:
             m |= INPUT_SPACE;
         }
 
-        
+
         buf.data[0] = m;*/
         return buf;
     }
@@ -186,7 +191,7 @@ public:
         s->frameCount = 0;
         state.len = sizeof(StartScreenGameState);
 
-		world.GetEntityManager().RegisterComponentType<ConnectionData>();
+        world.GetEntityManager().RegisterComponentType<ConnectionData>();
 
         // Create a player entity to receive input
         Entity player = world.GetEntityManager().CreateEntity();
@@ -254,8 +259,8 @@ public:
         StartScreenGameState s;
         std::memcpy(&s, state.data, sizeof(StartScreenGameState));
 
-		world.GetEntityManager().RegisterComponentType<TextAnimationData>();
-		world.AddSystem(std::make_unique<TextAnimationSystem>());
+        world.GetEntityManager().RegisterComponentType<TextAnimationData>();
+        world.AddSystem(std::make_unique<TextAnimationSystem>());
 
         // Create camera
         Entity camera = world.GetEntityManager().CreateEntity();
@@ -276,7 +281,7 @@ public:
         element->layer = 1;  // Lower layer number
 
         UITextField* field = world.GetEntityManager().AddComponent<UITextField>(ipField);
-		field->id = "ip_input";
+        field->id = "ip_input";
         field->placeholderText = "Enter IP here...";
         field->fontSize = 16.0f;
         field->padding = 10.0f;
@@ -291,7 +296,7 @@ public:
         element->layer = 1;  // Lower layer number
 
         field = world.GetEntityManager().AddComponent<UITextField>(portField);
-		field->id = "port_input";
+        field->id = "port_input";
         field->placeholderText = "Enter port here...";
         field->fontSize = 16.0f;
         field->padding = 10.0f;
@@ -306,7 +311,7 @@ public:
         element->layer = 1;  // Lower layer number
 
         field = world.GetEntityManager().AddComponent<UITextField>(nameField);
-		field->id = "name_input";
+        field->id = "name_input";
         field->placeholderText = "Enter name here...";
         field->fontSize = 16.0f;
         field->padding = 10.0f;
@@ -320,11 +325,11 @@ public:
         element->layer = 10;  // HIGHER layer number - renders on top!
 
         UIButton* button = world.GetEntityManager().AddComponent<UIButton>(buttonElement);
-		button->text = "Connect";
+        button->text = "Connect";
 
-		button->onClick = [this, button]() {
-			button->isInteractable = false; // Disable button after click
-		};
+        button->onClick = [this, button]() {
+            button->isInteractable = false; // Disable button after click
+            };
 
         // Create UI text entity (HIGHER layer = rendered last, on top of everything)
         Entity startText = world.GetEntityManager().CreateEntity();
@@ -341,17 +346,17 @@ public:
         text->SetColor(1.0f, 1.0f, 1.0f, 1.0f);  // White
         text->SetFont("default");
 
-		Entity imageEntity = world.GetEntityManager().CreateEntity();
-		UIElement* imgElement = world.GetEntityManager().AddComponent<UIElement>(imageEntity, UIElement{});
-		imgElement->anchor = UIAnchor::BOTTOM_RIGHT;
-		imgElement->position = glm::vec2(-400.0f, -400.0f);
-		imgElement->size = glm::vec2(400.0f, 400.0f);
-		imgElement->layer = 5;
-		UIImage* imgComp = world.GetEntityManager().AddComponent<UIImage>(imageEntity, UIImage{});
-		imgComp->texturePath = "spaceboard.png";
-        
+        Entity imageEntity = world.GetEntityManager().CreateEntity();
+        UIElement* imgElement = world.GetEntityManager().AddComponent<UIElement>(imageEntity, UIElement{});
+        imgElement->anchor = UIAnchor::BOTTOM_RIGHT;
+        imgElement->position = glm::vec2(-400.0f, -400.0f);
+        imgElement->size = glm::vec2(400.0f, 400.0f);
+        imgElement->layer = 5;
+        UIImage* imgComp = world.GetEntityManager().AddComponent<UIImage>(imageEntity, UIImage{});
+        imgComp->texturePath = "spaceboard.png";
 
-		world.GetEntityManager().AddComponent<TextAnimationData>(startText);
+
+        world.GetEntityManager().AddComponent<TextAnimationData>(startText);
 
         // Create player entity for input
         Entity player = world.GetEntityManager().CreateEntity();
@@ -362,11 +367,11 @@ public:
                 return;
             }
 
-			StartScreenGame* gameLogic = dynamic_cast<StartScreenGame*>(logic);
-			StartScreenGameRenderer* gameRenderer = dynamic_cast<StartScreenGameRenderer*>(renderer);
-			if (!gameLogic || !gameRenderer) {
-				return;
-			}
+            StartScreenGame* gameLogic = dynamic_cast<StartScreenGame*>(logic);
+            StartScreenGameRenderer* gameRenderer = dynamic_cast<StartScreenGameRenderer*>(renderer);
+            if (!gameLogic || !gameRenderer) {
+                return;
+            }
 
             auto& em2 = gameLogic->world.GetEntityManager();
             auto connQuery = em2.CreateQuery<ConnectionData>();
@@ -388,23 +393,23 @@ public:
                     }
                 }
 
-				auto buttonQuery = em.CreateQuery<UIButton>();
+                auto buttonQuery = em.CreateQuery<UIButton>();
 
                 for (auto [buttonEntity, button] : buttonQuery) {
 
-                    if (connData->errorConnecting) 
+                    if (connData->errorConnecting)
                     {
-						connData->errorConnecting = false;
-						button->isInteractable = true;
-						auto textAnimQuery = em.CreateQuery<UIElement, UIText, TextAnimationData>();
-						for (auto [taEntity, taElement, taText, taData] : textAnimQuery) {
-							taData->active = false;
-							taData->errorMessage = "Error connecting to " + connData->ip + ":" + connData->port;
-						}
+                        connData->errorConnecting = false;
+                        button->isInteractable = true;
+                        auto textAnimQuery = em.CreateQuery<UIElement, UIText, TextAnimationData>();
+                        for (auto [taEntity, taElement, taText, taData] : textAnimQuery) {
+                            taData->active = false;
+                            taData->errorMessage = "Error connecting to " + connData->ip + ":" + connData->port;
+                        }
                     }
                     else if (!button->isInteractable) {
                         connData->goingToConnect = true;
-						auto textAnimQuery = em.CreateQuery<UIElement, UIText, TextAnimationData>();
+                        auto textAnimQuery = em.CreateQuery<UIElement, UIText, TextAnimationData>();
                         for (auto [taEntity, taElement, taText, taData] : textAnimQuery) {
                             taData->active = true;
                         }
@@ -412,13 +417,13 @@ public:
                 }
             }
 
-			
-			
-        };
+
+
+            };
 
 
         AudioManager::SetMusicVolume(0.25f);
-		AudioManager::PlayMusic("BandaSonora.wav", true);
+        AudioManager::PlayMusic("BandaSonora.wav", true);
         //printf("[StartScreen] Renderer initialized!\n");
     }
 

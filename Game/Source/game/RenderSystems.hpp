@@ -11,6 +11,7 @@
 #include "ecs/UI/UIElement.hpp"
 #include "Components.hpp"
 #include "GameState.hpp"
+#include "NetTFG_Engine.hpp"
 
 // Returns the playerId of the sole surviving player, or -1 if the game is
 // still ongoing (0 or 2+ players alive).
@@ -42,6 +43,12 @@ public:
         float deltaTime
     ) override
     {
+        auto buttonQuery = entityManager.CreateQuery<UIElement, UIButton>();
+
+        for (auto [entity, element, button] : buttonQuery)
+        {
+            element->isVisible = false;
+        }
 
         auto camQuery = entityManager.CreateQuery<Camera, Transform>();
         if (camQuery.Count() == 0)
@@ -94,10 +101,17 @@ public:
                 {
                     element->anchor = UIAnchor::TOP_CENTER;
                     element->position = glm::vec2(0.0f, 20.0f);
-                    element->size = glm::vec2(300.0f, 40.0f);
-                    element->pivot = glm::vec2(0.0f, 0.0f);
+                    element->size = glm::vec2(350.0f, 80.0f);
+                    element->pivot = glm::vec2(0.5f);
                     text->text = "PLAYER " + std::to_string(winnerId + 1) + " WINS";
                 }
+
+				auto buttonQuery = entityManager.CreateQuery<UIElement, UIButton>();
+
+				for (auto [entity, element, button] : buttonQuery)
+				{
+					element->isVisible = true;
+				}
             }
 
             float zoom = 0.6f;
@@ -318,6 +332,13 @@ public:
                             }
                         }
                     }
+                }
+
+                auto buttonQuery = entityManager.CreateQuery<UIElement, UIButton>();
+
+                for (auto [entity, element, button] : buttonQuery)
+                {
+                    element->isVisible = true;
                 }
 
                 auto textQuery = entityManager.CreateQuery<UIElement, UIText>();

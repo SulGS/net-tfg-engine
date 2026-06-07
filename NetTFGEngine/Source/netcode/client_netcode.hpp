@@ -51,7 +51,7 @@ public:
 		Snapshot& snapshot = GetSnapshot(deltaFrame);
 		lastConfirmedFrame = deltaFrame;
 		snapshot.stateConfirmed = true;
-		
+
 
 		bool needsCorrection = false;
 
@@ -64,7 +64,7 @@ public:
 		latestServerState = snapshot.state;
 		latestServerState.frame = deltaFrame;
 
-		if (needsCorrection) 
+		if (needsCorrection)
 		{
 			currentFrame = lastConfirmedFrame + framesAheadOfServer;
 
@@ -99,10 +99,10 @@ public:
 		latestServerState = update.state;
 		latestServerState.frame = update.frame;
 
-		
 
 
-		if (gameLogic->CompareStates(snapshot.state, update.state) )
+
+		if (gameLogic->CompareStates(snapshot.state, update.state))
 		{
 			return; // No reconciliation needed
 		}
@@ -149,7 +149,7 @@ public:
 		currentState = predictedSnapshot.state;
 		currentState.frame = currentFrame;
 
-		
+
 	}
 
 	void SetGameLogic(std::unique_ptr<IGameLogic> logic) {
@@ -177,6 +177,14 @@ public:
 
 	IGameLogic* GetGameLogic() const {
 		return gameLogic.get();
+	}
+
+	// Transfer ownership of gameLogic back to the caller.
+	// Must be called before deleting the prediction object if the logic
+	// needs to survive for the next session (e.g. OnlineClient re-activation).
+	std::unique_ptr<IGameLogic> ReleaseGameLogic() {
+		std::lock_guard<std::mutex> lock(mtx);
+		return std::move(gameLogic);
 	}
 
 private:

@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "netcode/netcode_common.hpp"
 #include "netcode/client_window.hpp"
@@ -13,19 +13,26 @@
 class OfflineClient : public Client {
 public:
     OfflineClient(std::unique_ptr<IGameLogic> gameLogic,
-        std::unique_ptr<IGameRenderer> gameRenderer,std::string binFileName)
+        std::unique_ptr<IGameRenderer> gameRenderer, std::string binFileName)
         : gameLogic_(std::move(gameLogic))
         , gameRenderer_(std::move(gameRenderer))
         , assignedPlayerId_(0)
-		, cWindow_(nullptr)
+        , cWindow_(nullptr)
     {
-		binName = binFileName;
+        binName = binFileName;
     }
 
     ConnectionCode SetupClient(const std::string& hostStr = "0.0.0.0", uint16_t port = 0, const std::string& customClientId = "") override {
         Debug::Info("OfflineClient") << "Starting offline game (ignoring host and port parameters)\n";
 
-		isOfflineClient = true;
+        // Guard against being called again while already set up (re-activation after CloseClient)
+        if (cWindow_) {
+            cWindow_->deactivate();
+            delete cWindow_;
+            cWindow_ = nullptr;
+        }
+
+        isOfflineClient = true;
 
         gameRenderer_->playerId = assignedPlayerId_;
         gameLogic_->playerId = assignedPlayerId_;
@@ -80,10 +87,13 @@ public:
     }
 
     void CloseClient() override {
-
-        cWindow_->deactivate();
-        delete cWindow_;
-        Debug::Info("OfflineClient") << "[OFFLINE] Offline client finalished\n";
+        if (cWindow_) {
+            cWindow_->deactivate();
+            delete cWindow_;
+            cWindow_ = nullptr;  // prevent dangling pointer on re-activation
+        }
+        currentFrame_ = 0;      // reset so the next session starts from frame 0
+        Debug::Info("OfflineClient") << "[OFFLINE] Offline client finished\n";
     }
 
 private:
@@ -91,9 +101,9 @@ private:
     std::unique_ptr<IGameRenderer> gameRenderer_;
     int assignedPlayerId_;
 
-	ClientWindow* cWindow_;
-	GameStateBlob gameState_;
-	int currentFrame_ = 0;
+    ClientWindow* cWindow_;
+    GameStateBlob gameState_;
+    int currentFrame_ = 0;
 
-    
+
 };
