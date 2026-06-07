@@ -152,4 +152,11 @@ public:
 	ExitButtonChecker() : exitPressed(false) {}
 };
 
+class ThrusterSound : public IComponent {
+public:
+	int shipEntity; // The ship this thruster sound belongs to
+	ThrusterSound() : shipEntity(-1) {}
+	ThrusterSound(int se) : shipEntity(se) {}
+};
+
 #endif // COMPONENTS_ASTEROIDS

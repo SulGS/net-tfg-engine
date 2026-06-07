@@ -850,6 +850,7 @@ public:
 		world.GetEntityManager().RegisterComponentType<ExplosionPlayerID>();
 		world.GetEntityManager().RegisterComponentType<LinkAudioToBullet>();
 		world.GetEntityManager().RegisterComponentType<ExitButtonChecker>();
+		world.GetEntityManager().RegisterComponentType<ThrusterSound>();
 
         // --- Sun ---
         Entity sunEntity = world.GetEntityManager().CreateEntity();
@@ -884,6 +885,16 @@ public:
                 tL->setPosition(glm::vec3(s.posX[i], s.posY[i], 0.0f));
                 world.GetEntityManager().AddComponent<AudioListenerComponent>(listenerForShipEntity, AudioListenerComponent{});
             }
+
+			Entity thrusterSoundEntity = world.GetEntityManager().CreateEntity();
+			Transform* tS = world.GetEntityManager().AddComponent<Transform>(thrusterSoundEntity, Transform{});
+			tS->setPosition(glm::vec3(s.posX[i], s.posY[i], 0.0f));
+			AudioSourceComponent* audio = world.GetEntityManager().AddComponent<AudioSourceComponent>(
+				thrusterSoundEntity, AudioSourceComponent("engine.wav", AudioChannel::SFX, true));
+			audio->gain = 0.0f; // Start muted, will be unmuted when moving
+			audio->play = true;
+			audio->loop = true;
+			world.GetEntityManager().AddComponent<ThrusterSound>(thrusterSoundEntity, ThrusterSound{ i });
 
             // --- Thrusters for this player ---
             struct ThrusterDef { bool isSmoke; bool isLeft; };
@@ -1205,6 +1216,7 @@ public:
         world.AddSystem(std::make_unique<LinkThrusterToShipSystem>());
         world.AddSystem(std::make_unique<LaserWallRenderSystem>());
 		world.AddSystem(std::make_unique<UpdateListenerTransformSystem>());
+		world.AddSystem(std::make_unique<ThrustersSoundSystem>());
         world.AddSystem(std::make_unique<DestroyTimerSystem>());
 
         //world.GetEntityManager().AddComponent<AudioListenerComponent>(camera, AudioListenerComponent{});
