@@ -96,6 +96,14 @@ public:
         Debug::Info("OfflineClient") << "[OFFLINE] Offline client finished\n";
     }
 
+	EntityManager* GetEntityManager() override {
+		IECSGameLogic* ecsLogic = dynamic_cast<IECSGameLogic*>(gameLogic_.get());
+		if (ecsLogic) {
+			return &ecsLogic->world.GetEntityManager();
+		}
+        return nullptr;
+	}
+
 private:
     std::unique_ptr<IGameLogic> gameLogic_;
     std::unique_ptr<IGameRenderer> gameRenderer_;

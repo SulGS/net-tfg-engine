@@ -88,10 +88,27 @@ public:
         size_t index = it->second;
         Client* client = ClientManager::Get().GetClient(index);
 
-        AssetManager::instance().unloadBin(client->binName);
-
         if (client) {
-            // Close the client properly
+            // ---------------------------------------------------------------
+            // AUDIO CLEANUP — must happen before CloseClient() / unloadBin().
+            //
+            // StopAllSources is the guaranteed path: it bypasses the ECS and
+            // operates directly on the AL source pool, stopping every in-use
+            // or playing source, detaching its buffer, freeing the slot, and
+            // clearing the activeAudioEntities tracking set.  This works even
+            // when GetEntityManager() returns nullptr (e.g. OnlineClient after
+            // SetupClient moves gameLogic_ into ClientPredictionNetcode).
+            //
+            // FlushEntities is called first as a best-effort ECS-level pass:
+            // if the EntityManager IS reachable it properly decrements the
+            // per-buffer AssetManager ref-counts and resets component fields.
+            // If it returns early (nullptr EM), StopAllSources still silences
+            // everything at the AL driver level.
+            // ---------------------------------------------------------------
+            AudioManager::FlushEntities(client->GetEntityManager());
+            AudioManager::StopAllSources();
+
+            AssetManager::instance().unloadBin(client->binName);
             client->CloseClient();
         }
 
@@ -119,10 +136,12 @@ public:
         auto& mgr = ClientManager::Get();
         auto activeIndices = mgr.GetActiveIndices();
 
-        // Close all active clients
+        // Flush audio and close all active clients
         for (size_t index : activeIndices) {
             Client* client = mgr.GetClient(index);
             if (client) {
+                AudioManager::FlushEntities(client->GetEntityManager());
+                AudioManager::StopAllSources();
                 client->CloseClient();
             }
         }

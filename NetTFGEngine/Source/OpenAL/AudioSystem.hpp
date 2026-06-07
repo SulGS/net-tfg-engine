@@ -455,6 +455,132 @@ public:
         entityManager.releaseMutex();
     }
 
+    /* ===========================================================
+       SOURCE LIFECYCLE  (public so AudioManager can call them
+       directly when flushing a client's entities on shutdown)
+       =========================================================== */
+
+       // Allocates an AL source from the pool, loads the WAV buffer via
+       // AssetManager, and marks the component as initialized.
+    void initializeSource(AudioSourceComponent& ac)
+    {
+        if (ac.initialized)
+            return;
+
+        auto reqBuffer =
+            AssetManager::instance().loadAsset<AudioBuffer>(ac.filePath);
+
+        if (!reqBuffer)
+        {
+            Debug::Error("AudioSystem")
+                << "Failed to load WAV: " << ac.filePath << "\n";
+            return;
+        }
+
+        ac.buffer = reqBuffer->value;
+
+        ac.source = acquireSource();
+        if (ac.source == 0)
+        {
+            AssetManager::instance().unloadAsset<AudioBuffer>(ac.filePath);
+            Debug::Warning("AudioSystem")
+                << "No free audio sources available\n";
+            return;
+        }
+
+        alSourcei(ac.source, AL_BUFFER, ac.buffer);
+        alSourcei(ac.source, AL_LOOPING, ac.loop ? AL_TRUE : AL_FALSE);
+        alSourcef(ac.source, AL_REFERENCE_DISTANCE, 5.0f);
+        alSourcef(ac.source, AL_MAX_DISTANCE, 50.0f);
+        alSourcef(ac.source, AL_ROLLOFF_FACTOR, 1.0f);
+
+        ac.initialized = true;
+    }
+
+    // Stops the AL source, returns it to the pool, releases the buffer
+    // ref-count in AssetManager, and resets the component fields to zero.
+    void cleanupSource(AudioSourceComponent& ac)
+    {
+        if (!ac.initialized)
+            return;
+
+        releaseSource(ac.source);
+
+        AssetManager::instance().unloadAsset<AudioBuffer>(ac.filePath);
+
+        ac.initialized = false;
+        ac.source = 0;
+        ac.buffer = 0;
+    }
+
+    // Removes the source from activeAudioEntities in addition to calling
+    // cleanupSource.  Use this variant when iterating the ECS externally
+    // (e.g. AudioManager::FlushEntities) so the internal tracking set
+    // stays consistent with the component state.
+    void cleanupSourceAndUntrack(AudioSourceComponent& ac, Entity ent)
+    {
+        cleanupSource(ac);
+        activeAudioEntities.erase(ent);
+    }
+
+    // Updates the AL source position from the entity's Transform.
+    // Engine is Z-up right-handed; OpenAL is Y-up right-handed.
+    // Remap: OpenAL(x, y, z) = Engine(x, z, -y)
+    void updateSourceTransform(AudioSourceComponent& ac, const Transform& t)
+    {
+        if (!ac.initialized) return;
+
+        glm::vec3 newPos = t.getPosition();
+
+        auto toAL = [](glm::vec3 v) -> glm::vec3 {
+            return { v.x, v.z, -v.y };
+            };
+
+        glm::vec3 posAL = toAL(newPos);
+        alSource3f(ac.source, AL_POSITION, posAL.x, posAL.y, posAL.z);
+    }
+
+    // -----------------------------------------------------------------------
+    // StopAllSources — stops every SFX source in the pool and marks them free.
+    //
+    // Called when a client is deactivated.  The ECS components that hold
+    // AudioSourceComponent may not be reachable here (e.g. OnlineClient moves
+    // gameLogic_ into ClientPredictionNetcode, making GetEntityManager() return
+    // nullptr).  Rather than trying to walk the ECS, we go directly to the
+    // pool: every slot that is in-use or still playing gets stopped, its
+    // AL_BUFFER detached, and its slot freed.
+    //
+    // AssetManager buffer ref-counts are NOT decremented here because we have
+    // no filePath to key on.  The bin-level unload in DeactivateClient
+    // (AssetManager::unloadBin) handles that for the whole client at once.
+    //
+    // Music is intentionally left untouched — the caller decides whether to
+    // stop music separately via AudioManager::StopMusic().
+    // -----------------------------------------------------------------------
+    void StopAllSources()
+    {
+        for (size_t i = 0; i < sourcePool.size(); ++i)
+        {
+            // Stop every source that is still audible, whether the pool slot
+            // is marked in-use or not (guards against any leaked acquisitions).
+            ALint state;
+            alGetSourcei(sourcePool[i], AL_SOURCE_STATE, &state);
+            if (sourceInUse[i] || state == AL_PLAYING || state == AL_PAUSED)
+            {
+                alSourceStop(sourcePool[i]);
+                alSourcei(sourcePool[i], AL_BUFFER, 0);
+                sourceInUse[i] = false;
+            }
+        }
+
+        // The activeAudioEntities set now refers to entities from the closing
+        // client that no longer exist.  Clear it so Update() doesn't try to
+        // walk them on the next tick.
+        activeAudioEntities.clear();
+
+        Debug::Info("AudioSystem") << "All SFX sources stopped and pool reset\n";
+    }
+
 private:
 
     /* ===========================================================
@@ -623,75 +749,8 @@ private:
     }
 
     /* ===========================================================
-       3D AUDIO SOURCES
+       SOURCE POOL
        =========================================================== */
-    void initializeSource(AudioSourceComponent& ac)
-    {
-        if (ac.initialized)
-            return;
-
-        auto reqBuffer =
-            AssetManager::instance().loadAsset<AudioBuffer>(ac.filePath);
-
-        if (!reqBuffer)
-        {
-            Debug::Error("AudioSystem")
-                << "Failed to load WAV: " << ac.filePath << "\n";
-            return;
-        }
-
-        ac.buffer = reqBuffer->value;
-
-        ac.source = acquireSource();
-        if (ac.source == 0)
-        {
-            AssetManager::instance().unloadAsset<AudioBuffer>(ac.filePath);
-            Debug::Warning("AudioSystem")
-                << "No free audio sources available\n";
-            return;
-        }
-
-        alSourcei(ac.source, AL_BUFFER, ac.buffer);
-        alSourcei(ac.source, AL_LOOPING, ac.loop ? AL_TRUE : AL_FALSE);
-        alSourcef(ac.source, AL_REFERENCE_DISTANCE, 5.0f);
-        alSourcef(ac.source, AL_MAX_DISTANCE, 50.0f);
-        alSourcef(ac.source, AL_ROLLOFF_FACTOR, 1.0f);
-
-        ac.initialized = true;
-    }
-
-
-    void cleanupSource(AudioSourceComponent& ac)
-    {
-        if (!ac.initialized)
-            return;
-
-        releaseSource(ac.source);
-
-        AssetManager::instance().unloadAsset<AudioBuffer>(ac.filePath);
-
-        ac.initialized = false;
-        ac.source = 0;
-        ac.buffer = 0;
-    }
-
-
-    void updateSourceTransform(AudioSourceComponent& ac, const Transform& t) {
-        if (!ac.initialized) return;
-
-        glm::vec3 newPos = t.getPosition();
-
-        // Engine is Z-up right-handed. OpenAL is Y-up right-handed.
-        // Remap: OpenAL(x, y, z) = Engine(x, z, -y)
-        auto toAL = [](glm::vec3 v) -> glm::vec3 {
-            return { v.x, v.z, -v.y };
-            };
-
-        glm::vec3 posAL = toAL(newPos);
-
-        alSource3f(ac.source, AL_POSITION, posAL.x, posAL.y, posAL.z);
-    }
-
     static constexpr int MAX_SOURCES = 32;
 
     std::vector<ALuint> sourcePool;

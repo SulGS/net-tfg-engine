@@ -183,6 +183,14 @@ public:
         Debug::Info("OnlineClient") << "[ONLINE] Online client finished\n";
     }
 
+    EntityManager* GetEntityManager() override {
+        IECSGameLogic* ecsLogic = dynamic_cast<IECSGameLogic*>(gameLogic_.get());
+        if (ecsLogic) {
+            return &ecsLogic->world.GetEntityManager();
+        }
+		return nullptr;
+    }
+
     const std::string& GetClientId() const { return clientId_; }
 
 private:

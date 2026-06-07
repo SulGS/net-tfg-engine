@@ -103,6 +103,9 @@ public:
         UIRenderSystem* ui_system = world.GetSystem<UIRenderSystem>();
         ui_system->UpdateScreenSize(window->getLogicalWidth(), window->getLogicalHeight());
 
+        UIUpdateSystem* ui_update = world.GetSystem<UIUpdateSystem>();
+        ui_update->UpdateScreenSize(window->getLogicalWidth(), window->getLogicalHeight());
+
         auto t1 = std::chrono::high_resolution_clock::now();
         world.Update(false, 1.0f / RENDER_TICKS_PER_SECOND);
         auto t2 = std::chrono::high_resolution_clock::now();
