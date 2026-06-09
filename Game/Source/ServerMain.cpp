@@ -44,8 +44,8 @@ int main(int argc, char** argv) {
     std::unique_ptr<IGameRenderer> gameRenderer = std::make_unique<AsteroidShooterGameRenderer>();
 
     ServerConfig config(port);
-	config.minPlayers = 2;
-    config.maxPlayers = 2;
+	config.minPlayers = 1;
+    config.maxPlayers = 1;
     config.allowReconnection = true;
     config.allowMidGameJoin = true;
     config.requireClientId = false;

@@ -68,9 +68,11 @@ void main() {
 }
 )";
 
-UIRenderSystem::UIRenderSystem(int width, int height)
-    : screenWidth(width)
-    , screenHeight(height)
+UIRenderSystem::UIRenderSystem(int refWidth, int refHeight)
+    : refWidth(refWidth)
+    , refHeight(refHeight)
+    , screenWidth(refWidth)
+    , screenHeight(refHeight)
     , mousePosition(0.0f)
     , mouseDown(false)
     , hoveredButton(0)
@@ -103,32 +105,32 @@ void UIRenderSystem::Update(EntityManager& entityManager, std::vector<EventEntry
     GLint blendSrc, blendDst;
     glGetIntegerv(GL_BLEND_SRC_ALPHA, &blendSrc);
     glGetIntegerv(GL_BLEND_DST_ALPHA, &blendDst);
-    
+
     // Setup UI rendering state
     glDisable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    
+
     glUseProgram(shaderProgram);
-    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "uProjection"), 
-                       1, GL_FALSE, glm::value_ptr(projection));
-    
+    glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "uProjection"),
+        1, GL_FALSE, glm::value_ptr(projection));
+
     // Collect all UI elements and sort by layer
     std::vector<std::tuple<Entity, UIElement*, int>> uiElements;
-    
+
     auto query = entityManager.CreateQuery<UIElement>();
     for (auto [entity, element] : query) {
         if (element->isVisible) {
-            uiElements.push_back({entity, element, element->layer});
+            uiElements.push_back({ entity, element, element->layer });
         }
     }
-    
+
     // Sort by layer (lower layers rendered first)
-    std::sort(uiElements.begin(), uiElements.end(), 
+    std::sort(uiElements.begin(), uiElements.end(),
         [](const auto& a, const auto& b) {
             return std::get<2>(a) < std::get<2>(b);
         });
-    
+
     // Render all UI elements
     for (const auto& [entity, element, layer] : uiElements) {
         // Check for button component
@@ -137,7 +139,7 @@ void UIRenderSystem::Update(EntityManager& entityManager, std::vector<EventEntry
             UpdateButton(entity, element, button);
             RenderUIButton(entity, element, button);
         }
-        
+
         // Check for image component
         UIImage* image = entityManager.GetComponent<UIImage>(entity);
         if (image) {
@@ -156,11 +158,11 @@ void UIRenderSystem::Update(EntityManager& entityManager, std::vector<EventEntry
 
             // Render the image every frame (if loaded)
             if (image->isLoaded) {
-				//Debug::Info("UIRenderSystem") << "Rendering image with texture ID: " << image->textureID << "\n";
+                //Debug::Info("UIRenderSystem") << "Rendering image with texture ID: " << image->textureID << "\n";
                 RenderUIImage(element, image);
             }
         }
-        
+
         // Check for text component
         UIText* text = entityManager.GetComponent<UIText>(entity);
         if (text) {
@@ -173,13 +175,13 @@ void UIRenderSystem::Update(EntityManager& entityManager, std::vector<EventEntry
         }
 
     }
-    
+
     glUseProgram(0);
-    
+
     // Restore previous OpenGL state
     if (depthTest) glEnable(GL_DEPTH_TEST);
     else glDisable(GL_DEPTH_TEST);
-    
+
     if (!blend) glDisable(GL_BLEND);
     glBlendFunc(blendSrc, blendDst);
 }
@@ -259,11 +261,13 @@ void UIRenderSystem::InitializeQuad() {
 }
 
 void UIRenderSystem::UpdateProjection() {
-    projection = glm::ortho(0.0f, (float)screenWidth, (float)screenHeight, 0.0f, -1.0f, 1.0f);
+    // Ortho over reference dimensions. The GPU viewport stretches reference-space
+    // geometry to fill the actual screen automatically.
+    projection = glm::ortho(0.0f, (float)refWidth, (float)refHeight, 0.0f, -1.0f, 1.0f);
 }
 
 void UIRenderSystem::RenderUIImage(const UIElement* element, const UIImage* image) {
-    glm::vec2 pos = element->GetScreenPosition(screenWidth, screenHeight);
+    glm::vec2 pos = element->GetScreenPosition(refWidth, refHeight);
     glm::vec4 color = image->color * glm::vec4(1.0f, 1.0f, 1.0f, element->opacity);
 
     RenderQuad(pos, element->size, color, image->textureID, image->uvRect);
@@ -271,8 +275,8 @@ void UIRenderSystem::RenderUIImage(const UIElement* element, const UIImage* imag
 
 void UIRenderSystem::RenderUIText(const UIElement* element, const UIText* text) {
     if (text->text.empty()) return;
-    
-    glm::vec2 pos = element->GetScreenPosition(screenWidth, screenHeight);
+
+    glm::vec2 pos = element->GetScreenPosition(refWidth, refHeight);
 
     const std::string fontName = text->fontName;
     if (!fontManager || !fontManager->HasFont(fontName)) {
@@ -289,17 +293,17 @@ void UIRenderSystem::RenderUIText(const UIElement* element, const UIText* text) 
     if (!refChar) {
         refChar = fontManager->GetCharacter(fontName, 'A');
     }
-    
+
     float loadedFontSize = refChar ? static_cast<float>(refChar->size.y) : 48.0f;
     float scale = text->fontSize / loadedFontSize;
 
     // Use text shader
     glUseProgram(textShaderProgram);
-    glUniformMatrix4fv(glGetUniformLocation(textShaderProgram, "uProjection"), 
-                       1, GL_FALSE, glm::value_ptr(projection));
+    glUniformMatrix4fv(glGetUniformLocation(textShaderProgram, "uProjection"),
+        1, GL_FALSE, glm::value_ptr(projection));
     glm::vec4 textColor = text->color * glm::vec4(1.0f, 1.0f, 1.0f, element->opacity);
-    glUniform4fv(glGetUniformLocation(textShaderProgram, "textColor"), 
-                 1, glm::value_ptr(textColor));
+    glUniform4fv(glGetUniformLocation(textShaderProgram, "textColor"),
+        1, glm::value_ptr(textColor));
 
     glActiveTexture(GL_TEXTURE0);
     glBindVertexArray(textVAO);
@@ -309,7 +313,7 @@ void UIRenderSystem::RenderUIText(const UIElement* element, const UIText* text) 
     // - bearing.y is the distance from baseline to top of glyph
     // - Characters sit on the baseline, descenders go below
     float cursorX = pos.x;
-    
+
     // Find the maximum bearing.y to establish a consistent baseline
     float maxBearingY = 0.0f;
     for (char c : text->text) {
@@ -318,10 +322,10 @@ void UIRenderSystem::RenderUIText(const UIElement* element, const UIText* text) 
             maxBearingY = static_cast<float>(ch->bearing.y);
         }
     }
-    
+
     // Baseline is at pos.y + maxBearingY (scaled)
     float baselineY = pos.y + (maxBearingY * scale);
-    
+
     // If element has a height, center the text vertically
     if (element->size.y > 0.0f) {
         // Measure total text height
@@ -337,7 +341,7 @@ void UIRenderSystem::RenderUIText(const UIElement* element, const UIText* text) 
             }
         }
         float totalTextHeight = maxHeight - minY;
-        
+
         // Center vertically in element
         float yOffset = (element->size.y - totalTextHeight) * 0.5f;
         baselineY = pos.y + yOffset + maxHeight;
@@ -389,7 +393,7 @@ void UIRenderSystem::RenderUIText(const UIElement* element, const UIText* text) 
 }
 
 void UIRenderSystem::RenderUIButton(Entity entity, const UIElement* element, const UIButton* button) {
-    glm::vec2 pos = element->GetScreenPosition(screenWidth, screenHeight);
+    glm::vec2 pos = element->GetScreenPosition(refWidth, refHeight);
 
     // Render background
     glm::vec4 bgColor = button->GetCurrentColor() * glm::vec4(1.0f, 1.0f, 1.0f, element->opacity);
@@ -549,7 +553,7 @@ void UIRenderSystem::RenderQuad(const glm::vec2& position, const glm::vec2& size
 
 
 void UIRenderSystem::RenderUITextField(const UIElement* element, const UITextField* textField) {
-    glm::vec2 pos = element->GetScreenPosition(screenWidth, screenHeight);
+    glm::vec2 pos = element->GetScreenPosition(refWidth, refHeight);
 
     // Render background
     glm::vec4 bgColor = textField->GetCurrentBackgroundColor() * glm::vec4(1.0f, 1.0f, 1.0f, element->opacity);
@@ -736,14 +740,14 @@ void UIRenderSystem::RenderUITextField(const UIElement* element, const UITextFie
 }
 
 void UIRenderSystem::UpdateButton(Entity entity, UIElement* element, UIButton* button) {
-    
+
 }
 
 GLuint UIRenderSystem::CompileShader(const char* source, GLenum type) {
     GLuint shader = glCreateShader(type);
     glShaderSource(shader, 1, &source, nullptr);
     glCompileShader(shader);
-    
+
     GLint success;
     glGetShaderiv(shader, GL_COMPILE_STATUS, &success);
     if (!success) {
@@ -751,19 +755,19 @@ GLuint UIRenderSystem::CompileShader(const char* source, GLenum type) {
         glGetShaderInfoLog(shader, 512, nullptr, infoLog);
         Debug::Info("UISystem") << "UI Shader compilation failed: " << infoLog << "\n";
     }
-    
+
     return shader;
 }
 
 GLuint UIRenderSystem::CreateTextShaderProgram() {
     GLuint vertexShader = CompileShader(textVertexShader, GL_VERTEX_SHADER);
     GLuint fragmentShader = CompileShader(textFragmentShader, GL_FRAGMENT_SHADER);
-    
+
     GLuint program = glCreateProgram();
     glAttachShader(program, vertexShader);
     glAttachShader(program, fragmentShader);
     glLinkProgram(program);
-    
+
     GLint success;
     glGetProgramiv(program, GL_LINK_STATUS, &success);
     if (!success) {
@@ -771,10 +775,10 @@ GLuint UIRenderSystem::CreateTextShaderProgram() {
         glGetProgramInfoLog(program, 512, nullptr, infoLog);
         Debug::Info("UISystem") << "Text shader linking failed: " << infoLog << "\n";
     }
-    
+
     glDeleteShader(vertexShader);
     glDeleteShader(fragmentShader);
-    
+
     return program;
 }
 

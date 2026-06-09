@@ -10,7 +10,7 @@
 
 class UIUpdateSystem : public ISystem {
 public:
-    UIUpdateSystem(int screenWidth, int screenHeight, GLFWwindow* window, FontManager* fontMgr);
+    UIUpdateSystem(int refWidth, int refHeight, GLFWwindow* window, FontManager* fontMgr);
     ~UIUpdateSystem();
 
     void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override;
@@ -30,6 +30,8 @@ public:
     void SetupCallbacks();
 
 private:
+    int refWidth;
+    int refHeight;
     int screenWidth;
     int screenHeight;
     glm::vec2 mousePosition;

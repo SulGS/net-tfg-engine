@@ -65,10 +65,11 @@ public:
         world.AddSystem(std::make_unique<CameraSystem>());
         world.AddSystem(std::make_unique<ParticleSystem>());
         world.AddSystem(std::make_unique<RenderSystem>());
-        world.AddSystem(std::make_unique<UIRenderSystem>(window->getLogicalWidth(), window->getLogicalHeight()));
+        world.AddSystem(std::make_unique<UIRenderSystem>(1920,1080));
+
+        AudioManager::SetEntityManager(&world.GetEntityManager());
 
         ParticleSystem* particleSys = world.GetSystem<ParticleSystem>();
-        AudioManager::SetEntityManager(&world.GetEntityManager());
         particleSys->Init();
 
         RenderSystem* renderSys = world.GetSystem<RenderSystem>();
@@ -78,7 +79,7 @@ public:
 
         UIRenderSystem* uir = world.GetSystem<UIRenderSystem>();
 
-        world.AddSystem(std::make_unique<UIUpdateSystem>(window->getLogicalWidth(), window->getLogicalHeight(), window->getWindow(), uir->GetFontManager()));
+        world.AddSystem(std::make_unique<UIUpdateSystem>(1920, 1080, window->getWindow(), uir->GetFontManager()));
 
         uir->LoadFont("default", "C:/Windows/Fonts/arial.ttf", 32);
     }

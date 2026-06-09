@@ -6,9 +6,11 @@
 // Static pointer for callback access
 static UIUpdateSystem* g_UIUpdateSystemInstance = nullptr;
 
-UIUpdateSystem::UIUpdateSystem(int width, int height, GLFWwindow* win, FontManager* fontMgr)
-    : screenWidth(width)
-    , screenHeight(height)
+UIUpdateSystem::UIUpdateSystem(int refWidth, int refHeight, GLFWwindow* win, FontManager* fontMgr)
+    : refWidth(refWidth)
+    , refHeight(refHeight)
+    , screenWidth(refWidth)
+    , screenHeight(refHeight)
     , mousePosition(0.0f)
     , mouseDown(false)
     , window(win)
@@ -115,6 +117,13 @@ void UIUpdateSystem::Update(EntityManager& entityManager, std::vector<EventEntry
     double mouseX, mouseY;
     Input::GetMousePosition(mouseX, mouseY);
 
+    // Convert mouse from window/screen coords to reference coords so that
+    // Contains(refW, refH) matches the reference-space positions the renderer draws.
+    float refScaleX = (screenWidth > 0) ? (float)refWidth / (float)screenWidth : 1.0f;
+    float refScaleY = (screenHeight > 0) ? (float)refHeight / (float)screenHeight : 1.0f;
+    double refMouseX = mouseX * refScaleX;
+    double refMouseY = mouseY * refScaleY;
+
     if (Input::MousePressed(GLFW_MOUSE_BUTTON_LEFT)) {
         bool clickedAnyField = false;
         Entity clickedField = 0;
@@ -124,7 +133,7 @@ void UIUpdateSystem::Update(EntityManager& entityManager, std::vector<EventEntry
         auto buttonQuery = entityManager.CreateQuery<UIElement, UIButton>();
         for (auto [entity, element, button] : buttonQuery) {
             if (!element->isVisible || !button->isInteractable) continue;
-            if (element->Contains({ mouseX, mouseY }, screenWidth, screenHeight)) {
+            if (element->Contains({ refMouseX, refMouseY }, refWidth, refHeight)) {
                 if (button->onClick) button->onClick();
                 clickedButton = true;
                 break;
@@ -136,7 +145,7 @@ void UIUpdateSystem::Update(EntityManager& entityManager, std::vector<EventEntry
             auto query = entityManager.CreateQuery<UIElement, UITextField>();
             for (auto [entity, element, textField] : query) {
                 if (!element->isVisible || !textField->isInteractable) continue;
-                if (element->Contains({ mouseX, mouseY }, screenWidth, screenHeight)) {
+                if (element->Contains({ refMouseX, refMouseY }, refWidth, refHeight)) {
                     clickedAnyField = true;
                     clickedField = entity;
                     break;
@@ -176,7 +185,7 @@ void UIUpdateSystem::Update(EntityManager& entityManager, std::vector<EventEntry
             continue;
         }
 
-        bool isInside = element->Contains({ mouseX, mouseY }, screenWidth, screenHeight);
+        bool isInside = element->Contains({ refMouseX, refMouseY }, refWidth, refHeight);
         ButtonState previousState = button->state;
 
         if (Input::KeyPressed(GLFW_MOUSE_BUTTON_LEFT) && isInside) {
@@ -405,9 +414,12 @@ void UIUpdateSystem::UpdateTextField(EntityManager& entityManager, Entity entity
 
 void UIUpdateSystem::HandleTextFieldClick(EntityManager& entityManager, Entity entity,
     UIElement* element, UITextField* textField, const glm::vec2& mousePos) {
-    // Get local mouse position relative to text field
-    glm::vec2 screenPos = element->GetScreenPosition(screenWidth, screenHeight);
-    glm::vec2 localMousePos = mousePos - screenPos;
+    // Convert mouse from screen coords to reference coords, then get local position.
+    float refScaleX = (screenWidth > 0) ? (float)refWidth / (float)screenWidth : 1.0f;
+    float refScaleY = (screenHeight > 0) ? (float)refHeight / (float)screenHeight : 1.0f;
+    glm::vec2 refMouse(mousePos.x * refScaleX, mousePos.y * refScaleY);
+    glm::vec2 screenPos = element->GetScreenPosition(refWidth, refHeight);
+    glm::vec2 localMousePos = refMouse - screenPos;
 
 
     // Calculate cursor position from mouse

@@ -114,9 +114,6 @@ def main(asset_root, output_dir):
 
     # Scene bins
     for scene, assets in scene_only.items():
-        if not assets:
-            continue
-
         bin_name = f"{scene}.bin"
         bin_ids[bin_name] = next_bin_id
         next_bin_id += 1
