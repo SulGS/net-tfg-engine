@@ -163,6 +163,12 @@ private:
         return dist(rng);
     }
 
+    void SyncCollider(EntityManager& entityManager, Entity entity, bool enabled)
+    {
+        auto* col = entityManager.GetComponent<BoxCollider2D>(entity);
+        if (col) col->isEnabled = enabled;
+    }
+
     bool IsBorderWall(int cellId, CellCardinalDirection dir,
         const std::vector<std::pair<int, int>>& activeTiles)
     {
@@ -476,6 +482,7 @@ private:
                             if (!lwid->enabled) continue;
                             lwid->enabled = false;
                             lwid->timer = RandomTimer();
+                            SyncCollider(entityManager, entity, false);
                             EmitToggleWall(events, cellId, dir, false, false, cx, cy);
                             break;
                         }
@@ -533,6 +540,7 @@ private:
                         if (!lwid->enabled) continue;
                         lwid->enabled = false;
                         lwid->timer = RandomTimer();
+                        SyncCollider(entityManager, entity, false);
                         EmitToggleWall(events, cellId, dir, true, false, cx, cy);
                         break;
                     }
@@ -862,8 +870,6 @@ public:
         }
 
         // ── Step 3: enforce border walls and process expired interior walls ────
-        // Validation uses the live wall map which is updated after each accepted
-        // toggle, so each wall sees the actual current arena state.
         {
             auto wallQuery = entityManager.CreateQuery<LaserWallID>();
             for (auto [entity, lwid] : wallQuery)
@@ -878,6 +884,7 @@ public:
                     if (!lwid->enabled)
                     {
                         lwid->enabled = true;
+                        SyncCollider(entityManager, entity, true);
                         EmitToggleWall(events, lwid->cellId, lwid->dir, false, true, cx, cy);
                         // Update live map
                         switch (lwid->dir)
@@ -922,6 +929,7 @@ public:
                     // Accept — live map already updated above
                     lwid->enabled = newEnabled;
                     lwid->timer = RandomTimer();
+                    SyncCollider(entityManager, entity, newEnabled);
                     if (lwid->warning)
                     {
                         lwid->warning = false;
@@ -940,7 +948,6 @@ public:
                     case CellCardinalDirection::Right: hWalls[2 * cx + 2][2 * cy] = lwid->enabled; break;
                     default: break;
                     }
-                    // Cancel warning if it was active, back off with full random timer
                     if (lwid->warning)
                     {
                         lwid->warning = false;
@@ -952,7 +959,6 @@ public:
         }
 
         // ── Step 4: center spokes ─────────────────────────────────────────────
-        // Same pattern: validate against live map, update live map on accept.
         {
             auto spokeQuery = entityManager.CreateQuery<LaserWallID, CenterSpoke>();
             for (auto [entity, lwid, spoke] : spokeQuery)
@@ -1034,6 +1040,7 @@ public:
 
                 lwid->enabled = newEnabled;
                 lwid->timer = RandomTimer();
+                SyncCollider(entityManager, entity, newEnabled);
                 if (lwid->warning)
                 {
                     lwid->warning = false;

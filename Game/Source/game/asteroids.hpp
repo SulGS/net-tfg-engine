@@ -390,7 +390,7 @@ public:
             {
                 BoxCollider2D* collider = world.GetEntityManager().AddComponent<BoxCollider2D>(player, BoxCollider2D{ glm::vec2(1.5f, 3.0f) });
                 collider->layer = CollisionLayer::PLAYER;
-                collider->collidesWith = CollisionLayer::BULLET;
+                collider->collidesWith = CollisionLayer::BULLET | CollisionLayer::WALL;
             }
         }
 
@@ -537,6 +537,27 @@ public:
             lwid.enabled = w.onBorder;
             lwid.timer = initDist(initRng);
             em.AddComponent<LaserWallID>(e, lwid);
+
+            /*if (isServer)
+            {
+
+				BoxCollider2D* collider = em.AddComponent<BoxCollider2D>(e, BoxCollider2D{ glm::vec2(2.0f, 19.0f) });
+				collider->isEnabled =  w.onBorder;
+				collider->layer = CollisionLayer::WALL;
+				collider->collidesWith = CollisionLayer::PLAYER | CollisionLayer::BULLET;
+				collider->SetOnCollisionEnter([this](Entity self, Entity other, const CollisionInfo& info) {
+                    Playable* play = this->world.GetEntityManager().GetComponent<Playable>(other);
+					if (!play) return; // only react to players
+                    // Emit death of player
+                    EventEntry deathEvent;
+                    deathEvent.event.type = AsteroidEventMask::DEATH;
+                    DeathEventData deathData;
+                    deathData.playerId = play->playerId;
+                    std::memcpy(deathEvent.event.data, &deathData, sizeof(DeathEventData));
+                    deathEvent.event.len = sizeof(DeathEventData);
+                    this->world.GetEvents().push_back(deathEvent);
+				});
+            }*/
         }
 
         // Center spokes
@@ -561,6 +582,27 @@ public:
                         lwid.timer = initDist(initRng);
                         em.AddComponent<LaserWallID>(e, lwid);
                         em.AddComponent<CenterSpoke>(e, CenterSpoke{});
+
+                        /*if (isServer)
+                        {
+
+                            BoxCollider2D* collider = em.AddComponent<BoxCollider2D>(e, BoxCollider2D{ glm::vec2(2.0f, 19.0f) });
+                            collider->isEnabled = false;
+                            collider->layer = CollisionLayer::WALL;
+                            collider->collidesWith = CollisionLayer::PLAYER | CollisionLayer::BULLET;
+                            collider->SetOnCollisionEnter([this](Entity self, Entity other, const CollisionInfo& info) {
+                                Playable* play = this->world.GetEntityManager().GetComponent<Playable>(other);
+                                if (!play) return; // only react to players
+                                // Emit death of player
+                                EventEntry deathEvent;
+                                deathEvent.event.type = AsteroidEventMask::DEATH;
+                                DeathEventData deathData;
+                                deathData.playerId = play->playerId;
+                                std::memcpy(deathEvent.event.data, &deathData, sizeof(DeathEventData));
+                                deathEvent.event.len = sizeof(DeathEventData);
+                                this->world.GetEvents().push_back(deathEvent);
+                                });
+                        }*/
                     };
 
                 {

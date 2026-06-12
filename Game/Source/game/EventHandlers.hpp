@@ -158,9 +158,15 @@ public:
             BoxCollider2D* collider = world.GetEntityManager().AddComponent<BoxCollider2D>(
                 bulletEntity, BoxCollider2D{ glm::vec2(1.0f, 1.0f) });
             collider->layer = CollisionLayer::BULLET;
-            collider->collidesWith = CollisionLayer::PLAYER;
+            collider->collidesWith = CollisionLayer::PLAYER | CollisionLayer::WALL;
             collider->SetOnCollisionEnter([&world](Entity self, Entity other, const CollisionInfo& info) {
                 Playable* p = world.GetEntityManager().GetComponent<Playable>(other);
+
+                if (!p) 
+                {
+                    world.GetEntityManager().DestroyEntity(self);
+                    return;
+                }
 
                 if (!p || p->playerId == world.GetEntityManager().GetComponent<ECSBullet>(self)->ownerId) {
                     return;

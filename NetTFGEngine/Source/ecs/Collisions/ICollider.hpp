@@ -16,6 +16,20 @@ enum class CollisionLayer : uint32_t {
     ALL = 0xFFFFFFFFu
 };
 
+inline CollisionLayer operator|(CollisionLayer a, CollisionLayer b)
+{
+    return static_cast<CollisionLayer>(
+        static_cast<uint32_t>(a) |
+        static_cast<uint32_t>(b));
+}
+
+inline CollisionLayer operator&(CollisionLayer a, CollisionLayer b)
+{
+    return static_cast<CollisionLayer>(
+        static_cast<uint32_t>(a) &
+        static_cast<uint32_t>(b));
+}
+
 // Collision callback data
 struct CollisionInfo {
     Entity otherEntity;
