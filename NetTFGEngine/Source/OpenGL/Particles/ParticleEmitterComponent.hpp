@@ -7,10 +7,7 @@
 
 #include "ecs/ecs.hpp"
 
-// -------------------------------------------------------
-//  Individual particle state — CPU side only.
-//  The GPU sees a packed GPUParticle uploaded each frame.
-// -------------------------------------------------------
+// Individual particle state — CPU side only; the GPU sees a packed GPUParticle uploaded each frame.
 struct Particle {
     glm::vec3 position = glm::vec3(0.0f);
     glm::vec3 velocity = glm::vec3(0.0f);
@@ -23,41 +20,24 @@ struct Particle {
     bool      alive = false;
 };
 
-// -------------------------------------------------------
-//  GPU-side layout — matches the SSBO binding in the
-//  particle billboard shader (std430).
-// -------------------------------------------------------
+// GPU-side layout — matches the SSBO binding in the particle billboard shader (std430).
 struct GPUParticle {
     glm::vec4 positionSize;  // xyz = world pos, w = size
     glm::vec4 color;         // rgba — lerped from colorStart→colorEnd
 };
 
-// -------------------------------------------------------
-//  Spawn shape
-// -------------------------------------------------------
 enum class EmitterShape {
     Point,   // all particles start at the emitter origin
     Sphere,  // random point inside a sphere of radius `shapeRadius`
     Cone,    // random direction within `shapeConeAngle` radians
 };
 
-// -------------------------------------------------------
-//  Simulation space
-// -------------------------------------------------------
 enum class SimulationSpace {
     World,   // particles keep world-space positions after spawn
     Local,   // particles move with the emitter's Transform
 };
 
-// -------------------------------------------------------
-//  ParticleEmitterComponent
-//
-//  Pure data component — no virtual methods, no heap
-//  allocation except for the particle pool (resized once
-//  when the first particle is spawned).
-//
-//  Create via ParticlePresets::* or configure manually.
-// -------------------------------------------------------
+// Pure data component — no virtual methods, no heap allocation except the particle pool (resized once on first spawn). Create via ParticlePresets::* or configure manually.
 struct ParticleEmitterComponent : public IComponent {
     // --- Emission ------------------------------------------------
     bool  enabled = true;
@@ -89,13 +69,7 @@ struct ParticleEmitterComponent : public IComponent {
     // --- Limits -------------------------------------------------
     int maxParticles = 100;
 
-    // --- Realism / variation -----------------------------------
-    //  lifetimeVariance   : lifetime = startLifetime +/- rand * variance
-    //  emissionVariance   : emissionRate jitters +/- rand * variance per frame
-    //  speedVariance      : speed = startSpeed +/- rand * variance per particle
-    //  turbulenceStrength : random impulse added to velocity each frame
-    //  speedScale         : runtime multiplier — set each frame by game logic;
-    //                       scales both emissionRate and startLifetime
+    // --- Realism / variation: per-particle jitter on lifetime/emission/speed, turbulence impulse, and a runtime speedScale multiplier ---
     float lifetimeVariance = 0.0f;
     float emissionVariance = 0.0f;
     float speedVariance = 0.0f;
@@ -107,31 +81,20 @@ struct ParticleEmitterComponent : public IComponent {
     //  false → standard alpha blend (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA) — smoke, rain
     bool additiveBlend = true;
 
-    // --- Color temperature (cone emitters only) -----------------
-    //  Particles near the cone centre lerp toward white-hot.
-    //  Uses the angular deviation from the emitter axis, not the
-    //  dot product of the already-perturbed direction, so the
-    //  heat gradient spans the full cone range properly.
+    // --- Color temperature (cone emitters only): particles near the cone centre lerp toward white-hot, based on angular deviation from the emitter axis ---
     bool colorTemperature = false;
 
-    // --- Optional custom update hook ----------------------------
-    //  Called once per alive particle per frame, after the default
-    //  physics integration.  Set to nullptr to use default behaviour.
-    //  Signature: (particle, deltaTime)
+    // --- Optional custom update hook: (particle, deltaTime), called once per alive particle after default physics integration; nullptr for default behaviour ---
     std::function<void(Particle&, float)> onUpdate = nullptr;
 
-    // --- Runtime state (managed by ParticleSystem) --------------
+    // --- Runtime state (managed by ParticleSystem) ---
     std::vector<Particle> pool;           // particle pool, size = maxParticles
     std::vector<int>      freeList;       // indices of dead slots — O(1) spawn
     float     emissionAccum = 0.0f;     // fractional-particle accumulator
     float     elapsedTime = 0.0f;     // total emitter age in seconds
     int       aliveCount = 0;        // for stats / culling
-    bool      done = false;    // true once a non-looping emitter has
-    // finished emitting AND all particles
-    // have died; poll this from game logic
-    // to know when to remove/recycle
-    glm::vec3 emitterLastPos = glm::vec3(0.0f); // previous world position,
-    // used by SimulationSpace::Local
+    bool      done = false;    // true once a non-looping emitter has finished and all particles died; poll to know when to remove/recycle
+    glm::vec3 emitterLastPos = glm::vec3(0.0f); // previous world position, used by SimulationSpace::Local
 };
 
 #endif // PARTICLE_EMITTER_COMPONENT_HPP

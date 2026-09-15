@@ -33,7 +33,6 @@ struct AudioSourceComponent : public IComponent {
     }
 
     void Destroy() override {
-        //AudioSystem::AddPendingSourceString(source,filePath);
     }
 };
 

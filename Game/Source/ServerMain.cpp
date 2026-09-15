@@ -29,7 +29,6 @@ int main(int argc, char** argv) {
 
     uint16_t port = 12345;
 
-    // Parse arguments
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "--help") {

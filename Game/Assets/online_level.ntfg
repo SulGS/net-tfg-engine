@@ -6,7 +6,7 @@ bullet.glb
 charge.glb
 ggx.vert
 ggx.frag
-ship.glb
+ship_low.glb
 generic_texture.vert
 generic_texture.frag
 tile.glb

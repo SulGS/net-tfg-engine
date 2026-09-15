@@ -18,7 +18,6 @@ public:
         , dirty(true)
     {}
 
-    // Position
     void setPosition(const glm::vec3& pos) {
         position = pos;
         dirty = true;
@@ -45,19 +44,17 @@ public:
         dirty = true;
     }
 
-    // Rotate by 'degrees' around a specific axis, respecting current rotation
+    // Accumulates onto the current rotation instead of overwriting it.
     void rotateAround(float degrees, const glm::vec3& axis) {
-        // Convert current Euler angles to a quaternion
         glm::quat currentQuat =
             glm::angleAxis(glm::radians(rotation.x), glm::vec3(1, 0, 0)) *
             glm::angleAxis(glm::radians(rotation.y), glm::vec3(0, 1, 0)) *
             glm::angleAxis(glm::radians(rotation.z), glm::vec3(0, 0, 1));
 
-        // Apply the new rotation as a quaternion on top
         glm::quat deltaQuat = glm::angleAxis(glm::radians(degrees), glm::normalize(axis));
         glm::quat resultQuat = deltaQuat * currentQuat;
 
-        // Convert back to Euler angles (XYZ order to match updateModelMatrix)
+        // XYZ order, to match updateModelMatrix
         rotation = glm::degrees(glm::eulerAngles(resultQuat));
         dirty = true;
     }
@@ -71,7 +68,6 @@ public:
     void SmoothRotationToward(const glm::vec3& target, float deltaTime, float speed) {
         if (deltaTime <= 0.0f) return;
         float t = 1.0f - std::exp(-speed * deltaTime);
-        // Per-axis shortest-angle interpolation
         auto interpAngle = [&](float cur, float tgt) {
             float diff = tgt - cur;
             while (diff > 180.0f) diff -= 360.0f;
@@ -86,7 +82,6 @@ public:
 
     const glm::vec3& getRotation() const { return rotation; }
 
-    // Scale
     void setScale(const glm::vec3& scl) {
         scale = scl;
         dirty = true;
@@ -107,7 +102,6 @@ public:
 
     const glm::vec3& getScale() const { return scale; }
 
-    // Model matrix
     const glm::mat4& getModelMatrix() {
         if (dirty) {
             updateModelMatrix();
@@ -137,17 +131,15 @@ struct PointLightComponent : public IComponent {
     glm::vec3 color = glm::vec3(1.0f);
     float     intensity = 1.0f;   // candelas
     float     radius = 10.0f;
-    bool      castShadows = true; // NEW — set false to skip shadow map for this light
+    bool      castShadows = true;
 };
 
-// ── new component — add alongside PointLightComponent ──
-// Only the first entity that carries this component is
-// used by RenderSystem.  A second one is silently ignored.
+// Only the first entity carrying this component is used by RenderSystem; extras are silently ignored.
 struct DirectionalLightComponent : public IComponent {
     glm::vec3 direction = glm::normalize(glm::vec3(-0.3f, -1.0f, -0.5f)); // world-space, points TOWARD the scene
     glm::vec3 color = glm::vec3(1.0f);
     float     intensity = 1.0f;   // lux (scene-scale)
-    bool      castShadows = true; // whether to render a shadow map
+    bool      castShadows = true;
 };
 
 
@@ -174,7 +166,6 @@ public:
         updateProjectionMatrix();
     }
 
-    // Projection settings
     void setPerspective(float fovDegrees, float aspect, float n, float f) {
         fov = fovDegrees;
         aspectRatio = aspect;
@@ -200,7 +191,6 @@ public:
         projectionDirty = true;
     }
 
-    // View settings (target and up vector)
     void setTarget(const glm::vec3& tgt) {
         target = tgt;
         viewDirty = true;
@@ -214,7 +204,6 @@ public:
     const glm::vec3& getTarget() const { return target; }
     const glm::vec3& getUp() const { return up; }
 
-    // Matrix getters
     const glm::mat4& getProjectionMatrix() {
         if (projectionDirty) {
             updateProjectionMatrix();
@@ -244,7 +233,6 @@ public:
         return viewDirty;
     }
 
-    // Getters
     float getFov() const { return fov; }
     float getAspectRatio() const { return aspectRatio; }
     float getNearPlane() const { return nearPlane; }
@@ -257,25 +245,20 @@ public:
 private:
 
     bool isResized;
-    // Projection parameters
     float fov;
     float aspectRatio;
     float nearPlane;
     float farPlane;
     ProjectionType projectionType;
 
-    // Orthographic parameters
     float orthoLeft, orthoRight, orthoBottom, orthoTop;
 
-    // View parameters
     glm::vec3 target;
     glm::vec3 up;
 
-    // Matrices
     glm::mat4 projectionMatrix;
     glm::mat4 viewMatrix;
 
-    // Dirty flags
     bool projectionDirty;
     bool viewDirty;
 
@@ -302,7 +285,7 @@ class MeshComponent : public IComponent {
 public:
     std::unique_ptr<Mesh> mesh;
     bool enabled;
-	bool castShadows = true; // NEW — set false to skip shadow map for this mesh
+	bool castShadows = true;
     MeshComponent() : mesh(nullptr), enabled(true), castShadows(true) {}
     MeshComponent(Mesh* m) : mesh(m), enabled(true), castShadows(true) {}
 };
@@ -313,11 +296,9 @@ public:
 
         auto query = entityManager.CreateQuery<Camera, Transform>();
 
-        // Find all entities with Camera and Transform components
         for (auto [entity, camera, transform] : query) {
 
             if (camera && transform) {
-                // Update view matrix based on camera position and target
                 glm::vec3 position = transform->getPosition();
                 glm::vec3 target = camera->getTarget();
                 glm::vec3 up = camera->getUp();

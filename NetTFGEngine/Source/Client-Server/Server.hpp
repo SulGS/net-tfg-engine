@@ -238,6 +238,8 @@ private:
 
         InputEntry ie = net_.ParseInputEntryPacket(data, len);
 
+		ie.playerId = peerInfo_[conn].playerId;
+
         if (ie.frame < server_.GetCurrentFrame())
         {
             ie.frame = server_.GetCurrentFrame();
@@ -267,14 +269,13 @@ private:
         }
 
         const ClientHelloPacket* hello = (const ClientHelloPacket*)data;
-        std::string clientId(hello->clientId);
+        std::string clientId(hello->clientId, strnlen(hello->clientId, sizeof(hello->clientId)));
 
         Debug::Info("Server") << "Client attempting connection/reconnection during game: " << clientId << "\n";
 
-        // Add to poll group
         net_.AddConnectionToPollGroup(conn);
 
-        // Use the same handler for consistency
+        // Reuse the normal handler for consistency
         HandleNewClient(conn, clientId);
     }
 
@@ -314,7 +315,6 @@ private:
 
 			server_.GetGameLogic()->HashState(state, computedHash);
 
-			// Compare hashes
 			bool match = (std::memcmp(packet.hash, computedHash, SHA256_DIGEST_LENGTH) == 0);
 
             if (!match) 
@@ -332,11 +332,11 @@ private:
         Debug::Info("Server") << "[SERVER] Received unknown packet type " << (int)type << ", len=" << len << "\n";
     }
 
-    void HandleDisconnectInGame(HSteamNetConnection conn) {
+    int HandleDisconnectInGame(HSteamNetConnection conn) {
         auto it = peerInfo_.find(conn);
 
         if (it == peerInfo_.end()) {
-            return;
+            return -1;
         }
 
         int playerId = it->second.playerId;
@@ -374,6 +374,8 @@ private:
                 << " < " << config_.minPlayers << "). Stopping server.\n";
             running_ = false;
         }
+
+		return playerId;
     }
 
     void HandleConnectInGame(HSteamNetConnection conn) {
@@ -408,10 +410,7 @@ private:
 
         PeerInfo* existingPlayer = FindPlayerByClientId(clientId);
 
-        // Check if this is a reconnection (player exists but is not currently connected)
         bool isReconnection = (existingPlayer != nullptr && !existingPlayer->isConnected);
-
-        // Check if player is already connected (duplicate connection attempt)
         bool isAlreadyConnected = (existingPlayer != nullptr && existingPlayer->isConnected);
 
         if (isAlreadyConnected) {
@@ -433,14 +432,12 @@ private:
             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
                 now - existingPlayer->disconnectTime);
 
-            // Check reconnection timeout
             if (elapsed > config_.reconnectionTimeout && config_.reconnectionTimeout.count() > 0) {
                 Debug::Info("Server") << "Reconnection timeout exceeded for " << clientId << "\n";
                 net_.GetSockets()->CloseConnection(conn, k_ESteamNetConnectionEnd_App_Generic, nullptr, false);
                 return false;
             }
 
-            // Update with new connection
             existingPlayer->connection = conn;
             existingPlayer->isConnected = true;
             peerInfo_[conn] = *existingPlayer;
@@ -462,7 +459,6 @@ private:
             return true;
         }
 
-        // Not a reconnection - new player
         if (peerInfo_.size() >= config_.maxPlayers) {
             Debug::Info("Server") << "Connection rejected: server full\n";
             net_.GetSockets()->CloseConnection(conn, k_ESteamNetConnectionEnd_App_Generic, nullptr, false);
@@ -500,7 +496,7 @@ private:
         }
 
         const ClientHelloPacket* hello = (const ClientHelloPacket*)data;
-        std::string clientId(hello->clientId);
+        std::string clientId(hello->clientId,strnlen(hello->clientId, sizeof(hello->clientId)));
 
         Debug::Info("Server") << "Received CLIENT_HELLO from " << clientId << "\n";
 
@@ -539,18 +535,15 @@ private:
         }
     }
 
-    // Network thread function for server
     void ServerNetworkThread(std::atomic<bool>& running) {
         while (running.load()) {
-            net_.PumpCallbacks();  // CRITICAL: Pump callbacks to process connection state changes
+            net_.PumpCallbacks();  // CRITICAL: process connection state changes
 
-            // Poll and process packets immediately
             // Server mutex protects shared state
             net_.Poll([&](const uint8_t* data, int len, HSteamNetConnection conn) {
                 HandleReceiveEventInGame(conn, data, len);
                 }, false);
 
-            // Check for disconnections
             ISteamNetworkingSockets* sockets = net_.GetSockets();
             std::vector<HSteamNetConnection> toRemove;
 
@@ -566,8 +559,10 @@ private:
             }
 
             for (auto conn : toRemove) {
-                HandleDisconnectInGame(conn);
-                server_.OnPlayerDisconnected(peerInfo_[conn].playerId);
+                int pID = HandleDisconnectInGame(conn);
+				if (pID == -1)
+					continue;
+                server_.OnPlayerDisconnected(pID);
             }
 
             // Small sleep to prevent busy-waiting
@@ -583,7 +578,6 @@ private:
             server_.OnPlayerConnected(info.playerId);
         }
 
-        // Start network thread
         std::atomic<bool> networkRunning(true);
         std::thread networkThread([this, &networkRunning]() {
             ServerNetworkThread(networkRunning);
@@ -591,10 +585,8 @@ private:
 
         while (running_ && (activePlayerCount_ >= config_.minPlayers || !config_.stopOnBelowMin) && !server_.GetGameLogic()->gameFinished) {
 
-            // Run game simulation tick
             StateUpdate update = server_.Tick();
 
-            // Handle reconnections
             for (auto& [conn, info] : peerInfo_) {
                 if (!info.isConnected) {
                     continue;
@@ -605,7 +597,6 @@ private:
                 }
             }
 
-            // Send generated events to all connected players
             std::vector<EventEntry> generatedEvents;
             server_.GetGameLogic()->GetGeneratedEvents(generatedEvents);
 
@@ -638,18 +629,10 @@ private:
                     {
                         net_.SendDeltasUpdate(conn, generatedDeltas, server_.GetCurrentFrame()-1);
                     }
-
-                    //net_.SendStateUpdate(conn, update);
-                    
                 }
             }
-            
 
-            // Performance monitoring every 30 frames
             if (server_.GetCurrentFrame() % 30 == 0) {
-
-                
-
                 auto now = std::chrono::high_resolution_clock::now();
                 auto duration = std::chrono::duration_cast<std::chrono::microseconds>(now - nextTick);
                 long long durationUs = duration.count();
@@ -685,7 +668,6 @@ private:
             }
         }
 
-        // Clean shutdown
         networkRunning.store(false);
         networkThread.join();
     }

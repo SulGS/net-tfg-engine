@@ -17,6 +17,8 @@ Mesh::Mesh(const std::string& meshName,
     std::shared_ptr<Material> mat)
     : material(std::move(mat))
 {
+	this->meshName = meshName;
+
     buffer = AssetManager::instance().loadAsset<MeshBuffer>(meshName);
 
     if (!buffer || buffer->VAO == 0) {
@@ -31,7 +33,16 @@ Mesh::Mesh(const std::string& meshName,
     m_fallbackMR = CreateFallback1x1(0, 255, 0, 255); // metallic=0, roughness=1
 }
 
-// Mesh.cpp
+Mesh::~Mesh()
+{
+	AssetManager::instance().unloadAsset<MeshBuffer>(this->meshName);
+
+	if (m_fallbackWhite) glDeleteTextures(1, &m_fallbackWhite);
+	if (m_fallbackBlack) glDeleteTextures(1, &m_fallbackBlack);
+	if (m_fallbackNormal) glDeleteTextures(1, &m_fallbackNormal);
+	if (m_fallbackMR) glDeleteTextures(1, &m_fallbackMR);
+}
+
 void Mesh::bindMaterial(const glm::mat4& model,
     const glm::mat4& view,
     const glm::mat4& projection) const

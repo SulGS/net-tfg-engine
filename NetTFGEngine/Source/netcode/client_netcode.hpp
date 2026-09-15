@@ -27,14 +27,12 @@ public:
 	void OnServerEventUpdate(const EventEntry& event)
 	{
 		std::lock_guard<std::mutex> lock(mtx);
-		// Store the server-sent event in the corresponding snapshot
 		Snapshot& snapshot = GetSnapshot(event.frame);
 		snapshot.events.push_back(event);
 	}
 
 	void OnServerInputUpdate(const InputEntry& inputEntry) {
 		std::lock_guard<std::mutex> lock(mtx);
-		// Store the server-confirmed input in the corresponding snapshot
 		Snapshot& snapshot = GetSnapshot(inputEntry.frame);
 		snapshot.inputs[inputEntry.playerId] = inputEntry;
 	}
@@ -70,12 +68,10 @@ public:
 
 			gameLogic->Synchronize(snapshot.state);
 
-			// Re-simulate all frames after the server frame
 			for (int frame = deltaFrame; frame < currentFrame; ++frame) {
 				SimulateFrame(frame, true);
 			}
 
-			// Update current client state from the last predicted snapshotQ
 			Snapshot& lastSnapshot = GetSnapshot(currentFrame);
 			currentState.len = lastSnapshot.state.len;
 			memcpy(currentState.data, lastSnapshot.state.data, currentState.len);
@@ -83,15 +79,14 @@ public:
 			Debug::Info("ClientNetcode") << "[CLIENT] Reconciled to server state at frame " << deltaFrame
 				<< ". Current frame: " << currentFrame << "\n";
 
-			RemoveYetConfirmedSnapshots();
 		}
+
+		RemoveYetConfirmedSnapshots();
 	}
 
 	void OnServerStateUpdate(const StateUpdate& update)
 	{
 		std::lock_guard<std::mutex>lock(mtx);
-
-		//Debug::Info("Client Netcode") << "Received server state\n";
 
 		Snapshot& snapshot = GetSnapshot(update.frame);
 		lastConfirmedFrame = update.frame;
@@ -104,16 +99,12 @@ public:
 
 		if (gameLogic->CompareStates(snapshot.state, update.state))
 		{
+			RemoveYetConfirmedSnapshots();
 			return; // No reconciliation needed
 		}
 
-		//std::cout << "aaaa\n";
-		//gameLogic->PrintState(latestServerState);
-		//gameLogic->PrintState(snapshot.state);
-
 		currentFrame = lastConfirmedFrame + framesAheadOfServer;
 
-		// Copy server state safely into snapshot
 		snapshot.state.len = update.state.len;
 		if (snapshot.state.len > sizeof(snapshot.state.data))
 			snapshot.state.len = sizeof(snapshot.state.data);
@@ -121,12 +112,10 @@ public:
 
 		gameLogic->Synchronize(snapshot.state);
 
-		// Re-simulate all frames after the server frame
 		for (int frame = update.frame; frame < currentFrame; ++frame) {
 			SimulateFrame(frame, true);
 		}
 
-		// Update current client state from the last predicted snapshotQ
 		Snapshot& lastSnapshot = GetSnapshot(currentFrame);
 		currentState.len = lastSnapshot.state.len;
 		memcpy(currentState.data, lastSnapshot.state.data, currentState.len);
@@ -160,7 +149,6 @@ public:
 		currentState.frame = 0;
 		currentFrame = 0;
 		lastConfirmedFrame = 0;
-		//Create initial snapshot
 		Snapshot& initSnapshot = GetSnapshot(0);
 
 	}
@@ -179,9 +167,7 @@ public:
 		return gameLogic.get();
 	}
 
-	// Transfer ownership of gameLogic back to the caller.
-	// Must be called before deleting the prediction object if the logic
-	// needs to survive for the next session (e.g. OnlineClient re-activation).
+	// Transfers gameLogic ownership back to the caller; call before deleting this object if the logic must survive for the next session.
 	std::unique_ptr<IGameLogic> ReleaseGameLogic() {
 		std::lock_guard<std::mutex> lock(mtx);
 		return std::move(gameLogic);
@@ -194,7 +180,7 @@ private:
 
 	GameStateBlob currentState;
 	GameStateBlob latestServerState;
-	int currentFrame = 0;           // Current client frame
+	int currentFrame = 0;
 	int lastConfirmedFrame = 0;
 	int framesAheadOfServer = 0;
 
@@ -207,18 +193,15 @@ private:
 
 		if (snapshots.find(frame) == snapshots.end())
 		{
-			// Create default snapshot
 			snapshots[frame] = Snapshot();
 
 			snapshots[frame].frame = frame;
 			if (frame > 0)
 			{
-				// Copy state from previous frame
 				snapshots[frame].state = snapshots[frame - 1].state;
 			}
 			else
 			{
-				// Initial state
 				snapshots[frame].state = currentState;
 			}
 
@@ -230,18 +213,14 @@ private:
 
 	void SimulateFrame(int frame, bool debug)
 	{
-		// Get the snapshot for this frame
 		Snapshot& currentSnapshot = GetSnapshot(frame);
 
 		gameLogic->Synchronize(currentSnapshot.state);
 
-		// Create a fresh, deterministic copy of the state
 		GameStateBlob stateToSimulate;
 
-		// Simulate deterministically: write into our local copy
 		gameLogic->SimulateFrame(stateToSimulate, currentSnapshot.events, currentSnapshot.inputs);
 
-		// Save the result back into the next snapshot
 		Snapshot& predictedSnapshot = GetSnapshot(frame + 1);
 		predictedSnapshot.frame = frame + 1;
 		predictedSnapshot.state = stateToSimulate;

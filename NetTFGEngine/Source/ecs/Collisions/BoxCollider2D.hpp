@@ -16,23 +16,19 @@ public:
 
     // Half extents (width/2, height/2)
     glm::vec2 size;
-    
-    // Reference to entity's transform
+
     Transform* transform;
 
-    // ICollider interface
     int GetColliderType() const override { return COLLIDER_BOX_2D; }
-    
+
     bool CheckCollision(const ICollider* other, CollisionInfo& info) const override {
         const ICollider2D* other2D = dynamic_cast<const ICollider2D*>(other);
         if (!other2D) return false;
         return other2D->CollidesWith(this, info);
     }
 
-    // ICollider2D generic collision
     bool CollidesWith(const ICollider2D* other, CollisionInfo& info) const override;
 
-    // Bounds (AABB)
     glm::vec2 GetMin() const override {
         glm::vec2 center = GetCenter();
         return center - size;
@@ -52,8 +48,7 @@ public:
     // Get corners (useful for OBB if entity is rotated)
     std::vector<glm::vec2> GetCorners() const {
         glm::vec2 center = GetCenter();
-        
-        // If no rotation, return AABB corners
+
         if (!transform || transform->getRotation().z == 0.0f) {
             return {
                 center + glm::vec2(-size.x, -size.y),
@@ -63,7 +58,6 @@ public:
             };
         }
         
-        // Apply rotation for OBB
         float angle = glm::radians(transform->getRotation().z);
         float c = cos(angle);
         float s = sin(angle);

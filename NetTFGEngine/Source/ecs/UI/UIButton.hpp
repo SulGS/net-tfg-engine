@@ -34,31 +34,26 @@ public:
     ButtonState state;
     bool isInteractable;
 
-    // Background colors for different states
     glm::vec4 normalColor;
     glm::vec4 hoverColor;
     glm::vec4 pressedColor;
     glm::vec4 disabledColor;
 
-    // Border colors for different states
     glm::vec4 normalBorderColor;
     glm::vec4 hoverBorderColor;
     glm::vec4 pressedBorderColor;
     glm::vec4 disabledBorderColor;
 
-    // Text properties
     std::string text;
     glm::vec4 textColor;
     std::string fontName;
     float fontSize;
     float padding;
 
-    // Callbacks
     std::function<void()> onClick = nullptr;
     std::function<void()> onHoverEnter = nullptr;
     std::function<void()> onHoverExit = nullptr;
 
-    // Get current background color based on state
     glm::vec4 GetCurrentColor() const {
         if (!isInteractable) return disabledColor;
 
@@ -71,7 +66,6 @@ public:
         }
     }
 
-    // Get current border color based on state
     glm::vec4 GetCurrentBorderColor() const {
         if (!isInteractable) return disabledBorderColor;
 

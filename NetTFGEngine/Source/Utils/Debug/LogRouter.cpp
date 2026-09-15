@@ -60,7 +60,6 @@ void LogRouter::SetProductName(const std::string& name) {
 
     std::filesystem::create_directories(folder);
 
-    // --- Timestamp ---
     auto now = std::chrono::system_clock::now();
     auto time = std::chrono::system_clock::to_time_t(now);
     std::tm tm;
@@ -72,14 +71,12 @@ void LogRouter::SetProductName(const std::string& name) {
     std::stringstream timestamp;
     timestamp << std::put_time(&tm, "%Y%m%d_%H%M%S");
 
-    // --- Process ID ---
 #ifdef _WIN32
     DWORD pid = GetCurrentProcessId();
 #else
     pid_t pid = getpid();
 #endif
 
-    // --- Build final log filename ---
     logFilePath = folder + "engine_" + timestamp.str() + "_PID" + std::to_string(pid) + ".log";
 
     fileOutput.Open(logFilePath);
@@ -87,6 +84,7 @@ void LogRouter::SetProductName(const std::string& name) {
 
 
 void LogRouter::SetChannelEnabled(const std::string& channel, bool enabled) {
+    std::unique_lock lock(channelStatesMutex);
     channelStates[channel] = enabled;
 }
 
@@ -102,10 +100,12 @@ void LogRouter::RouterThread() {
             if (!queue.WaitPop(msg))
                 break; // stopping
 
-            // Channel filtering
-            auto it = channelStates.find(msg.channel);
-            if (it != channelStates.end() && !it->second)
-                continue;
+            {
+                std::shared_lock lock(channelStatesMutex);
+                auto it = channelStates.find(msg.channel);
+                if (it != channelStates.end() && !it->second)
+                    continue;
+            }
 
             try {
                 if (consoleOutputEnabled) ConsoleOutput::Write(msg);
@@ -147,7 +147,6 @@ void LogRouter::RouterThread() {
         }
     }
     catch (const std::exception& e) {
-        // Thread-level exception
 #ifdef _WIN32
         OutputDebugStringA(("LogRouter thread crashed: " + std::string(e.what()) + "\n").c_str());
 #endif

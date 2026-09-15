@@ -7,6 +7,7 @@
 #include "netcode/client_window.hpp"
 #include "netcode/valve_sockets_session.hpp"
 #include "OpenGL/IGameRenderer.hpp"
+#include "OpenGL/IECSGameRenderer.hpp"
 #include <memory>
 #include <string>
 #include <chrono>
@@ -42,12 +43,20 @@ public:
 
         clientId_ = customClientId.empty() ? GenerateClientId() : customClientId;
 
-        // Guard against being called while a previous session is still live
+        // Guard against a live previous session; routed through RunOnRenderThread — see OfflineClient::SetupClient.
         if (cWindow_) {
-            cWindow_->deactivate();
-            delete cWindow_;
-            cWindow_ = nullptr;
+            ClientWindow::RunOnRenderThread([this]() {
+                cWindow_->deactivate();
+                delete cWindow_;
+                cWindow_ = nullptr;
+                });
         }
+
+		if (prediction_) {
+			gameLogic_ = prediction_->ReleaseGameLogic();
+			delete prediction_;
+			prediction_ = nullptr;
+		}
 
         cWindow_ = new ClientWindow(
             [this](GameStateBlob& state, OpenGLWindow* win) {
@@ -64,6 +73,8 @@ public:
         ConnectionCode connCode = net_.ConnectTo(hostStr, port);
 
         if (connCode != CONN_SUCCESS) {
+            delete cWindow_;
+            cWindow_ = nullptr;
             return connCode;
         }
 
@@ -71,6 +82,8 @@ public:
         Debug::Info("OnlineClient") << "Waiting for connection to server...\n";
 
         if (!WaitForConnectionAndAuth()) {
+            delete cWindow_;
+            cWindow_ = nullptr;
             return CONN_DENIED;
         }
 
@@ -81,6 +94,8 @@ public:
             Debug::Info("OnlineClient") << "Successfully authenticated!\n";
 
             if (!WaitForGameStart()) {
+                delete cWindow_;
+                cWindow_ = nullptr;
                 return CONN_TIMEOUT;
             }
         }
@@ -95,6 +110,10 @@ public:
         {
             Debug::Info("OnlineClient") << "Waiting for state update after reconnection...\n";
             if (!WaitForStateUpdateAfterReconnection(*prediction_)) {
+                delete cWindow_;
+                cWindow_ = nullptr;
+				delete prediction_;
+				prediction_ = nullptr;
                 return CONN_TIMEOUT;
             }
         }
@@ -132,14 +151,12 @@ public:
 
         net_.SendHashPacket(serverConnection_, hashPacket, hashPacket.frame);
 
-        // ===== Debug output every 30 frames =====
         if (frameToSubmit % 30 == 0) {
             GameStateBlob s = prediction_->GetCurrentState();
             Debug::Info("OnlineClient") << "[CLIENT] Frame: " << frameToSubmit
                 << " | Latency: " << inputDelayCalc.GetLastLatencyMs()
                 << "ms | InputDelayFrames: " << inputDelayCalc.GetInputDelayFrames() << "\n";
 
-            // Send RTT sync
             InputDelayPacket packet;
             packet.playerId = assignedPlayerId_;
             packet.timestamp = inputDelayCalc.GetTimestampMs();
@@ -150,24 +167,29 @@ public:
     }
 
     void CloseClient() override {
-        // Stop network thread first
         networkRunning_.store(false);
         if (networkThread_.joinable())
             networkThread_.join();
 
-        cWindow_->deactivate();
-        delete cWindow_;
-        cWindow_ = nullptr;
-
-        // Recover gameLogic_ from prediction before destroying it.
-        // SetupClient does std::move(gameLogic_) into prediction_, leaving
-        // gameLogic_ null. If we just delete prediction_ the logic is gone
-        // and the second SetupClient call crashes at line 85.
+        // Recover gameLogic_ (moved into prediction_ by SetupClient) before deleting prediction_, or the next SetupClient crashes on a null gameLogic_.
         if (prediction_) {
             gameLogic_ = prediction_->ReleaseGameLogic();
             delete prediction_;
             prediction_ = nullptr;
         }
+
+        // Runs as ONE task on the render thread so deactivate/delete can't race renderLoop() — see OfflineClient::CloseClient.
+        ClientWindow::RunOnRenderThread([this]() {
+            if (cWindow_) {
+                cWindow_->deactivate();
+                delete cWindow_;
+                cWindow_ = nullptr;
+            }
+
+            // Release ECS-held AssetManager refs (gameLogic_ is back from prediction_ now) before the caller unloads this client's asset bin.
+            if (gameRenderer_) gameRenderer_->ReleaseECSAssets();
+            if (gameLogic_)    gameLogic_->ReleaseECSAssets();
+            });
 
         if (serverConnection_ != k_HSteamNetConnection_Invalid) {
             net_.GetSockets()->CloseConnection(serverConnection_,
@@ -189,6 +211,14 @@ public:
             return &ecsLogic->world.GetEntityManager();
         }
 		return nullptr;
+    }
+
+    EntityManager* GetRendererEntityManager() override {
+        IECSGameRenderer* ecsRenderer = dynamic_cast<IECSGameRenderer*>(gameRenderer_.get());
+        if (ecsRenderer) {
+            return &ecsRenderer->GetEntityManager();
+        }
+        return nullptr;
     }
 
     const std::string& GetClientId() const { return clientId_; }
@@ -350,7 +380,6 @@ private:
         bool serverAccepted = false;
         bool running = true;
 
-        // Wait for connection to establish
         while (!connected && running && ClientWindow::isWindowThreadRunning()) {
             ISteamNetworkingSockets* sockets = net_.GetSockets();
             if (!sockets) {
@@ -358,7 +387,6 @@ private:
                 break;
             }
 
-            // Check connection state
             serverConnection_ = net_.GetConnectedConnection();
             if (serverConnection_ != k_HSteamNetConnection_Invalid) {
                 SteamNetConnectionInfo_t connInfo;
@@ -441,10 +469,6 @@ private:
         return running && gameStarted;
     }
 
-    // ============================================================================
-    // FIXED ProcessIncomingPacket - frame synchronized
-    // ============================================================================
-
     void ProcessIncomingPacket(ClientPredictionNetcode& prediction,
         ClientWindow& cWin,
         const uint8_t* data,
@@ -484,8 +508,6 @@ private:
             int frame;
 
             net_.ParseDeltasUpdate(data, len, deltas, frame);
-            //Debug::Info("OnlineClient") << "Parsed delta packet: frame=" << frame
-            //    << " deltas=" << deltas.size() << "\n";
 
             prediction.OnServerDeltasUpdate(deltas, frame);
             cWin.setServerState(prediction.GetLatestServerState());
@@ -502,7 +524,7 @@ private:
             }
         }
         else if (type == PACKET_EVENT_UPDATE) {
-            const size_t EXPECTED_MIN_LEN = 1 + 4 + 4;
+            const size_t EXPECTED_MIN_LEN = 1 + 4 + 4 + 4;
             if (len < EXPECTED_MIN_LEN) {
                 Debug::Info("OnlineClient") << "[CLIENT] Malformed event packet, len=" << len << "\n";
             }
@@ -512,7 +534,6 @@ private:
             }
         }
         else if (type == PACKET_INPUT_DELAY) {
-            // ===== FIX: Validate RTT with bounds checking =====
             InputDelayPacket packet = net_.ParseInputDelaySync(data, len);
             inputDelayCalc.UpdateRtt(packet.timestamp, TICKS_PER_SECOND);
 
@@ -520,20 +541,18 @@ private:
         }
     }
 
-    // Network thread function - processes packets directly
     void NetworkThread(ClientPredictionNetcode& prediction,
         ClientWindow& cWindow,
         std::atomic<bool>& running) {
         while (running.load()) {
             net_.PumpCallbacks();
 
-            // Poll and process packets immediately
             // ClientPredictionNetcode's mutex protects shared state
             net_.Poll([&](const uint8_t* data, int len, HSteamNetConnection conn) {
                 ProcessIncomingPacket(prediction, cWindow, data, len, conn);
                 }, false);
 
-            // Small sleep to prevent busy-waiting (1ms = ~1000 polls/sec)
+            // 1ms sleep to avoid busy-waiting
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }

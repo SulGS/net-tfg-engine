@@ -20,7 +20,7 @@ public:
         uint32_t now = GetTimestampMs();
         uint32_t rtt = now - sentTimestampMs;
 
-        // ===== FIX #1: Validate RTT before using it =====
+        // Validate RTT before using it
         const uint32_t MAX_REASONABLE_RTT = 10000;  // 10 seconds
         const uint32_t MIN_REASONABLE_RTT = 1;      // 1ms minimum
 
@@ -36,13 +36,12 @@ public:
             return;
         }
 
-        // ===== FIX #2: Use moving average instead of single sample =====
+        // Use a moving average instead of a single sample
         m_rttSamples.push_back(rtt);
         if (m_rttSamples.size() > RTT_SAMPLE_WINDOW) {
             m_rttSamples.pop_front();
         }
 
-        // Calculate average of all samples in window
         uint32_t sum = 0;
         for (uint32_t sample : m_rttSamples) {
             sum += sample;
@@ -53,7 +52,6 @@ public:
         CalculateInputDelayFrames(TICKS_PER_SECOND);
     }
 
-    // Accessors
     uint32_t GetLastRttMs() const { return m_lastRttMs; }
     float GetLastLatencyMs() const { return m_lastLatencyMs; }
     int GetInputDelayFrames() const { return m_lastInputDelayFrames; }
@@ -61,8 +59,7 @@ public:
     float m_lastLatencyMs;
     int m_lastInputDelayFrames;
 
-    // ===== FIX #2 (continued): Moving average window =====
-    static constexpr size_t RTT_SAMPLE_WINDOW = 5;  // Keep last 5 samples
+    static constexpr size_t RTT_SAMPLE_WINDOW = 5;
     std::deque<uint32_t> m_rttSamples;
 
     void CalculateInputDelayFrames(int tickRate) {

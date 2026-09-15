@@ -27,11 +27,11 @@ void RenderSystem::Init(int screenW, int screenH)
     InitLDRFBO();
     InitLightSSBO();
     InitShadowCubeArray();
-    InitDirLightUBO();       // NEW
-    InitDirShadowMap();      // NEW
+    InitDirLightUBO();
+    InitDirShadowMap();
     CompileGBufferShader();
     CompileShadowShader();
-    CompileDirShadowShader(); // NEW
+    CompileDirShadowShader();
     CompileTonemapShader();
     CompileBloomShaders();
     CompileFXAAShader();
@@ -94,6 +94,14 @@ void RenderSystem::Update(EntityManager& entityManager,
     bool /*isServer*/,
     float /*deltaTime*/)
 {
+	if (needsReinit) {
+        Init(m_screenW,m_screenH);
+		ReInitShadows();
+        needsReinit = false;
+	}
+
+
+
     if (m_hdrFBO == 0) {
         Debug::Error("RenderSystem") << "Call Init() before first Update()\n";
         return;

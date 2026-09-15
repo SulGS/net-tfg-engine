@@ -7,16 +7,11 @@
 #include <string>
 #include <ctime>
 
-// =====================================================
-//  Internal helpers  (file-scope only)
-// =====================================================
+// Internal helpers (file-scope only)
 namespace {
 
     static constexpr const char* kDumpDir = "Render";
 
-    // ------------------------------------------------------------------
-    //  WritePNG
-    // ------------------------------------------------------------------
     static void WritePNG(const std::string& path,
         int w, int h,
         const std::vector<uint8_t>& rgb)
@@ -26,9 +21,7 @@ namespace {
             Debug::Error("RenderSystem::DumpBuffers") << "stbi_write_png failed: " << path << "\n";
     }
 
-    // ------------------------------------------------------------------
-    //  ReinhardTonemap + gamma
-    // ------------------------------------------------------------------
+    // Reinhard tonemap + gamma
     static uint8_t TonemapChannel(float v, float exposure, float invGamma)
     {
         v *= exposure;
@@ -39,9 +32,6 @@ namespace {
         return static_cast<uint8_t>(v * 255.0f + 0.5f);
     }
 
-    // ------------------------------------------------------------------
-    //  DumpTexture2D_RGBA16F
-    // ------------------------------------------------------------------
     static void DumpTexture2D_RGBA16F(GLuint tex,
         int w, int h,
         float exposure, float gamma,
@@ -65,11 +55,7 @@ namespace {
         WritePNG(path, w, h, rgb);
     }
 
-    // ------------------------------------------------------------------
-    //  DumpTexture2D_Depth32F
-    //  Auto-ranges min/max for maximum readability.
-    //  Pixels at depth == 1.0 (cleared background) → black.
-    // ------------------------------------------------------------------
+    // Auto-ranges min/max for readability; pixels at depth == 1.0 (cleared background) render black.
     static void DumpTexture2D_Depth32F(GLuint tex,
         int w, int h,
         const std::string& path)
@@ -107,19 +93,11 @@ namespace {
         WritePNG(path, w, h, rgb);
     }
 
-    // ------------------------------------------------------------------
-    //  DumpTexture2D_DirShadow
-    //  Reads the directional light shadow map (DEPTH32F, comparison mode
-    //  set on the sampler).  To read the raw depth data back we must
-    //  temporarily disable the comparison mode so glGetTexImage returns
-    //  depth values rather than comparison results, then restore it.
-    //  Visualised with auto-ranging so the depth gradient is always visible.
-    // ------------------------------------------------------------------
+    // Temporarily disables the sampler's comparison mode so glGetTexImage returns raw depth instead of comparison results, then restores it; visualised with auto-ranging.
     static void DumpTexture2D_DirShadow(GLuint tex,
         int res,
         const std::string& path)
     {
-        // Temporarily disable comparison mode for the raw readback.
         glBindTexture(GL_TEXTURE_2D, tex);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NONE);
 
@@ -127,7 +105,6 @@ namespace {
         std::vector<float> depth(nPix);
         glGetTexImage(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, GL_FLOAT, depth.data());
 
-        // Restore comparison mode.
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
         glBindTexture(GL_TEXTURE_2D, 0);
 
@@ -158,9 +135,6 @@ namespace {
         WritePNG(path, res, res, rgb);
     }
 
-    // ------------------------------------------------------------------
-    //  DumpCubeArrayFace
-    // ------------------------------------------------------------------
     static void DumpCubeArrayFace(GLuint tex,
         int res,
         int layer,
@@ -201,9 +175,6 @@ namespace {
         WritePNG(path, res, res, rgb);
     }
 
-    // ------------------------------------------------------------------
-    //  DumpTexture2D_RGBA8
-    // ------------------------------------------------------------------
     static void DumpTexture2D_RGBA8(GLuint tex,
         int w, int h,
         const std::string& path)
@@ -224,9 +195,6 @@ namespace {
         WritePNG(path, w, h, rgb);
     }
 
-    // ------------------------------------------------------------------
-    //  DumpDefaultFramebuffer
-    // ------------------------------------------------------------------
     static void DumpDefaultFramebuffer(int w, int h, const std::string& path)
     {
         const int nPix = w * h;
@@ -239,9 +207,6 @@ namespace {
         WritePNG(path, w, h, pixels);
     }
 
-    // ------------------------------------------------------------------
-    //  DumpTexture2D_ViewNormals
-    // ------------------------------------------------------------------
     static void DumpTexture2D_ViewNormals(GLuint tex, int w, int h,
         const std::string& path)
     {
@@ -264,9 +229,6 @@ namespace {
         WritePNG(path, w, h, rgb);
     }
 
-    // ------------------------------------------------------------------
-    //  DumpTexture2D_GreyscaleR
-    // ------------------------------------------------------------------
     static void DumpTexture2D_GreyscaleR(GLuint tex, int w, int h,
         const std::string& path)
     {
@@ -287,25 +249,9 @@ namespace {
 
 } // anonymous namespace
 
-// =====================================================
-//  DumpBuffers
-//
-//  Files written (all PNG, 8-bit RGB):
-//    hdr_color.png            — HDR colour, Reinhard-tonemapped for viewing
-//    depth.png                — Scene depth, auto-ranged greyscale
-//    gbuffer_normal.png       — View-space normals as RGB
-//    gbuffer_roughness.png    — Perceptual roughness as greyscale
-//    gbuffer_metalness.png    — Metalness as greyscale
-//    bloom_thresh.png         — Bloom threshold pass output
-//    bloom_result.png         — Final blurred bloom texture
-//    ldr_color.png            — Post-tonemap LDR colour (pre-FXAA)
-//    final_output.png         — Exact screen pixels (post-FXAA)
-//    shadow_L{n}_F{f}_{dir}.png — Point light shadow cubemap faces
-//    dir_shadow.png           — Directional light orthographic shadow map
-// =====================================================
+// Dumps every render target (HDR/depth/GBuffer/bloom/LDR/final/shadows) as 8-bit PNGs into a timestamped subfolder.
 void RenderSystem::DumpBuffers() const
 {
-    // ---- Build timestamped subfolder ----
     std::time_t now = std::time(nullptr);
     std::tm     tm = {};
 #if defined(_WIN32)
@@ -334,49 +280,49 @@ void RenderSystem::DumpBuffers() const
         return dumpDir + "/" + name;
         };
 
-    // ---- 1. HDR colour ----
+    // 1. HDR colour
     if (m_hdrColorTex) {
         DumpTexture2D_RGBA16F(m_hdrColorTex, m_screenW, m_screenH,
             exposure, gamma, path("hdr_color.png"));
         Debug::Info("RenderSystem::DumpBuffers") << "Saved hdr_color.png\n";
     }
 
-    // ---- 2. Scene depth ----
+    // 2. Scene depth
     if (m_hdrDepthTex) {
         DumpTexture2D_Depth32F(m_hdrDepthTex, m_screenW, m_screenH,
             path("depth.png"));
         Debug::Info("RenderSystem::DumpBuffers") << "Saved depth.png\n";
     }
 
-    // ---- 3. GBuffer normals ----
+    // 3. GBuffer normals
     if (m_gbufferNormalTex) {
         DumpTexture2D_ViewNormals(m_gbufferNormalTex, m_screenW, m_screenH,
             path("gbuffer_normal.png"));
         Debug::Info("RenderSystem::DumpBuffers") << "Saved gbuffer_normal.png\n";
     }
 
-    // ---- 3b. GBuffer roughness ----
+    // 3b. GBuffer roughness
     if (m_gbufferRoughnessTex) {
         DumpTexture2D_GreyscaleR(m_gbufferRoughnessTex, m_screenW, m_screenH,
             path("gbuffer_roughness.png"));
         Debug::Info("RenderSystem::DumpBuffers") << "Saved gbuffer_roughness.png\n";
     }
 
-    // ---- 3c. GBuffer metalness ----
+    // 3c. GBuffer metalness
     if (m_gbufferMetalnessTex) {
         DumpTexture2D_GreyscaleR(m_gbufferMetalnessTex, m_screenW, m_screenH,
             path("gbuffer_metalness.png"));
         Debug::Info("RenderSystem::DumpBuffers") << "Saved gbuffer_metalness.png\n";
     }
 
-    // ---- 4. Bloom threshold ----
+    // 4. Bloom threshold
     if (m_bloomThreshTex) {
         DumpTexture2D_RGBA16F(m_bloomThreshTex, m_screenW, m_screenH,
             exposure, gamma, path("bloom_thresh.png"));
         Debug::Info("RenderSystem::DumpBuffers") << "Saved bloom_thresh.png\n";
     }
 
-    // ---- 5. Bloom result ----
+    // 5. Bloom result
     if (m_bloomPingTex) {
         const int bW = std::max(1, m_screenW / 2);
         const int bH = std::max(1, m_screenH / 2);
@@ -385,17 +331,17 @@ void RenderSystem::DumpBuffers() const
         Debug::Info("RenderSystem::DumpBuffers") << "Saved bloom_result.png\n";
     }
 
-    // ---- 6. LDR colour (post-tonemap, pre-FXAA) ----
+    // 6. LDR colour (post-tonemap, pre-FXAA)
     if (m_ldrTex) {
         DumpTexture2D_RGBA8(m_ldrTex, m_screenW, m_screenH, path("ldr_color.png"));
         Debug::Info("RenderSystem::DumpBuffers") << "Saved ldr_color.png\n";
     }
 
-    // ---- 7. Final output ----
+    // 7. Final output
     DumpDefaultFramebuffer(m_screenW, m_screenH, path("final_output.png"));
     Debug::Info("RenderSystem::DumpBuffers") << "Saved final_output.png\n";
 
-    // ---- 8. Point light shadow cubemap faces ----
+    // 8. Point light shadow cubemap faces
     if (m_shadowCubeArray && m_shadowCount > 0) {
         static constexpr const char* kFaceNames[6] = {
             "pX", "nX", "pY", "nY", "pZ", "nZ"
@@ -412,11 +358,7 @@ void RenderSystem::DumpBuffers() const
         }
     }
 
-    // ---- 9. Directional light shadow map ----
-    // Only dump when the texture was actually rendered into (FBO was used this
-    // frame).  We check m_dirShadowTex rather than a separate "was rendered"
-    // flag — if it's non-zero Init() created it, and DirShadowPass() would
-    // have filled it if a directional light exists and shadows are enabled.
+    // 9. Directional light shadow map (m_dirShadowTex non-zero implies Init() created it and DirShadowPass() filled it, if enabled)
     if (m_dirShadowTex) {
         const int dirRes = RenderSettings::instance().getDirShadowResolution();
         DumpTexture2D_DirShadow(m_dirShadowTex, dirRes, path("dir_shadow.png"));

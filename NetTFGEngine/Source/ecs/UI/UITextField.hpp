@@ -42,24 +42,20 @@ public:
 
     std::string id;
 
-    // Text content
     std::string text;
     std::string placeholderText;
     size_t maxLength;
 
-    // State
     TextFieldState state;
     bool isInteractable;
     bool isPassword;  // Display text as asterisks
 
-    // Cursor and selection
     size_t cursorPosition;
     size_t selectionStart;
     size_t selectionEnd;
     float cursorBlinkTime;
     bool cursorVisible;
 
-    // Visual properties
     glm::vec4 textColor;
     glm::vec4 placeholderColor;
     glm::vec4 backgroundColor;
@@ -71,16 +67,14 @@ public:
     float padding;
     std::string fontName;
 
-    // Callbacks
     std::function<void(const std::string&)> onTextChanged;
     std::function<void()> onFocusGained;
     std::function<void()> onFocusLost;
     std::function<void(const std::string&)> onSubmit;  // Called on Enter key
 
-    // Validation callback - return true if text is valid
+    // Return true if text is valid
     std::function<bool(const std::string&)> validator;
 
-    // Helper methods
     bool HasSelection() const {
         return selectionStart != selectionEnd;
     }
@@ -132,21 +126,17 @@ public:
         }
     }
 
-    // Text manipulation
     void InsertText(const std::string& insertText) {
         if (!isInteractable || state == TextFieldState::DISABLED) return;
 
-        // Delete selection if any
         if (HasSelection()) {
             DeleteSelection();
         }
 
-        // Check if we can insert
         if (text.length() + insertText.length() > maxLength) {
             return;
         }
 
-        // Insert text at cursor
         text.insert(cursorPosition, insertText);
         cursorPosition += insertText.length();
         ClearSelection();

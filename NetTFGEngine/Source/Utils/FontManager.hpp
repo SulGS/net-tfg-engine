@@ -20,16 +20,9 @@ public:
     FontManager();
     ~FontManager();
 
-    // Load a font from file
     bool LoadFont(const std::string& fontName, const std::string& fontPath, unsigned int fontSize);
-    
-    // Get character info for a specific font
     const Character* GetCharacter(const std::string& fontName, char c) const;
-    
-    // Check if font exists
     bool HasFont(const std::string& fontName) const;
-    
-    // Measure text size
     glm::vec2 MeasureText(const std::string& fontName, const std::string& text, float scale = 1.0f) const;
 
 private:

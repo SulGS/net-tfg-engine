@@ -66,7 +66,6 @@ public:
 
             if (ship->isShooting) continue;
 
-            // ── Angular velocity ──────────────────────────────────────────────
             bool notRotating = !(m & INPUT_LEFT) && !(m & INPUT_RIGHT);
 
             if (m & INPUT_LEFT)
@@ -96,9 +95,8 @@ public:
             if (newZ < 0.0f) newZ += 360.0f;
             transform->setRotation(glm::vec3(transform->getRotation().x, transform->getRotation().y, newZ));
 
-            // ── Thrust (uses updated rotation so direction matches visuals) ───
-            // shipZRotation tracks the authoritative integer rotation for the
-            // game state blob — keep it in sync with the live transform value.
+            // Thrust — uses updated rotation so direction matches visuals.
+            // shipZRotation is the authoritative rotation for the state blob.
             ship->shipZRotation = static_cast<int>(newZ);
 
             float radians = newZ * 3.14159f / 180.0f;
@@ -128,10 +126,8 @@ public:
                 ship->velY *= scale;
             }
 
-            // Apply linear velocity
             transform->setPosition(transform->getPosition() + glm::vec3(ship->velX, ship->velY, 0.0f));
 
-            // ── Shoot ─────────────────────────────────────────────────────────
             if ((m & INPUT_SHOOT) && ship->shootCooldown <= 0 && ship->isAlive)
             {
                 ship->remainingShootFrames = CHARGE_SHOOT_FRAMES;
@@ -791,7 +787,7 @@ public:
     {
         if (!isServer) return;
 
-        // ── Cache spoke entities once ─────────────────────────────────────────
+        // Cache spoke entities once
         std::unordered_set<Entity> spokeEntities;
         {
             auto spokeQuery = entityManager.CreateQuery<LaserWallID, CenterSpoke>();
@@ -799,7 +795,7 @@ public:
                 spokeEntities.insert(entity);
         }
 
-        // ── Cache active tiles once ───────────────────────────────────────────
+        // Cache active tiles once
         std::vector<std::pair<int, int>> activeTiles;
         activeTiles.reserve(MAP_SIZE * MAP_SIZE);
         {
@@ -809,7 +805,7 @@ public:
                     activeTiles.push_back({ tileId->id / y_size, tileId->id % y_size });
         }
 
-        // ── Step 1: update all timers, emit WARN_WALL on warning transition ───
+        // Step 1: update all timers, emit WARN_WALL on warning transition
         {
             auto wallQuery = entityManager.CreateQuery<LaserWallID>();
             for (auto [entity, lwid] : wallQuery)
@@ -845,13 +841,13 @@ public:
             }
         }
 
-        // ── Step 2: build wall map ────────────────────────────────────────────
+        // Step 2: build wall map
         bool hWalls[2 * MAP_SIZE + 1][2 * MAP_SIZE];
         bool vWalls[2 * MAP_SIZE][2 * MAP_SIZE + 1];
         bool cWallsMap[MAP_SIZE][MAP_SIZE][4] = {};
         BuildWallMap(entityManager, spokeEntities, hWalls, vWalls, cWallsMap);
 
-        // ── Step 0: initial reachability fix ──────────────────────────────────
+        // Step 0: initial reachability fix
         if (!initialValidationDone)
         {
             for (auto& [cx, cy] : activeTiles)
@@ -869,7 +865,7 @@ public:
             initialValidationDone = true;
         }
 
-        // ── Step 3: enforce border walls and process expired interior walls ────
+        // Step 3: enforce border walls and process expired interior walls
         {
             auto wallQuery = entityManager.CreateQuery<LaserWallID>();
             for (auto [entity, lwid] : wallQuery)
@@ -958,7 +954,7 @@ public:
             }
         }
 
-        // ── Step 4: center spokes ─────────────────────────────────────────────
+        // Step 4: center spokes
         {
             auto spokeQuery = entityManager.CreateQuery<LaserWallID, CenterSpoke>();
             for (auto [entity, lwid, spoke] : spokeQuery)
@@ -1050,7 +1046,7 @@ public:
             }
         }
 
-        // ── Step 5: tile destruction ──────────────────────────────────────────
+        // Step 5: tile destruction
         tileDestroyTimer -= deltaTime;
 
         if (!tileWarningEmitted && tileDestroyTimer <= TILE_WARNING_THRESHOLD && pendingDestroyTileId == -1)
@@ -1090,7 +1086,7 @@ public:
             pendingDestroyTileId = -1;
         }
 
-        // ── Debug print ───────────────────────────────────────────────────────
+        // Debug print
         debugPrintArenaTimer -= deltaTime;
         if (debugPrintArenaTimer <= 0.0f)
         {
@@ -1172,7 +1168,6 @@ public:
         if (!isServer) return;
         if (timerFired)  return;
 
-        // Count alive players and find the winner's id
         int  aliveCount = 0;
         int  winnerId = -1;
         int  totalPlayers = 0;
@@ -1196,7 +1191,6 @@ public:
             return;
         }
 
-        // Start the timer on first detection
         if (gameOverTimer < 0.0f)
             gameOverTimer = 10.0f;
 
@@ -1230,11 +1224,7 @@ public:
                         if (code == CONN_SUCCESS)
                         {
                             Debug::Info("Asteroids") << "Switched back to client " << id << "\n";
-                            // Use RequestDeactivateClient instead of DeactivateClient:
-                            // this callback runs on a background thread while client 1
-                            // may still be mid-tick on the main thread. The deferred
-                            // version is applied by the engine loop between ticks, which
-                            // is the only safe place to call CloseClient().
+                            // Deferred (not DeactivateClient) since client 1 may still be mid-tick on this background thread.
                             NetTFG_Engine::Get().RequestDeactivateClient(1);
                         }
                         else

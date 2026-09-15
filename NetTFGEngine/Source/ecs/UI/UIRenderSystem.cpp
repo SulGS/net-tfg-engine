@@ -4,7 +4,6 @@
 #include "Utils/Debug/Debug.hpp"
 #include "Utils/AssetManager.hpp"
 
-// UI Shaders
 const char* uiVertexShader = R"(
 #version 330 core
 layout (location = 0) in vec2 aPos;
@@ -39,7 +38,6 @@ void main() {
 }
 )";
 
-// Text rendering shaders
 const char* textVertexShader = R"(
 #version 330 core
 layout (location = 0) in vec4 vertex; // vec2 pos, vec2 tex
@@ -99,14 +97,12 @@ bool UIRenderSystem::LoadFont(const std::string& fontName, const std::string& fo
 }
 
 void UIRenderSystem::Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) {
-    // Save previous OpenGL state
     GLboolean depthTest = glIsEnabled(GL_DEPTH_TEST);
     GLboolean blend = glIsEnabled(GL_BLEND);
     GLint blendSrc, blendDst;
     glGetIntegerv(GL_BLEND_SRC_ALPHA, &blendSrc);
     glGetIntegerv(GL_BLEND_DST_ALPHA, &blendDst);
 
-    // Setup UI rendering state
     glDisable(GL_DEPTH_TEST);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -115,7 +111,6 @@ void UIRenderSystem::Update(EntityManager& entityManager, std::vector<EventEntry
     glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "uProjection"),
         1, GL_FALSE, glm::value_ptr(projection));
 
-    // Collect all UI elements and sort by layer
     std::vector<std::tuple<Entity, UIElement*, int>> uiElements;
 
     auto query = entityManager.CreateQuery<UIElement>();
@@ -131,16 +126,17 @@ void UIRenderSystem::Update(EntityManager& entityManager, std::vector<EventEntry
             return std::get<2>(a) < std::get<2>(b);
         });
 
-    // Render all UI elements
+    // Open dropdown popups are deferred to a second pass so they are never
+    // covered by elements on higher layers.
+    std::vector<std::pair<const UIElement*, const UIDropdown*>> openDropdowns;
+
     for (const auto& [entity, element, layer] : uiElements) {
-        // Check for button component
         UIButton* button = entityManager.GetComponent<UIButton>(entity);
         if (button) {
             UpdateButton(entity, element, button);
             RenderUIButton(entity, element, button);
         }
 
-        // Check for image component
         UIImage* image = entityManager.GetComponent<UIImage>(entity);
         if (image) {
             if (!image->isLoaded) {
@@ -156,14 +152,11 @@ void UIRenderSystem::Update(EntityManager& entityManager, std::vector<EventEntry
                 }
             }
 
-            // Render the image every frame (if loaded)
             if (image->isLoaded) {
-                //Debug::Info("UIRenderSystem") << "Rendering image with texture ID: " << image->textureID << "\n";
                 RenderUIImage(element, image);
             }
         }
 
-        // Check for text component
         UIText* text = entityManager.GetComponent<UIText>(entity);
         if (text) {
             RenderUIText(element, text);
@@ -174,11 +167,28 @@ void UIRenderSystem::Update(EntityManager& entityManager, std::vector<EventEntry
             RenderUITextField(element, textField);
         }
 
+        UISlider* slider = entityManager.GetComponent<UISlider>(entity);
+        if (slider) {
+            RenderUISlider(element, slider);
+        }
+
+        // Header now; popup list is rendered in the second pass below.
+        UIDropdown* dropdown = entityManager.GetComponent<UIDropdown>(entity);
+        if (dropdown) {
+            RenderUIDropdown(element, dropdown);
+            if (dropdown->isOpen && !dropdown->options.empty()) {
+                openDropdowns.push_back({ element, dropdown });
+            }
+        }
+    }
+
+    // Second pass: open dropdown lists on top of everything else
+    for (const auto& [element, dropdown] : openDropdowns) {
+        RenderUIDropdownList(element, dropdown);
     }
 
     glUseProgram(0);
 
-    // Restore previous OpenGL state
     if (depthTest) glEnable(GL_DEPTH_TEST);
     else glDisable(GL_DEPTH_TEST);
 
@@ -223,7 +233,6 @@ void UIRenderSystem::InitializeTextRendering() {
     glBufferData(GL_ARRAY_BUFFER, sizeof(float) * 4 * 6 * 1024, nullptr, GL_DYNAMIC_DRAW);
 
     glEnableVertexAttribArray(0);
-    // vertex: vec4 (pos.xy, uv.xy)
     glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
 
     glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -231,7 +240,6 @@ void UIRenderSystem::InitializeTextRendering() {
 }
 
 void UIRenderSystem::InitializeQuad() {
-    // Quad vertices (position + texcoord)
     float vertices[] = {
         // Pos      // Tex
         0.0f, 1.0f, 0.0f, 0.0f,  // Changed from 0.0f, 1.0f
@@ -297,7 +305,6 @@ void UIRenderSystem::RenderUIText(const UIElement* element, const UIText* text) 
     float loadedFontSize = refChar ? static_cast<float>(refChar->size.y) : 48.0f;
     float scale = text->fontSize / loadedFontSize;
 
-    // Use text shader
     glUseProgram(textShaderProgram);
     glUniformMatrix4fv(glGetUniformLocation(textShaderProgram, "uProjection"),
         1, GL_FALSE, glm::value_ptr(projection));
@@ -308,10 +315,7 @@ void UIRenderSystem::RenderUIText(const UIElement* element, const UIText* text) 
     glActiveTexture(GL_TEXTURE0);
     glBindVertexArray(textVAO);
 
-    // Calculate baseline position
-    // FreeType uses a baseline system where:
-    // - bearing.y is the distance from baseline to top of glyph
-    // - Characters sit on the baseline, descenders go below
+    // FreeType baseline: bearing.y is the distance from baseline to glyph top.
     float cursorX = pos.x;
 
     // Find the maximum bearing.y to establish a consistent baseline
@@ -323,12 +327,10 @@ void UIRenderSystem::RenderUIText(const UIElement* element, const UIText* text) 
         }
     }
 
-    // Baseline is at pos.y + maxBearingY (scaled)
     float baselineY = pos.y + (maxBearingY * scale);
 
     // If element has a height, center the text vertically
     if (element->size.y > 0.0f) {
-        // Measure total text height
         float maxHeight = 0.0f;
         float minY = 0.0f;
         for (char c : text->text) {
@@ -342,7 +344,6 @@ void UIRenderSystem::RenderUIText(const UIElement* element, const UIText* text) 
         }
         float totalTextHeight = maxHeight - minY;
 
-        // Center vertically in element
         float yOffset = (element->size.y - totalTextHeight) * 0.5f;
         baselineY = pos.y + yOffset + maxHeight;
     }
@@ -361,7 +362,6 @@ void UIRenderSystem::RenderUIText(const UIElement* element, const UIText* text) 
         float w = ch->size.x * scale;
         float h = ch->size.y * scale;
 
-        // Build quad vertices (position.xy, texcoord.xy)
         float vertices[6][4] = {
             { xpos,     ypos + h,   0.0f, 1.0f },  // Bottom-left
             { xpos + w, ypos,       1.0f, 0.0f },  // Top-right
@@ -372,11 +372,9 @@ void UIRenderSystem::RenderUIText(const UIElement* element, const UIText* text) 
             { xpos + w, ypos,       1.0f, 0.0f }   // Top-right
         };
 
-        // Bind glyph texture
         glBindTexture(GL_TEXTURE_2D, ch->textureID);
         glUniform1i(glGetUniformLocation(textShaderProgram, "text"), 0);
 
-        // Update VBO and draw
         glBindBuffer(GL_ARRAY_BUFFER, textVBO);
         glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
         glDrawArrays(GL_TRIANGLES, 0, 6);
@@ -385,7 +383,6 @@ void UIRenderSystem::RenderUIText(const UIElement* element, const UIText* text) 
         cursorX += (ch->advance >> 6) * scale;
     }
 
-    // Cleanup
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindVertexArray(0);
     glBindTexture(GL_TEXTURE_2D, 0);
@@ -395,7 +392,6 @@ void UIRenderSystem::RenderUIText(const UIElement* element, const UIText* text) 
 void UIRenderSystem::RenderUIButton(Entity entity, const UIElement* element, const UIButton* button) {
     glm::vec2 pos = element->GetScreenPosition(refWidth, refHeight);
 
-    // Render background
     glm::vec4 bgColor = button->GetCurrentColor() * glm::vec4(1.0f, 1.0f, 1.0f, element->opacity);
     RenderQuad(pos, element->size, bgColor);
 
@@ -416,30 +412,25 @@ void UIRenderSystem::RenderUIButton(Entity entity, const UIElement* element, con
     RenderQuad(glm::vec2(pos.x + element->size.x, pos.y),
         glm::vec2(borderWidth, element->size.y), borderColor);
 
-    // Calculate text rendering area (with padding)
     glm::vec2 textPos = pos + glm::vec2(button->padding, button->padding);
     glm::vec2 textAreaSize = element->size - glm::vec2(button->padding * 2.0f);
 
-    // Get text to render
     std::string displayText = button->text;
 
     if (displayText.empty()) {
         return;
     }
 
-    // Get font info
     const std::string fontName = button->fontName;
     if (!fontManager || !fontManager->HasFont(fontName)) {
         return;
     }
 
-    // Calculate scale
     const Character* refChar = fontManager->GetCharacter(fontName, 'H');
     if (!refChar) refChar = fontManager->GetCharacter(fontName, 'A');
     float loadedFontSize = refChar ? static_cast<float>(refChar->size.y) : 48.0f;
     float scale = button->fontSize / loadedFontSize;
 
-    // Setup text rendering
     glUseProgram(textShaderProgram);
     glUniformMatrix4fv(glGetUniformLocation(textShaderProgram, "uProjection"),
         1, GL_FALSE, glm::value_ptr(projection));
@@ -452,7 +443,6 @@ void UIRenderSystem::RenderUIButton(Entity entity, const UIElement* element, con
     glActiveTexture(GL_TEXTURE0);
     glBindVertexArray(textVAO);
 
-    // Calculate baseline
     float maxBearingY = 0.0f;
     for (char c : displayText) {
         const Character* ch = fontManager->GetCharacter(fontName, c);
@@ -461,7 +451,6 @@ void UIRenderSystem::RenderUIButton(Entity entity, const UIElement* element, con
         }
     }
 
-    // Calculate total text width for centering
     float textWidth = 0.0f;
     for (char c : displayText) {
         const Character* ch = fontManager->GetCharacter(fontName, c);
@@ -474,7 +463,6 @@ void UIRenderSystem::RenderUIButton(Entity entity, const UIElement* element, con
     float baselineY = textPos.y + (textAreaSize.y + maxBearingY * scale) * 0.5f;
     float cursorX = textPos.x + (textAreaSize.x - textWidth) * 0.5f;
 
-    // Render text
     for (size_t i = 0; i < displayText.length(); i++) {
         char c = displayText[i];
         const Character* ch = fontManager->GetCharacter(fontName, c);
@@ -485,7 +473,6 @@ void UIRenderSystem::RenderUIButton(Entity entity, const UIElement* element, con
         float w = ch->size.x * scale;
         float h = ch->size.y * scale;
 
-        // Build vertices
         float vertices[6][4] = {
             { xpos,     ypos + h,   0.0f, 1.0f },
             { xpos + w, ypos,       1.0f, 0.0f },
@@ -505,7 +492,6 @@ void UIRenderSystem::RenderUIButton(Entity entity, const UIElement* element, con
         cursorX += (ch->advance >> 6) * scale;
     }
 
-    // Cleanup
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindVertexArray(0);
     glBindTexture(GL_TEXTURE_2D, 0);
@@ -532,7 +518,6 @@ void UIRenderSystem::RenderQuad(const glm::vec2& position, const glm::vec2& size
         glBindTexture(GL_TEXTURE_2D, textureID);
         glUniform1i(glGetUniformLocation(shaderProgram, "uTexture"), 0);
 
-        // DEBUG: Check if texture is valid
         GLint width, height;
         glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &width);
         glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_HEIGHT, &height);
@@ -545,7 +530,6 @@ void UIRenderSystem::RenderQuad(const glm::vec2& position, const glm::vec2& size
     glDrawArrays(GL_TRIANGLES, 0, 6);
     glBindVertexArray(0);
 
-    // Unbind texture
     if (textureID) {
         glBindTexture(GL_TEXTURE_2D, 0);
     }
@@ -555,7 +539,6 @@ void UIRenderSystem::RenderQuad(const glm::vec2& position, const glm::vec2& size
 void UIRenderSystem::RenderUITextField(const UIElement* element, const UITextField* textField) {
     glm::vec2 pos = element->GetScreenPosition(refWidth, refHeight);
 
-    // Render background
     glm::vec4 bgColor = textField->GetCurrentBackgroundColor() * glm::vec4(1.0f, 1.0f, 1.0f, element->opacity);
     RenderQuad(pos, element->size, bgColor);
 
@@ -576,11 +559,9 @@ void UIRenderSystem::RenderUITextField(const UIElement* element, const UITextFie
     RenderQuad(glm::vec2(pos.x + element->size.x, pos.y),
         glm::vec2(borderWidth, element->size.y), borderColor);
 
-    // Calculate text rendering area (with padding)
     glm::vec2 textPos = pos + glm::vec2(textField->padding, textField->padding);
     glm::vec2 textAreaSize = element->size - glm::vec2(textField->padding * 2.0f);
 
-    // Determine what text to render
     std::string displayText = textField->GetDisplayText();
     bool showPlaceholder = displayText.empty() && textField->state != TextFieldState::FOCUSED;
 
@@ -592,19 +573,16 @@ void UIRenderSystem::RenderUITextField(const UIElement* element, const UITextFie
         return;
     }
 
-    // Get font info
     const std::string fontName = textField->fontName;
     if (!fontManager || !fontManager->HasFont(fontName)) {
         return;
     }
 
-    // Calculate scale
     const Character* refChar = fontManager->GetCharacter(fontName, 'H');
     if (!refChar) refChar = fontManager->GetCharacter(fontName, 'A');
     float loadedFontSize = refChar ? static_cast<float>(refChar->size.y) : 48.0f;
     float scale = textField->fontSize / loadedFontSize;
 
-    // Setup text rendering
     glUseProgram(textShaderProgram);
     glUniformMatrix4fv(glGetUniformLocation(textShaderProgram, "uProjection"),
         1, GL_FALSE, glm::value_ptr(projection));
@@ -619,7 +597,6 @@ void UIRenderSystem::RenderUITextField(const UIElement* element, const UITextFie
     glActiveTexture(GL_TEXTURE0);
     glBindVertexArray(textVAO);
 
-    // Calculate baseline
     float maxBearingY = 0.0f;
     for (char c : displayText) {
         const Character* ch = fontManager->GetCharacter(fontName, c);
@@ -632,12 +609,10 @@ void UIRenderSystem::RenderUITextField(const UIElement* element, const UITextFie
     float baselineY = textPos.y + (textAreaSize.y + maxBearingY * scale) * 0.5f;
     float cursorX = textPos.x;
 
-    // Render selection background if there's a selection
     if (!showPlaceholder && textField->HasSelection() && textField->state == TextFieldState::FOCUSED) {
         size_t selStart = textField->GetSelectionMin();
         size_t selEnd = textField->GetSelectionMax();
 
-        // Calculate X position of selection start
         float selStartX = textPos.x;
         for (size_t i = 0; i < selStart && i < displayText.length(); i++) {
             const Character* ch = fontManager->GetCharacter(fontName, displayText[i]);
@@ -646,7 +621,6 @@ void UIRenderSystem::RenderUITextField(const UIElement* element, const UITextFie
             }
         }
 
-        // Calculate width of selection
         float selWidth = 0.0f;
         for (size_t i = selStart; i < selEnd && i < displayText.length(); i++) {
             const Character* ch = fontManager->GetCharacter(fontName, displayText[i]);
@@ -655,7 +629,6 @@ void UIRenderSystem::RenderUITextField(const UIElement* element, const UITextFie
             }
         }
 
-        // Render selection background
         glUseProgram(shaderProgram);
         glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "uProjection"),
             1, GL_FALSE, glm::value_ptr(projection));
@@ -671,7 +644,6 @@ void UIRenderSystem::RenderUITextField(const UIElement* element, const UITextFie
             1, glm::value_ptr(renderColor));
     }
 
-    // Render text
     float cursorRenderX = textPos.x;
     for (size_t i = 0; i < displayText.length(); i++) {
         char c = displayText[i];
@@ -683,7 +655,6 @@ void UIRenderSystem::RenderUITextField(const UIElement* element, const UITextFie
         float w = ch->size.x * scale;
         float h = ch->size.y * scale;
 
-        // Build vertices
         float vertices[6][4] = {
             { xpos,     ypos + h,   0.0f, 1.0f },
             { xpos + w, ypos,       1.0f, 0.0f },
@@ -708,16 +679,13 @@ void UIRenderSystem::RenderUITextField(const UIElement* element, const UITextFie
         cursorX += (ch->advance >> 6) * scale;
     }
 
-    // If cursor is at position 0, set render position
     if (!showPlaceholder && textField->cursorPosition == 0) {
         cursorRenderX = textPos.x;
     }
-    // If cursor is at end and text is not empty
     else if (!showPlaceholder && textField->cursorPosition == displayText.length() && !displayText.empty()) {
         cursorRenderX = cursorX;
     }
 
-    // Render cursor if focused and visible
     if (!showPlaceholder && textField->state == TextFieldState::FOCUSED && textField->cursorVisible) {
         glUseProgram(shaderProgram);
         glUniformMatrix4fv(glGetUniformLocation(shaderProgram, "uProjection"),
@@ -732,7 +700,6 @@ void UIRenderSystem::RenderUITextField(const UIElement* element, const UITextFie
             cursorColor);
     }
 
-    // Cleanup
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glBindVertexArray(0);
     glBindTexture(GL_TEXTURE_2D, 0);
@@ -741,6 +708,282 @@ void UIRenderSystem::RenderUITextField(const UIElement* element, const UITextFie
 
 void UIRenderSystem::UpdateButton(Entity entity, UIElement* element, UIButton* button) {
 
+}
+
+// Shared drawing helpers
+
+void UIRenderSystem::RenderBorder(const glm::vec2& position, const glm::vec2& size,
+    const glm::vec4& color, float thickness) {
+    if (thickness <= 0.0f) return;
+
+    // Top
+    RenderQuad(glm::vec2(position.x, position.y - thickness),
+        glm::vec2(size.x, thickness), color);
+    // Bottom
+    RenderQuad(glm::vec2(position.x, position.y + size.y),
+        glm::vec2(size.x, thickness), color);
+    // Left
+    RenderQuad(glm::vec2(position.x - thickness, position.y),
+        glm::vec2(thickness, size.y), color);
+    // Right
+    RenderQuad(glm::vec2(position.x + size.x, position.y),
+        glm::vec2(thickness, size.y), color);
+}
+
+void UIRenderSystem::RenderTriangle(const glm::vec2& center, float width, float height,
+    bool pointDown, const glm::vec4& color) {
+    // The UI shader only draws quads, so the triangle is approximated with
+    // a few horizontal slices that shrink towards the tip.
+    const int steps = 6;
+    float sliceHeight = height / static_cast<float>(steps);
+
+    for (int i = 0; i < steps; i++) {
+        float t = static_cast<float>(i) / static_cast<float>(steps);
+        float sliceWidth = width * (1.0f - t);
+        float y = pointDown
+            ? (center.y - height * 0.5f + static_cast<float>(i) * sliceHeight)
+            : (center.y + height * 0.5f - static_cast<float>(i + 1) * sliceHeight);
+
+        RenderQuad(glm::vec2(center.x - sliceWidth * 0.5f, y),
+            glm::vec2(sliceWidth, sliceHeight + 0.5f), color);
+    }
+}
+
+float UIRenderSystem::GetFontScale(const std::string& fontName, float fontSize) {
+    if (!fontManager) return 1.0f;
+
+    const Character* refChar = fontManager->GetCharacter(fontName, 'H');
+    if (!refChar) refChar = fontManager->GetCharacter(fontName, 'A');
+
+    float loadedFontSize = refChar ? static_cast<float>(refChar->size.y) : 48.0f;
+    if (loadedFontSize <= 0.0f) loadedFontSize = 48.0f;
+
+    return fontSize / loadedFontSize;
+}
+
+float UIRenderSystem::MeasureTextWidth(const std::string& text, const std::string& fontName,
+    float fontSize) {
+    if (!fontManager || !fontManager->HasFont(fontName) || text.empty()) return 0.0f;
+
+    float scale = GetFontScale(fontName, fontSize);
+    float width = 0.0f;
+    for (char c : text) {
+        const Character* ch = fontManager->GetCharacter(fontName, c);
+        if (ch) width += (ch->advance >> 6) * scale;
+    }
+    return width;
+}
+
+std::string UIRenderSystem::TruncateTextToWidth(const std::string& text, const std::string& fontName,
+    float fontSize, float maxWidth) {
+    if (maxWidth <= 0.0f || text.empty()) return text;
+    if (MeasureTextWidth(text, fontName, fontSize) <= maxWidth) return text;
+
+    const std::string ellipsis = "...";
+    float ellipsisWidth = MeasureTextWidth(ellipsis, fontName, fontSize);
+    float scale = GetFontScale(fontName, fontSize);
+    float budget = maxWidth - ellipsisWidth;
+    if (budget <= 0.0f) return ellipsis;
+
+    std::string result;
+    float width = 0.0f;
+    for (char c : text) {
+        const Character* ch = fontManager->GetCharacter(fontName, c);
+        if (!ch) continue;
+        float advance = (ch->advance >> 6) * scale;
+        if (width + advance > budget) break;
+        width += advance;
+        result += c;
+    }
+    return result + ellipsis;
+}
+
+void UIRenderSystem::RenderTextInRect(const std::string& text, const glm::vec2& rectPos,
+    const glm::vec2& rectSize, const std::string& fontName, float fontSize,
+    const glm::vec4& color, UITextAlign align) {
+    if (text.empty()) return;
+    if (!fontManager || !fontManager->HasFont(fontName)) return;
+
+    float scale = GetFontScale(fontName, fontSize);
+
+    glUseProgram(textShaderProgram);
+    glUniformMatrix4fv(glGetUniformLocation(textShaderProgram, "uProjection"),
+        1, GL_FALSE, glm::value_ptr(projection));
+    glUniform4fv(glGetUniformLocation(textShaderProgram, "textColor"),
+        1, glm::value_ptr(color));
+
+    glActiveTexture(GL_TEXTURE0);
+    glBindVertexArray(textVAO);
+
+    // Baseline: use the tallest glyph so every string sits consistently
+    float maxBearingY = 0.0f;
+    for (char c : text) {
+        const Character* ch = fontManager->GetCharacter(fontName, c);
+        if (ch && ch->bearing.y > maxBearingY) {
+            maxBearingY = static_cast<float>(ch->bearing.y);
+        }
+    }
+
+    float textWidth = MeasureTextWidth(text, fontName, fontSize);
+    float cursorX = rectPos.x;
+    if (align == UITextAlign::CENTER) {
+        cursorX += (rectSize.x - textWidth) * 0.5f;
+    }
+    else if (align == UITextAlign::RIGHT) {
+        cursorX += (rectSize.x - textWidth);
+    }
+
+    float baselineY = rectPos.y + (rectSize.y + maxBearingY * scale) * 0.5f;
+
+    for (char c : text) {
+        const Character* ch = fontManager->GetCharacter(fontName, c);
+        if (!ch) continue;
+
+        float xpos = cursorX + ch->bearing.x * scale;
+        float ypos = baselineY - ch->bearing.y * scale;
+        float w = ch->size.x * scale;
+        float h = ch->size.y * scale;
+
+        float vertices[6][4] = {
+            { xpos,     ypos + h,   0.0f, 1.0f },
+            { xpos + w, ypos,       1.0f, 0.0f },
+            { xpos,     ypos,       0.0f, 0.0f },
+            { xpos,     ypos + h,   0.0f, 1.0f },
+            { xpos + w, ypos + h,   1.0f, 1.0f },
+            { xpos + w, ypos,       1.0f, 0.0f }
+        };
+
+        glBindTexture(GL_TEXTURE_2D, ch->textureID);
+        glUniform1i(glGetUniformLocation(textShaderProgram, "text"), 0);
+
+        glBindBuffer(GL_ARRAY_BUFFER, textVBO);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+
+        cursorX += (ch->advance >> 6) * scale;
+    }
+
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+    glBindVertexArray(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glUseProgram(0);
+}
+
+// Slider
+
+void UIRenderSystem::RenderUISlider(const UIElement* element, const UISlider* slider) {
+    glm::vec2 pos = element->GetScreenPosition(refWidth, refHeight);
+    glm::vec4 alpha(1.0f, 1.0f, 1.0f, element->opacity);
+
+    // Track
+    glm::vec2 trackPos = slider->GetTrackPosition(pos, element->size);
+    glm::vec2 trackSize = slider->GetTrackSize(element->size);
+    RenderQuad(trackPos, trackSize, slider->GetCurrentTrackColor() * alpha);
+
+    // Filled portion
+    glm::vec4 fill = slider->GetFillRect(pos, element->size);
+    if (fill.z > 0.0f && fill.w > 0.0f) {
+        RenderQuad(glm::vec2(fill.x, fill.y), glm::vec2(fill.z, fill.w),
+            slider->GetCurrentFillColor() * alpha);
+    }
+
+    // Handle (+ border)
+    glm::vec2 handlePos = slider->GetHandlePosition(pos, element->size);
+    glm::vec2 handleSize = slider->GetHandleSize();
+    RenderQuad(handlePos, handleSize, slider->GetCurrentHandleColor() * alpha);
+    RenderBorder(handlePos, handleSize, slider->handleBorderColor * alpha, slider->borderWidth);
+
+    // Value label
+    if (slider->showValue) {
+        glm::vec4 labelRect = slider->GetValueLabelRect(pos, element->size);
+        UITextAlign align = (slider->orientation == SliderOrientation::HORIZONTAL)
+            ? UITextAlign::RIGHT : UITextAlign::CENTER;
+
+        RenderTextInRect(slider->GetValueText(),
+            glm::vec2(labelRect.x, labelRect.y),
+            glm::vec2(labelRect.z, labelRect.w),
+            slider->fontName, slider->fontSize,
+            slider->textColor * alpha, align);
+    }
+}
+
+// Dropdown
+
+void UIRenderSystem::RenderUIDropdown(const UIElement* element, const UIDropdown* dropdown) {
+    glm::vec2 pos = element->GetScreenPosition(refWidth, refHeight);
+    glm::vec4 alpha(1.0f, 1.0f, 1.0f, element->opacity);
+
+    // Header background + border
+    RenderQuad(pos, element->size, dropdown->GetCurrentBackgroundColor() * alpha);
+    RenderBorder(pos, element->size, dropdown->GetCurrentBorderColor() * alpha,
+        dropdown->borderWidth);
+
+    // Header text (selected option or placeholder), clipped with an ellipsis
+    glm::vec4 textRect = dropdown->GetTextRect(pos, element->size);
+    std::string label = TruncateTextToWidth(dropdown->GetDisplayText(), dropdown->fontName,
+        dropdown->fontSize, textRect.z);
+
+    RenderTextInRect(label,
+        glm::vec2(textRect.x, textRect.y),
+        glm::vec2(textRect.z, textRect.w),
+        dropdown->fontName, dropdown->fontSize,
+        dropdown->GetCurrentTextColor() * alpha, UITextAlign::LEFT);
+
+    // Arrow: points down when closed, up when open
+    glm::vec2 arrowCenter = dropdown->GetArrowCenter(pos, element->size);
+    RenderTriangle(arrowCenter, dropdown->arrowSize, dropdown->arrowSize * 0.6f,
+        !dropdown->isOpen, dropdown->arrowColor * alpha);
+}
+
+void UIRenderSystem::RenderUIDropdownList(const UIElement* element, const UIDropdown* dropdown) {
+    if (!dropdown->isOpen || dropdown->options.empty()) return;
+
+    glm::vec2 pos = element->GetScreenPosition(refWidth, refHeight);
+    glm::vec4 alpha(1.0f, 1.0f, 1.0f, element->opacity);
+
+    glm::vec4 listRect = dropdown->GetListRect(pos, element->size, refHeight);
+    glm::vec2 listPos(listRect.x, listRect.y);
+    glm::vec2 listSize(listRect.z, listRect.w);
+
+    // Panel background + border
+    RenderQuad(listPos, listSize, dropdown->listBackgroundColor * alpha);
+    RenderBorder(listPos, listSize, dropdown->listBorderColor * alpha, dropdown->borderWidth);
+
+    int first = dropdown->scrollOffset;
+    int last = std::min(first + dropdown->GetVisibleItemCount(), dropdown->GetOptionCount());
+
+    for (int i = first; i < last; i++) {
+        glm::vec4 itemRect = dropdown->GetItemRect(i, pos, element->size, refHeight);
+        if (itemRect.w <= 0.0f) continue;
+
+        glm::vec2 itemPos(itemRect.x, itemRect.y);
+        glm::vec2 itemSize(itemRect.z, itemRect.w);
+
+        // Highlight: hovered row wins over the selected row
+        if (i == dropdown->hoveredIndex) {
+            RenderQuad(itemPos, itemSize, dropdown->itemHoverColor * alpha);
+        }
+        else if (i == dropdown->selectedIndex) {
+            RenderQuad(itemPos, itemSize, dropdown->itemSelectedColor * alpha);
+        }
+
+        float textWidth = itemSize.x - dropdown->padding * 2.0f;
+        std::string label = TruncateTextToWidth(dropdown->options[i], dropdown->fontName,
+            dropdown->fontSize, textWidth);
+
+        RenderTextInRect(label,
+            glm::vec2(itemPos.x + dropdown->padding, itemPos.y),
+            glm::vec2(textWidth, itemSize.y),
+            dropdown->fontName, dropdown->fontSize,
+            dropdown->itemTextColor * alpha, UITextAlign::LEFT);
+    }
+
+    // Scrollbar thumb
+    glm::vec4 thumb = dropdown->GetScrollbarRect(pos, element->size, refHeight);
+    if (thumb.z > 0.0f && thumb.w > 0.0f) {
+        RenderQuad(glm::vec2(thumb.x, thumb.y), glm::vec2(thumb.z, thumb.w),
+            dropdown->scrollbarColor * alpha);
+    }
 }
 
 GLuint UIRenderSystem::CompileShader(const char* source, GLenum type) {

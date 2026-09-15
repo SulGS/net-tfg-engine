@@ -8,10 +8,7 @@
 
 class ShaderLoader {
 public:
-    // ---------------------------------------------------------------------------
-    // Cached path — looks up or compiles a program keyed on asset paths.
-    // This is what Material should call. Ref count is incremented on every call.
-    // ---------------------------------------------------------------------------
+    // Cached path: looks up or compiles a program keyed on asset paths, incrementing its ref count. This is what Material should call.
     static GLuint createProgram(const std::string& vertexAssetKey,
         const std::string& fragmentAssetKey);
 
@@ -22,9 +19,6 @@ public:
 private:
     ShaderLoader() = default; // non-instantiable
 
-    // ---------------------------------------------------------------------------
-    // Cache internals
-    // ---------------------------------------------------------------------------
     using CacheKey = std::pair<std::string, std::string>;
 
     struct CacheEntry {
@@ -46,9 +40,7 @@ private:
         return instance;
     }
 
-    // ---------------------------------------------------------------------------
-    // Raw compilation — no caching, no asset manager involvement
-    // ---------------------------------------------------------------------------
+    // Raw compilation â€” no caching, no asset manager involvement
     static GLuint compileAndLink(const std::string& vertexSource,
         const std::string& fragmentSource);
 

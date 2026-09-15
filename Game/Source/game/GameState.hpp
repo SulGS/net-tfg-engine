@@ -1,8 +1,7 @@
 ﻿#pragma once
 
-// Constants
 const int NUM_PLAYERS = 3;
-const int MAX_BULLETS = 32;  // Adjust based on your needs
+const int MAX_BULLETS = 32;
 const int MAP_SIZE = 5;      // 5x5 grid of tiles
 
 struct Bullet {
@@ -21,9 +20,9 @@ struct AsteroidShooterGameState {
     float posY[NUM_PLAYERS];
     float rot[NUM_PLAYERS];
 
-    float velX[NUM_PLAYERS];        // ← new
-    float velY[NUM_PLAYERS];        // ← new
-    float angularVel[NUM_PLAYERS];  // ← new
+    float velX[NUM_PLAYERS];
+    float velY[NUM_PLAYERS];
+    float angularVel[NUM_PLAYERS];
 
     int health[NUM_PLAYERS];
     bool alive[NUM_PLAYERS];
@@ -35,17 +34,13 @@ struct AsteroidShooterGameState {
     bool isShooting[NUM_PLAYERS];
     int remaingShootFrames[NUM_PLAYERS];
 
-    // Shooting cooldown per player
     int shootCooldown[NUM_PLAYERS];
 
-    // Bullet pool
     Bullet bullets[MAX_BULLETS];
     int bulletCount;  // Number of active bullets (for quick iteration)
 
-    // State of arena
     bool tilesActive[MAP_SIZE][MAP_SIZE];
     bool tilesWarning[MAP_SIZE][MAP_SIZE];
-    // bool matrix for walls
 
     // Edge between (px,py)→(px,py+1): runs along X axis (horizontal wall)
     bool hWalls[2 * MAP_SIZE + 1][2 * MAP_SIZE];

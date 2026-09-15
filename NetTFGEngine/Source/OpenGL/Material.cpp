@@ -1,9 +1,6 @@
 #include "Material.hpp"
 #include "Utils/Debug/Debug.hpp"
 
-// ---------------------------------------------------------------------------
-// Construction / destruction
-// ---------------------------------------------------------------------------
 Material::Material(const std::string& vertexShaderAsset,
     const std::string& fragmentShaderAsset)
     : vertexAssetKey(vertexShaderAsset)
@@ -26,9 +23,6 @@ Material::~Material() {
     ShaderLoader::destroyProgram(vertexAssetKey, fragmentAssetKey);
 }
 
-// ---------------------------------------------------------------------------
-// Typed setters
-// ---------------------------------------------------------------------------
 void Material::setFloat(const std::string& name, float value) {
     GLint loc = getLocation(name);
     if (loc != -1) uniforms[name] = { loc, value };
@@ -64,9 +58,6 @@ void Material::setMat4(const std::string& name, const glm::mat4& value) {
     if (loc != -1) uniforms[name] = { loc, value };
 }
 
-// ---------------------------------------------------------------------------
-// Bind — pushes all state to the GPU
-// ---------------------------------------------------------------------------
 void Material::bind(const glm::mat4& model,
     const glm::mat4& view,
     const glm::mat4& projection) const
@@ -78,27 +69,20 @@ void Material::bind(const glm::mat4& model,
 
     glUseProgram(shaderProgram);
 
-    // Engine uniforms
     if (modelLoc != -1) glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(model));
     if (viewLoc != -1) glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(view));
     if (projectionLoc != -1) glUniformMatrix4fv(projectionLoc, 1, GL_FALSE, glm::value_ptr(projection));
 
-    // User uniforms
     for (const auto& [name, entry] : uniforms) {
         uploadUniform(entry.location, entry.value);
     }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 GLint Material::getLocation(const std::string& name)
 {
-    // If we already cached this one, return it directly
     auto it = uniforms.find(name);
     if (it != uniforms.end()) return it->second.location;
 
-    // First time seeing this name — look it up
     GLint loc = glGetUniformLocation(shaderProgram, name.c_str());
     if (loc == -1) {
         Debug::Warning("Material") << "Uniform '" << name << "' not found in shader.\n";

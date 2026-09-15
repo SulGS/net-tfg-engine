@@ -33,15 +33,14 @@ const int TICKS_PER_SECOND = 30;
 const int MS_PER_TICK = 1000 / TICKS_PER_SECOND;
 const int MAX_ROLLBACK_FRAMES = 90;
 
-// Tamaños ajustables según tus necesidades
+// Tamaï¿½os ajustables segï¿½n tus necesidades
 constexpr size_t GAME_EVENT_BLOB_SIZE = 128;
 constexpr size_t STATE_DELTA_BLOB_SIZE = 1024;
 
-// Evento de juego como blob
 struct GameEventBlob {
 	int type = 0;
     uint8_t data[GAME_EVENT_BLOB_SIZE];
-    int len = 0; // longitud real de datos válidos
+    int len = 0; // longitud real de datos vï¿½lidos
 };
 
 struct EventEntry {
@@ -72,17 +71,6 @@ inline bool operator==(const EventEntry& a, const EventEntry& b) {
 inline bool operator!=(const EventEntry& a, const EventEntry& b) {
 	return !(a == b);
 }
-
-/*
-// Delta de estado como blob
-struct StateDeltaBlob {
-    int fromFrame = 0;
-    int toFrame = 0;
-	int deltaType = 0;
-    uint8_t data[STATE_DELTA_BLOB_SIZE];
-    int len = 0;
-};
-*/
 
 enum PacketType : uint8_t {
 	PACKET_HASH = 0x00,
@@ -180,6 +168,9 @@ public:
     virtual void Init(GameStateBlob& state) = 0;
 	virtual void HashState(const GameStateBlob& state, uint8_t (& outHash)[SHA256_DIGEST_LENGTH]) const = 0;
     virtual void PrintState(const GameStateBlob& state) const = 0;
+
+    // Releases AssetManager-backed resources held by this logic's components; must run before the owning Client's asset bin is unloaded.
+    virtual void ReleaseECSAssets() {}
 };
 
 struct StateUpdate {

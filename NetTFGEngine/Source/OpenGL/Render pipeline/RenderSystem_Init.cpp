@@ -1,9 +1,7 @@
 ﻿#include "RenderSystem.hpp"
 #include <cmath>
 
-// =====================================================
-//  Shader compilation helpers (static)
-// =====================================================
+// Shader compilation helpers (static)
 GLuint RenderSystem::CompileStage(GLenum type, const char* src)
 {
     GLuint s = glCreateShader(type);
@@ -35,9 +33,6 @@ GLuint RenderSystem::LinkProgram(std::initializer_list<GLuint> stages)
     return prog;
 }
 
-// =====================================================
-//  InitLightSSBO
-// =====================================================
 void RenderSystem::InitLightSSBO()
 {
     glGenBuffers(1, &m_lightSSBO);
@@ -47,9 +42,6 @@ void RenderSystem::InitLightSSBO()
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 }
 
-// =====================================================
-//  InitShadowCubeArray  — point light cubemap array
-// =====================================================
 void RenderSystem::InitShadowCubeArray()
 {
     m_shadowRes = RenderSettings::instance().getShadowResolution();
@@ -79,11 +71,7 @@ void RenderSystem::InitShadowCubeArray()
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 }
 
-// =====================================================
-//  InitDirLightUBO
-//  Single GPUDirLight struct uploaded each frame.
-//  Bound to uniform buffer binding 2.
-// =====================================================
+// Single GPUDirLight struct uploaded each frame, bound to uniform buffer binding 2.
 void RenderSystem::InitDirLightUBO()
 {
     glGenBuffers(1, &m_dirLightUBO);
@@ -93,14 +81,7 @@ void RenderSystem::InitDirLightUBO()
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
 }
 
-// =====================================================
-//  InitDirShadowMap
-//  A single 2-D DEPTH32F texture + FBO for the
-//  directional light orthographic shadow map.
-//  Resolution reuses getShadowResolution() (same as
-//  point lights — change the setting before calling
-//  ReInitShadows() to adjust both at once).
-// =====================================================
+// A single 2-D DEPTH32F texture + FBO for the directional light's orthographic shadow map; resolution is shared with point lights via getShadowResolution().
 void RenderSystem::InitDirShadowMap()
 {
     int res = RenderSettings::instance().getDirShadowResolution();
@@ -134,9 +115,6 @@ void RenderSystem::InitDirShadowMap()
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
-// =====================================================
-//  InitGBufferFBO
-// =====================================================
 void RenderSystem::InitGBufferFBO()
 {
     auto makeAttachment = [&](GLuint& tex) {
@@ -183,9 +161,6 @@ void RenderSystem::InitGBufferFBO()
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
-// =====================================================
-//  InitMSAAFBO
-// =====================================================
 void RenderSystem::InitMSAAFBO()
 {
     if (m_msaaSamples <= 1)
@@ -220,9 +195,6 @@ void RenderSystem::InitMSAAFBO()
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-// =====================================================
-//  InitHDRFBO
-// =====================================================
 void RenderSystem::InitHDRFBO()
 {
     glGenTextures(1, &m_hdrColorTex);
@@ -261,9 +233,6 @@ void RenderSystem::InitHDRFBO()
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
-// =====================================================
-//  InitScreenQuad
-// =====================================================
 void RenderSystem::InitScreenQuad()
 {
     static const float kVerts[] = {
@@ -288,9 +257,6 @@ void RenderSystem::InitScreenQuad()
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
-// =====================================================
-//  InitBloom
-// =====================================================
 void RenderSystem::InitBloom()
 {
     auto makeTex = [&](GLuint& tex, GLuint& fbo, int w, int h) {
@@ -318,9 +284,6 @@ void RenderSystem::InitBloom()
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
-// =====================================================
-//  InitLDRFBO
-// =====================================================
 void RenderSystem::InitLDRFBO()
 {
     glGenTextures(1, &m_ldrTex);

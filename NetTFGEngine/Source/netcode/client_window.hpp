@@ -5,6 +5,8 @@
 #include "OpenGL/Mesh.hpp"
 #include "Utils/Input.hpp"
 #include "Utils/Debug/Debug.hpp"
+#include <functional>
+#include <future>
 
 const int RENDER_TICKS_PER_SECOND = 144;
 const int RENDER_MS_PER_TICK = 1000 / RENDER_TICKS_PER_SECOND;
@@ -22,8 +24,18 @@ class ClientWindow {
     static OpenGLWindow* window;
     static std::mutex windowMutex;
     static std::thread renderThread;
-    static std::vector<ClientWindow*> activeInstances;  // Changed: vector of active instances
+    static std::vector<ClientWindow*> activeInstances;
     static bool threadRunning;
+
+    // Tasks queued from other threads to run on the render thread, where the
+    // GL context is current. Drained once per renderLoop iteration.
+    static std::vector<std::function<void()>> pendingTasks;
+
+    // Set at thread start; lets RunOnRenderThread detect reentrant calls from the render thread itself and run inline instead of deadlocking on its own queue.
+    static std::thread::id renderThreadId;
+
+    // Set by renderLoop() when the OS window is asked to close, without touching threadRunning/the GL context, so shutdown can release ECS GL resources before the context is destroyed.
+    static std::atomic<bool> closeRequested;
 
 public:
 
@@ -64,12 +76,13 @@ public:
         deactivate();
     }
 
-    // Initialize the window and start the persistent render thread
     static void startRenderThread(int width = 800, int height = 600, const std::string& title = "Client") {
         std::lock_guard<std::mutex> lock(windowMutex);
         if (!threadRunning) {
             threadRunning = true;
+            closeRequested = false;
             renderThread = std::thread([width, height, title]() {
+                renderThreadId = std::this_thread::get_id();
                 window = new OpenGLWindow(width, height, title);
                 Input::Init(window->getWindow());
 
@@ -81,7 +94,6 @@ public:
         }
     }
 
-    // Stop the render thread and destroy window
     static void stopRenderThread() {
         {
             std::lock_guard<std::mutex> lock(windowMutex);
@@ -93,11 +105,9 @@ public:
         }
     }
 
-    // Activate this ClientWindow instance (add to active list)
     void activate() {
         std::lock_guard<std::mutex> lock(windowMutex);
 
-        // Check if already active
         auto it = std::find(activeInstances.begin(), activeInstances.end(), this);
         if (it == activeInstances.end()) {
             activeInstances.push_back(this);
@@ -161,13 +171,42 @@ public:
         return threadRunning;
     }
 
+    // True once the OS window close was requested (render thread/GL context still alive); NetTFG_Engine::Start() polls this to begin shutdown.
+    static bool IsCloseRequested() {
+        return closeRequested.load();
+    }
+
+    // Runs fn on the render thread (blocking) since the GL context is only current there; runs inline if already on it (avoids deadlocking on its own queue), and skips fn entirely if the render thread isn't running (shutdown, no safe context to fall back to).
+    static void RunOnRenderThread(std::function<void()> fn) {
+        if (std::this_thread::get_id() == renderThreadId) {
+            fn();
+            return;
+        }
+
+        if (!isWindowThreadRunning()) {
+            return;
+        }
+
+        auto done = std::make_shared<std::promise<void>>();
+        std::future<void> fut = done->get_future();
+
+        {
+            std::lock_guard<std::mutex> lock(windowMutex);
+            pendingTasks.push_back([fn, done]() {
+                fn();
+                done->set_value();
+                });
+        }
+
+        fut.wait();
+    }
+
     static size_t getActiveInstanceCount() {
         std::lock_guard<std::mutex> lock(windowMutex);
         return activeInstances.size();
     }
 
 private:
-    // The persistent render loop running on the dedicated thread
     static void renderLoop() {
         auto nextTick = std::chrono::high_resolution_clock::now();
         auto frameStart = std::chrono::high_resolution_clock::now();
@@ -176,23 +215,30 @@ private:
         std::vector<long long> tickDurations;
         const size_t MAX_SAMPLES = 30;
 
-        while (threadRunning && !(window->shouldClose())) {
+        while (threadRunning) {
             frameStart = std::chrono::high_resolution_clock::now();
 
             window->pollEvents();
 
-            // Get snapshot of active instances
+            // Run cleanup queued from other threads; this is the only thread with the GL context current.
+            std::vector<std::function<void()>> tasksToRun;
+            {
+                std::lock_guard<std::mutex> lock(windowMutex);
+                tasksToRun.swap(pendingTasks);
+            }
+            for (auto& task : tasksToRun) {
+                task();
+            }
+
             std::vector<ClientWindow*> instances;
             {
                 std::lock_guard<std::mutex> lock(windowMutex);
                 instances = activeInstances;
             }
 
-            // Process each active instance
             for (ClientWindow* instance : instances) {
                 if (!instance || !instance->gRunning) continue;
 
-                // Call init callback if needed
                 if (instance->needsInit && instance->renderInitCallback) {
                     instance->renderInitCallback(instance->RenderState, window);
                     instance->needsInit = false;
@@ -200,7 +246,6 @@ private:
 
                 instance->gStateMutex.lock();
 
-                // Calculate interpolation factors
                 auto now = std::chrono::steady_clock::now();
 
                 // Server: sweeps 0->1 over MS_PER_TICK after each new state arrives.
@@ -225,7 +270,6 @@ private:
                     if (localInterpolationFactor > 1.0f) localInterpolationFactor = 1.0f;
                 }
 
-                // Interpolate
                 if (instance->interpolationCallback) {
                     instance->interpolationCallback(
                         instance->PreviousServerState,
@@ -241,7 +285,6 @@ private:
                 GameStateBlob stateCopy = instance->RenderState;
                 instance->gStateMutex.unlock();
 
-                // Render
                 if (instance->renderCallback) {
                     instance->renderCallback(stateCopy, window);
                 }
@@ -249,15 +292,10 @@ private:
 
             window->swapBuffers();
 
-            if (window->shouldClose()) {
-                std::lock_guard<std::mutex> lock(windowMutex);
-                threadRunning = false;
-                for (auto* instance : activeInstances) {
-                    if (instance) {
-                        instance->gRunning = false;
-                    }
-                }
-                break;
+            // Signal-only: NetTFG_Engine::Start() sees IsCloseRequested() and runs shutdown; stopRenderThread() sets threadRunning false once done.
+            if (!closeRequested && window->shouldClose()) {
+                closeRequested = true;
+                Debug::Info("ClientWindow") << "Window close requested; waiting for engine shutdown to release GL resources\n";
             }
 
             tickCount++;
@@ -268,12 +306,10 @@ private:
                 auto frameDurationUs =
                     std::chrono::duration_cast<std::chrono::microseconds>(frameEnd - frameStart).count();
 
-                // Store sample
                 tickDurations.push_back(frameDurationUs);
                 if (tickDurations.size() > MAX_SAMPLES)
                     tickDurations.erase(tickDurations.begin());
 
-                // Compute rolling average
                 long long sum = 0;
                 for (auto d : tickDurations)
                     sum += d;
@@ -300,11 +336,13 @@ private:
     }
 };
 
-// Static member definitions
 OpenGLWindow* ClientWindow::window = nullptr;
 std::mutex ClientWindow::windowMutex;
 std::thread ClientWindow::renderThread;
 std::vector<ClientWindow*> ClientWindow::activeInstances;
 bool ClientWindow::threadRunning = false;
+std::vector<std::function<void()>> ClientWindow::pendingTasks;
+std::atomic<bool> ClientWindow::closeRequested{ false };
+std::thread::id ClientWindow::renderThreadId;
 
 #endif //NETCODE_CLIENT_WINDOW_H

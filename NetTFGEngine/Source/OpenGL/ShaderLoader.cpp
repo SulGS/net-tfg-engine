@@ -1,15 +1,13 @@
 #include "ShaderLoader.hpp"
 
-// ---------------------------------------------------------------------------
-// Cached create — the only path Material should use
-// ---------------------------------------------------------------------------
+// Cached create â€” the only path Material should use
 GLuint ShaderLoader::createProgram(const std::string& vertexAssetKey,
     const std::string& fragmentAssetKey)
 {
     CacheKey key{ vertexAssetKey, fragmentAssetKey };
     auto& c = cache();
 
-    // Cache hit — just bump the ref count
+    // Cache hit ï¿½ just bump the ref count
     auto it = c.find(key);
     if (it != c.end()) {
         ++it->second.refCount;
@@ -18,7 +16,7 @@ GLuint ShaderLoader::createProgram(const std::string& vertexAssetKey,
         return it->second.program;
     }
 
-    // Cache miss — load sources from AssetManager
+    // Cache miss ï¿½ load sources from AssetManager
     auto vertSrc = AssetManager::instance().loadAsset<ShaderSource>(vertexAssetKey);
     if (!vertSrc) {
         Debug::Error("ShaderLoader") << "Failed to load vertex shader asset: " << vertexAssetKey << "\n";
@@ -34,7 +32,7 @@ GLuint ShaderLoader::createProgram(const std::string& vertexAssetKey,
 
     GLuint program = compileAndLink(vertSrc->code, fragSrc->code);
 
-    // Sources are CPU-only text — release them immediately
+    // Sources are CPU-only text ï¿½ release them immediately
     AssetManager::instance().unloadAsset<ShaderSource>(vertexAssetKey);
     AssetManager::instance().unloadAsset<ShaderSource>(fragmentAssetKey);
 
@@ -46,9 +44,7 @@ GLuint ShaderLoader::createProgram(const std::string& vertexAssetKey,
     return program;
 }
 
-// ---------------------------------------------------------------------------
-// Cached destroy — decrements ref, deletes GL program only at zero
-// ---------------------------------------------------------------------------
+// Cached destroy â€” decrements ref, deletes GL program only at zero
 void ShaderLoader::destroyProgram(const std::string& vertexAssetKey,
     const std::string& fragmentAssetKey)
 {
@@ -67,9 +63,7 @@ void ShaderLoader::destroyProgram(const std::string& vertexAssetKey,
     }
 }
 
-// ---------------------------------------------------------------------------
-// Raw compile + link — no cache, no asset manager
-// ---------------------------------------------------------------------------
+// Raw compile + link â€” no cache, no asset manager
 GLuint ShaderLoader::compileAndLink(const std::string& vertexSource,
     const std::string& fragmentSource)
 {

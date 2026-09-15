@@ -22,15 +22,9 @@
 #include <unordered_set>
 #include <string>
 
-/* ===========================================================
-   dr_wav WAV loader (header-only)
-   =========================================================== */
 #define DR_WAV_IMPLEMENTATION
 #include "dr_wav.h"
 
-   /* ===========================================================
-      AUDIO SYSTEM
-      =========================================================== */
 class AudioSystem : public ISystem {
 public:
 
@@ -46,11 +40,7 @@ public:
 
     AudioChannelManager channels;
 
-    /* --------------------------
-        DEVICE / ENUMERATION API
-       -------------------------- */
-
-       // Returns list of available playback devices (OS names exposed to OpenAL)
+    // Returns list of available playback devices (OS names exposed to OpenAL)
     std::vector<std::string> GetAvailableDevices() {
         std::vector<std::string> devices;
 
@@ -126,11 +116,7 @@ public:
     // Without em the offsets would be saved after the AL context is gone and would always be 0.
     bool ChangeOutputDevice(const std::string& deviceName, EntityManager* em = nullptr) {
 
-        // FIX: Don't rely on AL source state to detect if music was playing.
-        // When a device is unplugged/changed, OpenAL may already have silently
-        // moved the source to AL_STOPPED before we get here, making the old
-        // alGetSourcei check always return false and music never resume.
-        // Use the musicPlaying flag which is set/cleared by PlayMusic/StopMusic.
+        // Use musicPlaying instead of AL source state: a device unplug can silently stop the source before we get here.
         bool wasMusicPlaying = musicPlaying && !lastMusicFile.empty();
 
         // Save current music file/loop so we can restart after switching.
@@ -146,11 +132,7 @@ public:
             alGetSourcei(musicSource, AL_SAMPLE_OFFSET, &savedMusicOffset);
         }
 
-        // FIX 1+2: Save looping source offsets HERE, before shutdownOpenAL destroys
-        // the AL context and clears activeAudioEntities.
-        // Previously this was attempted in Update's needsReinit block, but by then
-        // the AL context is already gone (offsets read as 0) and activeAudioEntities
-        // has been cleared (the loop body never ran at all).
+        // Save looping source offsets before shutdownOpenAL destroys the context and clears activeAudioEntities.
         if (em) {
             auto sourceQuery = em->CreateQuery<AudioSourceComponent, Transform>();
             for (auto [ent, audio, t] : sourceQuery) {
@@ -212,10 +194,8 @@ public:
         device = newDevice;
         context = newContext;
 
-        // Store the real chosen device name.
         currentDeviceName = deviceName;
 
-        // Re-init music source and source pool on the new device.
         musicVolume = savedMusicVolume; // restore BEFORE initMusicSource so AL_GAIN is correct
         initMusicSource();
         initSourcePool();
@@ -230,7 +210,6 @@ public:
             }
         }
 
-        // Signal Update that sources need re-initialization on the new device.
         needsReinit = true;
 
         // Restore music to the new device.
@@ -253,9 +232,6 @@ public:
         return true;
     }
 
-    /* --------------------------
-        MUSIC CONTROL API
-       -------------------------- */
     void PlayMusic(const std::string& file, bool loop = true)
     {
         // Step 1: Acquire new buffer FIRST
@@ -271,10 +247,7 @@ public:
 
         ALuint newBuffer = reqBuffer->value;
 
-        // FIX: Clear any pending AL error before the bind sequence.
-        // After a device swap, init calls may leave a stale error in the new
-        // context. If not cleared, the alGetError() check below sees it and
-        // incorrectly triggers the rollback branch, silently dropping music.
+        // Clear any pending AL error before binding: a stale error from a device swap would wrongly trigger the rollback branch below.
         alGetError();
 
         // Step 2: Try to bind & configure
@@ -326,9 +299,6 @@ public:
         if (musicSource) alSourcef(musicSource, AL_GAIN, musicVolume);
     }
 
-    /* -----------------------------
-        ECS UPDATE
-       ----------------------------- */
     void Update(EntityManager& entityManager,
         std::vector<EventEntry>&,
         bool,
@@ -337,9 +307,7 @@ public:
 
         entityManager.acquireMutex();
 
-        /* -----------------------------
-           0. CHECK FOR DEVICE CHANGES
-           ----------------------------- */
+        // 0. CHECK FOR DEVICE CHANGES
         if (HasDeviceChanged()) {
             Debug::Info("AudioSystem") << "Default audio device changed (effective). Switching to it.\n";
             // FIX: Pass entityManager so ChangeOutputDevice can save looping source
@@ -347,20 +315,12 @@ public:
             SwitchToDefaultDevice(&entityManager);
         }
 
-        /* -----------------------------
-           1. REINITIALIZE AFTER DEVICE CHANGE
-           ----------------------------- */
-           // Source offsets are now saved inside ChangeOutputDevice (before shutdownOpenAL),
-           // and activeAudioEntities is repopulated there too. All that remains here is to
-           // clear the flag — section 4 below will call initializeSource for every entity
-           // it finds with initialized == false.
+        // 1. REINITIALIZE AFTER DEVICE CHANGE (offsets/entities already restored by ChangeOutputDevice; section 4 re-initializes each source)
         if (needsReinit) {
             needsReinit = false;
         }
 
-        /* -----------------------------
-           2. CLEANUP DELETED ENTITIES
-           ----------------------------- */
+        // 2. CLEANUP DELETED ENTITIES
         for (auto it = activeAudioEntities.begin(); it != activeAudioEntities.end(); ) {
             if (!entityManager.IsEntityValid(*it)) {
                 // Entity was deleted, cleanup its audio component if any (safety)
@@ -375,9 +335,7 @@ public:
             }
         }
 
-        /* -----------------------------
-           3. LISTENER UPDATE
-           ----------------------------- */
+        // 3. LISTENER UPDATE
         Transform* listenerT = nullptr;
 
         auto listenerQuery = entityManager.CreateQuery<AudioListenerComponent, Transform>();
@@ -389,14 +347,11 @@ public:
         if (listenerT) {
             setListenerFromTransform(*listenerT);
 
-            // DEBUG: log listener spatial state every tick
             glm::vec3 lp = listenerT->getPosition();
             glm::vec3 lr = listenerT->getRotation();
         }
 
-        /* -----------------------------
-           4. 3D SOURCES
-           ----------------------------- */
+        // 4. 3D SOURCES
         auto sourceQuery = entityManager.CreateQuery<AudioSourceComponent, Transform>();
 
         for (auto [ent, audio, t] : sourceQuery) {
@@ -420,10 +375,7 @@ public:
                 // After a device swap, looping sources resume from their saved position.
                 // savedSampleOffset is 0 for one-shots (they wait for audio->play as normal).
                 if (audio->initialized && audio->loop && audio->savedSampleOffset > 0) {
-                    // FIX 3: Set AL_SAMPLE_OFFSET BEFORE alSourcePlay.
-                    // Previously the order was reversed — play was called first, then
-                    // the seek was applied, which lost the position because the source
-                    // had already started from 0.
+                    // Set AL_SAMPLE_OFFSET before alSourcePlay, or the seek is lost.
                     alSourcei(audio->source, AL_SAMPLE_OFFSET, audio->savedSampleOffset);
                     alSourcePlay(audio->source);
                     audio->savedSampleOffset = 0;
@@ -432,7 +384,6 @@ public:
 
             updateSourceTransform(*audio, *t);
 
-            // DEBUG: log source spatial state every tick
             glm::vec3 sp = t->getPosition();
 
             float finalGain = audio->gain * channels.GetVolume(audio->channel);
@@ -444,7 +395,7 @@ public:
                 audio->play = false;
             }
 
-            if (audio->pendingToDestroy && audio->initialized)
+            if (audio->pendingToDestroy)
             {
                 cleanupSource(*audio);
                 entityManager.DestroyEntity(ent);
@@ -455,13 +406,11 @@ public:
         entityManager.releaseMutex();
     }
 
-    /* ===========================================================
-       SOURCE LIFECYCLE  (public so AudioManager can call them
-       directly when flushing a client's entities on shutdown)
-       =========================================================== */
+    // SOURCE LIFECYCLE (public so AudioManager can call them directly when
+    // flushing a client's entities on shutdown)
 
-       // Allocates an AL source from the pool, loads the WAV buffer via
-       // AssetManager, and marks the component as initialized.
+    // Allocates an AL source from the pool, loads the WAV buffer via
+    // AssetManager, and marks the component as initialized.
     void initializeSource(AudioSourceComponent& ac)
     {
         if (ac.initialized)
@@ -513,10 +462,7 @@ public:
         ac.buffer = 0;
     }
 
-    // Removes the source from activeAudioEntities in addition to calling
-    // cleanupSource.  Use this variant when iterating the ECS externally
-    // (e.g. AudioManager::FlushEntities) so the internal tracking set
-    // stays consistent with the component state.
+    // Like cleanupSource but also untracks the entity; use when iterating the ECS externally (e.g. AudioManager::FlushEntities).
     void cleanupSourceAndUntrack(AudioSourceComponent& ac, Entity ent)
     {
         cleanupSource(ac);
@@ -540,23 +486,7 @@ public:
         alSource3f(ac.source, AL_POSITION, posAL.x, posAL.y, posAL.z);
     }
 
-    // -----------------------------------------------------------------------
-    // StopAllSources — stops every SFX source in the pool and marks them free.
-    //
-    // Called when a client is deactivated.  The ECS components that hold
-    // AudioSourceComponent may not be reachable here (e.g. OnlineClient moves
-    // gameLogic_ into ClientPredictionNetcode, making GetEntityManager() return
-    // nullptr).  Rather than trying to walk the ECS, we go directly to the
-    // pool: every slot that is in-use or still playing gets stopped, its
-    // AL_BUFFER detached, and its slot freed.
-    //
-    // AssetManager buffer ref-counts are NOT decremented here because we have
-    // no filePath to key on.  The bin-level unload in DeactivateClient
-    // (AssetManager::unloadBin) handles that for the whole client at once.
-    //
-    // Music is intentionally left untouched — the caller decides whether to
-    // stop music separately via AudioManager::StopMusic().
-    // -----------------------------------------------------------------------
+    // Stops every SFX source directly via the pool (ECS may be unreachable on deactivation); buffer ref-counts are released later by unloadBin, and music is left untouched.
     void StopAllSources()
     {
         for (size_t i = 0; i < sourcePool.size(); ++i)
@@ -583,9 +513,7 @@ public:
 
 private:
 
-    /* ===========================================================
-       OPENAL CONTEXT
-       =========================================================== */
+    // OPENAL CONTEXT
     ALCdevice* device = nullptr;
     ALCcontext* context = nullptr;
 
@@ -600,9 +528,6 @@ private:
     std::string lastMusicFile;
     bool lastMusicLoop = true;
 
-    // ----------------------------------------
-    // initializeOpenAL: opens effective default device and stores name
-    // ----------------------------------------
     bool initializeOpenAL() {
         // Determine effective default device (first enumerated device if possible)
         std::string effectiveDefault = GetEffectiveDefaultDevice(); // uses enumeration or fallback
@@ -616,7 +541,6 @@ private:
             return false;
         }
 
-        // store the name we attempted to open
         if (toOpen) currentDeviceName = toOpen;
         else {
             // best-effort: try to query what the implementation reports as device specifier
@@ -624,7 +548,6 @@ private:
             currentDeviceName = ds ? std::string(reinterpret_cast<const char*>(ds)) : std::string("OpenAL-Unknown");
         }
 
-        // Try create context with HRTF if available
         ALCint attrs[] = { ALC_HRTF_SOFT, ALC_TRUE, 0 };
         context = alcCreateContext(device, attrs);
         if (!context) {
@@ -666,11 +589,7 @@ private:
             musicBuffer = 0;
         }
 
-        // 3. Release all active entity sources.
-        // By the time we get here from ChangeOutputDevice, all AudioSourceComponents
-        // have already been marked uninitialized (source=0, buffer=0) so there is
-        // nothing left to delete individually. The comment below is a safety note.
-        // WARNING: Do NOT delete AL buffers manually — they are owned by AssetManager.
+        // 3. Release all active entity sources (components already reset by ChangeOutputDevice; buffers are owned by AssetManager, never delete manually).
         activeAudioEntities.clear();
 
         // 4. Flush all ALuint assets from AssetManager.
@@ -695,9 +614,7 @@ private:
     }
 
 
-    /* ===========================================================
-       LISTENER
-       =========================================================== */
+    // LISTENER
     void setListenerFromTransform(const Transform& t) {
         glm::vec3 pos = t.getPosition();
 
@@ -724,9 +641,7 @@ private:
         alListenerfv(AL_ORIENTATION, ori);
     }
 
-    /* ===========================================================
-       MUSIC SOURCE
-       =========================================================== */
+    // MUSIC SOURCE
     ALuint musicSource = 0;
     ALuint musicBuffer = 0;
     float  musicVolume = 1.0f;
@@ -748,9 +663,7 @@ private:
         Debug::Info("AudioSystem") << "Music source initialized\n";
     }
 
-    /* ===========================================================
-       SOURCE POOL
-       =========================================================== */
+    // SOURCE POOL
     static constexpr int MAX_SOURCES = 32;
 
     std::vector<ALuint> sourcePool;
@@ -830,10 +743,7 @@ ALuint loadWavALFromMemory(const uint8_t* data, size_t size)
         return 0;
     }
 
-    // OpenAL ignores AL_POSITION, HRTF, and all distance attenuation for any
-    // non-mono buffer. Downmix stereo/surround to mono so 3D spatialization
-    // works on all assets. Music uses a separate non-positional source, so it
-    // is unaffected by the mono conversion.
+    // OpenAL ignores AL_POSITION/HRTF/attenuation for non-mono buffers, so downmix to mono for 3D spatialization.
     if (channels == 2)
     {
         std::vector<float> mono(static_cast<size_t>(totalFrames));

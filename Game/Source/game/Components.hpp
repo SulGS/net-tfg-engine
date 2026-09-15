@@ -15,11 +15,7 @@ struct CenterSpoke : public IComponent {
 	// Marker component for walls that go from cell center to edge midpoint
 };
 
-// --- Laser walls ---
-		// Each wall is owned by one cell and faces one direction.
-		// Right + Up walls are emitted for all cells (covering all shared interior
-		// edges), plus Left for column 0 and Down for row 0 (the remaining borders).
-		// Border walls start enabled; interior walls start disabled.
+// Laser walls: each owned by one cell, facing one direction; border walls start enabled, interior ones disabled.
 struct WallDef
 {
 	int                   cellX, cellY;
@@ -63,8 +59,8 @@ public:
 
 class ThrusterOwner : public IComponent {
 public:
-	int shipEntity; // The ship this thruster belongs to
-	bool isLeftEngine; // True if left thruster, false if right
+	int shipEntity;
+	bool isLeftEngine;
 	bool isSmoke = false;
 	ThrusterOwner() : shipEntity(-1), isSmoke(false), isLeftEngine(false) {}
 	ThrusterOwner(int se, bool isSm, bool isLeftE) : shipEntity(se), isSmoke(isSm), isLeftEngine(isLeftE) {}
@@ -94,7 +90,7 @@ public:
 // Only present on the local player's entity (renderer side).
 class SpectatorState : public IComponent {
 public:
-	int watchedPlayerId; // playerId currently being followed
+	int watchedPlayerId;
 	bool prevLeftHeld;   // edge-detection for left arrow
 	bool prevRightHeld;  // edge-detection for right arrow
 
@@ -141,7 +137,7 @@ public:
 
 class LinkAudioToBullet : public IComponent {
 public:
-	int bulletId; // Which bullet this audio is linked to
+	int bulletId;
 	LinkAudioToBullet() : bulletId(-1) {}
 	LinkAudioToBullet(int bid) : bulletId(bid) {}
 };
@@ -154,7 +150,7 @@ public:
 
 class ThrusterSound : public IComponent {
 public:
-	int shipEntity; // The ship this thruster sound belongs to
+	int shipEntity;
 	ThrusterSound() : shipEntity(-1) {}
 	ThrusterSound(int se) : shipEntity(se) {}
 };

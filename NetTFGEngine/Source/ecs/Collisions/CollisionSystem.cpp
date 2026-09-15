@@ -7,15 +7,12 @@
 #include <iostream>
 
 void CollisionSystem::Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) {
-    // Clear current frame collisions
     currentCollisions.clear();
     currentTriggers.clear();
-    
-    // Get all entities with colliders and transforms
+
     std::vector<std::pair<Entity, ICollider*>> colliders2D;
     std::vector<std::pair<Entity, ICollider*>> colliders3D;
-    
-    // Collect 2D colliders
+
     auto query2D = entityManager.CreateQuery<CircleCollider2D, Transform>();
     for (auto [entity, collider, transform] : query2D) {
         if (!collider->isEnabled) continue;
@@ -52,49 +49,41 @@ void CollisionSystem::Update(EntityManager& entityManager, std::vector<EventEntr
         colliders3D.push_back({entity, collider});
     }
     
-    // Check 2D collisions (broadphase + narrowphase)
     for (size_t i = 0; i < colliders2D.size(); i++) {
         auto [entityA, colliderA] = colliders2D[i];
-        
+
         for (size_t j = i + 1; j < colliders2D.size(); j++) {
             auto [entityB, colliderB] = colliders2D[j];
-            
-            // Skip if layers don't match
+
             if (!colliderA->CanCollideWith(colliderB->layer) ||
                 !colliderB->CanCollideWith(colliderA->layer)) {
                 continue;
             }
-            
-            // Broadphase: AABB check
+
             ICollider2D* col2DA = dynamic_cast<ICollider2D*>(colliderA);
             ICollider2D* col2DB = dynamic_cast<ICollider2D*>(colliderB);
-            
-            // Narrowphase: Detailed collision check
+
             Transform* transformA = entityManager.GetComponent<Transform>(entityA);
             Transform* transformB = entityManager.GetComponent<Transform>(entityB);
-            CheckCollision(entityA, colliderA, transformA, 
+            CheckCollision(entityA, colliderA, transformA,
                           entityB, colliderB, transformB);
         }
     }
-    
-    // Check 3D collisions (broadphase + narrowphase)
+
     for (size_t i = 0; i < colliders3D.size(); i++) {
         auto [entityA, colliderA] = colliders3D[i];
-        
+
         for (size_t j = i + 1; j < colliders3D.size(); j++) {
             auto [entityB, colliderB] = colliders3D[j];
-            
-            // Skip if layers don't match
+
             if (!colliderA->CanCollideWith(colliderB->layer) ||
                 !colliderB->CanCollideWith(colliderA->layer)) {
                 continue;
             }
-            
-            // Broadphase: AABB check
+
             ICollider3D* col3DA = dynamic_cast<ICollider3D*>(colliderA);
             ICollider3D* col3DB = dynamic_cast<ICollider3D*>(colliderB);
-            
-            // Narrowphase: Detailed collision check
+
             Transform* transformA = entityManager.GetComponent<Transform>(entityA);
             Transform* transformB = entityManager.GetComponent<Transform>(entityB);
             CheckCollision(entityA, colliderA, transformA,
@@ -102,7 +91,6 @@ void CollisionSystem::Update(EntityManager& entityManager, std::vector<EventEntr
         }
     }
     
-    // Process collision exits
     for (const auto& pair : previousCollisions) {
         if (currentCollisions.find(pair) == currentCollisions.end()) {
             // Collision ended
@@ -115,7 +103,6 @@ void CollisionSystem::Update(EntityManager& entityManager, std::vector<EventEntr
         }
     }
     
-    // Process trigger exits
     for (const auto& pair : previousTriggers) {
         if (currentTriggers.find(pair) == currentTriggers.end()) {
             // Trigger ended
@@ -128,7 +115,6 @@ void CollisionSystem::Update(EntityManager& entityManager, std::vector<EventEntr
         }
     }
     
-    // Update previous frame data
     previousCollisions = currentCollisions;
     previousTriggers = currentTriggers;
 }
@@ -137,17 +123,15 @@ void CollisionSystem::CheckCollision(Entity entityA, ICollider* colliderA, Trans
                                      Entity entityB, ICollider* colliderB, Transform* transformB) {
     CollisionInfo info;
     info.otherEntity = entityB;
-    
-    // Perform collision test
+
     if (!colliderA->CheckCollision(colliderB, info)) {
-        return; // No collision
+        return;
     }
-    
+
     auto pair = MakePair(entityA, entityB);
     bool isNewCollision = (previousCollisions.find(pair) == previousCollisions.end() &&
                            previousTriggers.find(pair) == previousTriggers.end());
-    
-    // Determine if this is a trigger or solid collision
+
     if (colliderA->isTrigger || colliderB->isTrigger) {
         // Trigger collision
         currentTriggers.insert(pair);
@@ -245,7 +229,7 @@ void CollisionSystem::InvokeTriggerExit(Entity a, Entity b, ICollider* colliderA
     }
 }
 
-// Query implementations (simplified - can be optimized with spatial partitioning)
+// Not yet using spatial partitioning; O(n) scan per query.
 std::vector<Entity> CollisionSystem::QueryPoint2D(EntityManager& entityManager, const glm::vec2& point) {
     std::vector<Entity> result;
     

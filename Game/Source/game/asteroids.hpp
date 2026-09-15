@@ -57,9 +57,6 @@ struct SpawnPoint { int cx; int cy; float facingDeg; };
 
 inline SpawnPoint GetSpawnPoint(int playerIndex)
 {
-    // 12 well-separated spawn points on the 10x10 grid (0-indexed cell coords).
-    // Ordered counter-clockwise starting from bottom-left (0,0).
-    // Facing angle points roughly toward the centre cell (4.5, 4.5).
     static const SpawnPoint table[NUM_PLAYERS] = {
         { 0, 0,  45.0f },   // bottom-left corner        → face NE
         { 3, 0,  83.0f },   // bottom edge, 1/3          → face N-NE
@@ -76,7 +73,7 @@ inline SpawnPoint GetSpawnPoint(int playerIndex)
     };
 
     if (playerIndex < 0 || playerIndex >= NUM_PLAYERS)
-        return table[0];  // fallback
+        return table[0];
     return table[playerIndex];
 }
 
@@ -400,7 +397,7 @@ public:
 
         auto& em = world.GetEntityManager();
 
-        // --- Tiles ---
+        // Tiles
         for (int x = 0; x < x_size; x++)
         {
             for (int y = 0; y < y_size; y++)
@@ -415,7 +412,7 @@ public:
             }
         }
 
-        // --- Pillars (logic side — no mesh) ---
+        // Pillars (logic side — no mesh)
         for (int px = 0; px <= 2 * x_size; px++)
         {
             for (int py = 0; py <= 2 * y_size; py++)
@@ -458,7 +455,7 @@ public:
             }
         }
 
-        // --- Walls ---
+        // Walls
         std::mt19937 initRng{ std::random_device{}() };
         std::uniform_real_distribution<float> initDist(3.0f, 30.0f);
 
@@ -537,27 +534,6 @@ public:
             lwid.enabled = w.onBorder;
             lwid.timer = initDist(initRng);
             em.AddComponent<LaserWallID>(e, lwid);
-
-            /*if (isServer)
-            {
-
-				BoxCollider2D* collider = em.AddComponent<BoxCollider2D>(e, BoxCollider2D{ glm::vec2(2.0f, 19.0f) });
-				collider->isEnabled =  w.onBorder;
-				collider->layer = CollisionLayer::WALL;
-				collider->collidesWith = CollisionLayer::PLAYER | CollisionLayer::BULLET;
-				collider->SetOnCollisionEnter([this](Entity self, Entity other, const CollisionInfo& info) {
-                    Playable* play = this->world.GetEntityManager().GetComponent<Playable>(other);
-					if (!play) return; // only react to players
-                    // Emit death of player
-                    EventEntry deathEvent;
-                    deathEvent.event.type = AsteroidEventMask::DEATH;
-                    DeathEventData deathData;
-                    deathData.playerId = play->playerId;
-                    std::memcpy(deathEvent.event.data, &deathData, sizeof(DeathEventData));
-                    deathEvent.event.len = sizeof(DeathEventData);
-                    this->world.GetEvents().push_back(deathEvent);
-				});
-            }*/
         }
 
         // Center spokes
@@ -582,27 +558,6 @@ public:
                         lwid.timer = initDist(initRng);
                         em.AddComponent<LaserWallID>(e, lwid);
                         em.AddComponent<CenterSpoke>(e, CenterSpoke{});
-
-                        /*if (isServer)
-                        {
-
-                            BoxCollider2D* collider = em.AddComponent<BoxCollider2D>(e, BoxCollider2D{ glm::vec2(2.0f, 19.0f) });
-                            collider->isEnabled = false;
-                            collider->layer = CollisionLayer::WALL;
-                            collider->collidesWith = CollisionLayer::PLAYER | CollisionLayer::BULLET;
-                            collider->SetOnCollisionEnter([this](Entity self, Entity other, const CollisionInfo& info) {
-                                Playable* play = this->world.GetEntityManager().GetComponent<Playable>(other);
-                                if (!play) return; // only react to players
-                                // Emit death of player
-                                EventEntry deathEvent;
-                                deathEvent.event.type = AsteroidEventMask::DEATH;
-                                DeathEventData deathData;
-                                deathData.playerId = play->playerId;
-                                std::memcpy(deathEvent.event.data, &deathData, sizeof(DeathEventData));
-                                deathEvent.event.len = sizeof(DeathEventData);
-                                this->world.GetEvents().push_back(deathEvent);
-                                });
-                        }*/
                     };
 
                 {
@@ -894,14 +849,14 @@ public:
 		world.GetEntityManager().RegisterComponentType<ExitButtonChecker>();
 		world.GetEntityManager().RegisterComponentType<ThrusterSound>();
 
-        // --- Sun ---
+        // Sun
         Entity sunEntity = world.GetEntityManager().CreateEntity();
         world.GetEntityManager().AddComponent<Transform>(sunEntity, Transform{});
         DirectionalLightComponent* sunLight =
             world.GetEntityManager().AddComponent<DirectionalLightComponent>(sunEntity, DirectionalLightComponent{});
         sunLight->color = glm::vec3(1.0f, 0.95f, 0.8f);
 
-        // --- Players ---
+        // Players
         for (int i = 0; i < NUM_PLAYERS; ++i)
         {
 
@@ -915,7 +870,7 @@ public:
                 player, Playable{ i, MakeZeroInputBlob(), (i == playerId) });
             world.GetEntityManager().AddComponent<SpaceShip>(player, SpaceShip{ 1, -1, 0, true });
             world.GetEntityManager().AddComponent<MeshComponent>(
-                player, MeshComponent(new Mesh("ship.glb",
+                player, MeshComponent(new Mesh("ship_low.glb",
                     std::make_shared<Material>("ggx.vert", "ggx.frag"))));
 
 			world.GetEntityManager().AddComponent<JustDeathChecker>(player, JustDeathChecker{});
@@ -938,7 +893,7 @@ public:
 			audio->loop = true;
 			world.GetEntityManager().AddComponent<ThrusterSound>(thrusterSoundEntity, ThrusterSound{ i });
 
-            // --- Thrusters for this player ---
+            // Thrusters for this player
             struct ThrusterDef { bool isSmoke; bool isLeft; };
             constexpr ThrusterDef thrusterDefs[] = {
                 { false, false },  // right thruster
@@ -986,7 +941,7 @@ public:
             }
         }
 
-        // --- Camera ---
+        // Camera
         Entity camera = world.GetEntityManager().CreateEntity();
         Transform* camTrans = world.GetEntityManager().AddComponent<Transform>(camera, Transform{});
         camTrans->setPosition(glm::vec3(0.0f, 0.0f, 18.0f));
@@ -995,7 +950,7 @@ public:
         camSettings->setTarget(glm::vec3(0.0f, 0.0f, 0.0f));
         camSettings->setUp(glm::vec3(0.0f, 1.0f, 0.0f));
 
-        // --- Health UI ---
+        // Health UI
         Entity healthText = world.GetEntityManager().CreateEntity();
         UIElement* element = world.GetEntityManager().AddComponent<UIElement>(healthText, UIElement{});
         element->anchor = UIAnchor::TOP_LEFT;
@@ -1038,8 +993,6 @@ public:
 
                 if (!gameLogic || !gameRenderer) {
 
-					// Debugs whick is nullptr
-
 					if (!gameLogic) {
 						Debug::Error("Asteroids") << "Logic pointer is null in renderDataTransferToLogicCallback.\n";
 					}
@@ -1050,8 +1003,6 @@ public:
                     return;
                 }
 
-				//Debug::Info("Asteroids") << "Transferring data from renderer to logic.\n";
-
 				auto& entityManagerLogic = gameLogic->world.GetEntityManager();
 				auto& entityManagerRenderer = gameRenderer->world.GetEntityManager();
 
@@ -1061,14 +1012,13 @@ public:
 
 				for (auto [entityLogic, exitCheckerLogic] : exitButtonQueryLogic) {
 					for (auto [entityRenderer, exitCheckerRenderer] : exitButtonQueryRenderer) {
-						//Debug::Info("Asteroids") << "Syncing exit button state: " << exitCheckerRenderer->exitPressed << "\n";
                         exitCheckerLogic->exitPressed = exitCheckerRenderer->exitPressed;
 					}
 				}
             };
 		
 
-        // --- Point light ---
+        // Point light
         Entity light = world.GetEntityManager().CreateEntity();
         Transform* tlight = world.GetEntityManager().AddComponent<Transform>(light, Transform{});
         tlight->setPosition(glm::vec3(0.0f, 0.0f, 15.0f));
@@ -1079,7 +1029,7 @@ public:
         lightComp->radius = 100.0f;
         lightComp->castShadows = true;
 
-        // --- Lava floor ---
+        // Lava floor
         Entity lavaFloor = world.GetEntityManager().CreateEntity();
         Transform* lavaTrans = world.GetEntityManager().AddComponent<Transform>(lavaFloor, Transform{});
         lavaTrans->setPosition(glm::vec3(-20.0f, -20.0f, -12.0f));
@@ -1094,7 +1044,7 @@ public:
         const int y_size = 5;
         auto& em = world.GetEntityManager();
 
-        // --- Tiles ---
+        // Tiles
         for (int x = 0; x < x_size; ++x)
             for (int y = 0; y < y_size; ++y)
             {
@@ -1109,7 +1059,7 @@ public:
                     new Mesh("tile.glb", std::make_shared<Material>("ggx.vert", "ggx.frag"))));
             }
 
-        // --- Pillars ---
+        // Pillars
         for (int px = 0; px <= 2 * x_size; ++px)
             for (int py = 0; py <= 2 * y_size; ++py)
             {
@@ -1149,7 +1099,7 @@ public:
                     new Mesh("pilar.glb", std::make_shared<Material>("ggx.vert", "ggx.frag"))));
             }
 
-        // --- Walls ---
+        // Walls
         std::vector<WallDef> walls;
 
         for (int px = 0; px < 2 * x_size; ++px)
@@ -1207,7 +1157,7 @@ public:
             mc->castShadows = false;
         }
 
-        // --- Center spokes ---
+        // Center spokes
         for (int cx = 0; cx < x_size; ++cx)
             for (int cy = 0; cy < y_size; ++cy)
             {
@@ -1251,7 +1201,7 @@ public:
                     glm::vec3(0.0f, 90.0f, 0.0f));
             }
 
-        // --- Render systems ---
+        // Render systems
         world.AddSystem(std::make_unique<CameraFollowSystem>());
         world.AddSystem(std::make_unique<OnDeathRenderSystem>());
         world.AddSystem(std::make_unique<ChargingBulletRenderSystem>());
@@ -1261,7 +1211,6 @@ public:
 		world.AddSystem(std::make_unique<ThrustersSoundSystem>());
         world.AddSystem(std::make_unique<DestroyTimerSystem>());
 
-        //world.GetEntityManager().AddComponent<AudioListenerComponent>(camera, AudioListenerComponent{});
         AudioManager::PlayMusic("song.wav", true);
         AudioManager::SetMusicVolume(0.25f);
     }
@@ -1353,7 +1302,6 @@ public:
     }
 
     ~AsteroidShooterGameRenderer() override {
-        //
     }
 
 private:

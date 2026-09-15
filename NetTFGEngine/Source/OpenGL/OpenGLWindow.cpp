@@ -2,8 +2,6 @@
 #include <iostream>
 #include <stdexcept>
 
-// -------------------- Constructor / Destructor --------------------
-
 OpenGLWindow::OpenGLWindow(int width, int height, const std::string& title)
     : window(nullptr)
 {
@@ -20,7 +18,7 @@ OpenGLWindow::OpenGLWindow(int width, int height, const std::string& title)
     setupOpenGL();
 
     glfwSetWindowUserPointer(window, this);
-    // Framebuffer resize callback — physical pixels, used for glViewport
+    // Framebuffer resize callback ï¿½ physical pixels, used for glViewport
     glfwSetFramebufferSizeCallback(window, [](GLFWwindow* win, int w, int h) {
         glViewport(0, 0, w, h);
         auto* self = static_cast<OpenGLWindow*>(glfwGetWindowUserPointer(win));
@@ -29,7 +27,7 @@ OpenGLWindow::OpenGLWindow(int width, int height, const std::string& title)
         self->resized = true;
         });
 
-    // Window size callback — logical pixels, matches glfwGetCursorPos space
+    // Window size callback ï¿½ logical pixels, matches glfwGetCursorPos space
     glfwSetWindowSizeCallback(window, [](GLFWwindow* win, int w, int h) {
         auto* self = static_cast<OpenGLWindow*>(glfwGetWindowUserPointer(win));
         self->logicalWidth = w;
@@ -48,8 +46,6 @@ OpenGLWindow::~OpenGLWindow() {
     glfwTerminate();
 }
 
-// -------------------- Window Operations --------------------
-
 void OpenGLWindow::swapBuffers() {
     glfwSwapBuffers(window);
 }
@@ -66,7 +62,6 @@ void OpenGLWindow::makeContextCurrent() {
     glfwMakeContextCurrent(window);
 }
 
-// Add to OpenGLWindow.hpp
 void OpenGLWindow::releaseContext() {
     glfwMakeContextCurrent(nullptr);
 }
@@ -75,7 +70,6 @@ void OpenGLWindow::close() {
     glfwSetWindowShouldClose(window, GLFW_TRUE);
 }
 
-// -------------------- Window Info --------------------
 int OpenGLWindow::getWidth()  const { return currentWidth; }
 int OpenGLWindow::getHeight() const { return currentHeight; }
 int OpenGLWindow::getLogicalWidth()  const { return logicalWidth; }
@@ -92,8 +86,6 @@ float OpenGLWindow::getAspectRatio() const {
     glfwGetFramebufferSize(window, &w, &h);
     return h > 0 ? (float)w / (float)h : 1.0f;
 }
-
-// -------------------- OpenGL Setup --------------------
 
 void OpenGLWindow::initializeGLFW() {
     if (!glfwInit())
@@ -114,16 +106,13 @@ void OpenGLWindow::initializeGLEW() {
 
 void OpenGLWindow::setupOpenGL()
 {
-    // Depth testing
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
 
-    // Backface culling
     glEnable(GL_CULL_FACE);
-    glCullFace(GL_BACK);      // Cull back-facing triangles
-    glFrontFace(GL_CCW);      // Counter-clockwise = front face (default)
+    glCullFace(GL_BACK);
+    glFrontFace(GL_CCW);      // counter-clockwise = front face (default)
 
-    // Blending (transparency)
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 }

@@ -15,10 +15,10 @@ public:
         , uvRect(0.0f, 0.0f, 1.0f, 1.0f)
     {}
 
-	std::string texturePath; // Path to the texture file
-	bool isLoaded = false;    // Flag indicating if the texture is loaded
+	std::string texturePath;
+	bool isLoaded = false;
 
-    GLuint textureID;           // OpenGL texture ID
+    GLuint textureID;
     glm::vec4 color;            // Tint color (RGBA)
     glm::vec4 uvRect;           // UV coordinates (x, y, width, height)
     

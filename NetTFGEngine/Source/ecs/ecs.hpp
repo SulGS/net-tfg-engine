@@ -8,6 +8,7 @@
 #include <typeindex>
 #include <queue>
 #include <stdexcept>
+#include <mutex>
 #include "Utils/Debug/Debug.hpp"
 
 using Entity = uint32_t;
@@ -86,7 +87,8 @@ class EntityManager {
     Entity nextEntityId = 1;
     size_t entityCount = 0;
 
-    std::mutex entityMutex;
+    // Recursive: acquireMutex()/releaseMutex() can nest on the same thread (RenderSystem inside IECSGameRenderer::Render()); a plain mutex would self-deadlock.
+    std::recursive_mutex entityMutex;
 
 public:
 
@@ -98,13 +100,8 @@ public:
         entityMutex.unlock();
     }
 
-    // Reset to a completely clean state.
-    // Calls Destroy() on every live component, clears all entities and
-    // component arrays, and resets all ID counters.
-    // Registered component types are also cleared so InitECSLogic /
-    // InitECSRenderer can RegisterComponentType again from scratch.
+    // Resets to a clean state: destroys every component, clears entities/arrays/ID counters, and clears registered component types.
     void Reset() {
-        // Destroy all components in every array
         for (auto& [typeIndex, array] : componentArrays) {
             array->Clear();
         }
@@ -112,9 +109,7 @@ public:
         componentArrays.clear();
         activeEntities.clear();
 
-        // Drain the pending-destroy queue
         while (!entitiesToDestroy.empty()) entitiesToDestroy.pop();
-        // Drain the recycled-ID queue
         while (!availableEntityIds.empty()) availableEntityIds.pop();
 
         nextEntityId = 1;
@@ -369,6 +364,7 @@ public:
 class ISystem {
 public:
     bool emitGameFinishEvent = false;
+	bool requestRenderReinit = false;
 
     virtual ~ISystem() = default;
     virtual void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) = 0;
@@ -388,11 +384,7 @@ public:
         systems.push_back(std::move(system));
     }
 
-    // Reset the entire world to a blank slate.
-    // Destroys all components (calling Destroy() on each), clears all entities,
-    // clears all systems, and clears all registered component types.
-    // After this call the world is in the same state as a freshly constructed one,
-    // so InitECSLogic / InitECSRenderer can run again without double-registering.
+    // Resets the world to a freshly-constructed state so InitECSLogic/InitECSRenderer can run again without double-registering.
     void Reset() {
         events.clear();
         systems.clear();
@@ -420,6 +412,10 @@ public:
         }
         return nullptr;
     }
+
+	std::vector<std::unique_ptr<ISystem>>& GetSystems() {
+		return systems;
+	}
 
     std::vector<EventEntry>& GetEvents() {
         return events;

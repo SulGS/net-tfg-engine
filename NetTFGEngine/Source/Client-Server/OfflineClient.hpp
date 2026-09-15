@@ -3,6 +3,7 @@
 #include "netcode/netcode_common.hpp"
 #include "netcode/client_window.hpp"
 #include "OpenGL/IGameRenderer.hpp"
+#include "OpenGL/IECSGameRenderer.hpp"
 #include <memory>
 #include <chrono>
 #include <thread>
@@ -25,11 +26,15 @@ public:
     ConnectionCode SetupClient(const std::string& hostStr = "0.0.0.0", uint16_t port = 0, const std::string& customClientId = "") override {
         Debug::Info("OfflineClient") << "Starting offline game (ignoring host and port parameters)\n";
 
-        // Guard against being called again while already set up (re-activation after CloseClient)
+        // Guard against re-activation while already set up; routed through
+        // RunOnRenderThread so deleting cWindow_ can't race renderLoop()'s
+        // activeInstances snapshot (past cause of a menu->settings->menu use-after-free).
         if (cWindow_) {
-            cWindow_->deactivate();
-            delete cWindow_;
-            cWindow_ = nullptr;
+            ClientWindow::RunOnRenderThread([this]() {
+                cWindow_->deactivate();
+                delete cWindow_;
+                cWindow_ = nullptr;
+                });
         }
 
         isOfflineClient = true;
@@ -49,7 +54,6 @@ public:
             }
         );
 
-        // Initialize game state
         gameLogic_->Init(gameState_);
 
         cWindow_->activate();
@@ -60,10 +64,8 @@ public:
     }
 
     void TickClient() override {
-        // Generate local input
         InputBlob localInput = gameLogic_->GenerateLocalInput();
 
-        // Apply input to game state
         std::vector<EventEntry> events;
         std::map<int, InputEntry> inputs;
 
@@ -74,11 +76,9 @@ public:
 
         gameLogic_->SimulateFrame(gameState_, events, inputs);
 
-        // Update render states
         cWindow_->setLocalState(gameState_);
         cWindow_->setServerState(gameState_);
 
-        // Debug output every 30 frames
         if (currentFrame_ % 30 == 0) {
             Debug::Info("OfflineClient") << "[OFFLINE] Frame: " << currentFrame_ << "\n";
         }
@@ -87,11 +87,21 @@ public:
     }
 
     void CloseClient() override {
-        if (cWindow_) {
-            cWindow_->deactivate();
-            delete cWindow_;
-            cWindow_ = nullptr;  // prevent dangling pointer on re-activation
-        }
+        // Runs as ONE task on the render thread so deactivate/delete can't race
+        // renderLoop(), and must happen before ReleaseECSAssets() so Render()
+        // never sees a torn-down world for a still-active instance.
+        ClientWindow::RunOnRenderThread([this]() {
+            if (cWindow_) {
+                cWindow_->deactivate();
+                delete cWindow_;
+                cWindow_ = nullptr;  // prevent dangling pointer on re-activation
+            }
+
+            // Release ECS-held AssetManager refs before the caller unloads this client's asset bin.
+            if (gameRenderer_) gameRenderer_->ReleaseECSAssets();
+            if (gameLogic_)    gameLogic_->ReleaseECSAssets();
+            });
+
         currentFrame_ = 0;      // reset so the next session starts from frame 0
         Debug::Info("OfflineClient") << "[OFFLINE] Offline client finished\n";
     }
@@ -102,6 +112,14 @@ public:
 			return &ecsLogic->world.GetEntityManager();
 		}
         return nullptr;
+	}
+
+	EntityManager* GetRendererEntityManager() override {
+		IECSGameRenderer* ecsRenderer = dynamic_cast<IECSGameRenderer*>(gameRenderer_.get());
+		if (ecsRenderer) {
+			return &ecsRenderer->GetEntityManager();
+		}
+		return nullptr;
 	}
 
 private:

@@ -4,10 +4,6 @@
 #include <algorithm>
 #include <cmath>
 
-// =====================================================
-//  Shader sources
-// =====================================================
-
 // Vertex shader: reconstructs a camera-facing quad from gl_VertexID.
 // Reads one GPUParticle from the SSBO using gl_InstanceID.
 static const char* kParticleVert = R"GLSL(
@@ -79,9 +75,6 @@ static const char* kParticleFrag = R"GLSL(
     }
 )GLSL";
 
-// =====================================================
-//  Init
-// =====================================================
 void ParticleSystem::Init()
 {
     CompileShader();
@@ -95,9 +88,7 @@ void ParticleSystem::Init()
     m_uProjection = glGetUniformLocation(m_shader, "uProjection");
 }
 
-// =====================================================
-//  Update — simulate all emitters, fill staging buffers
-// =====================================================
+// Update — simulate all emitters, fill staging buffers
 void ParticleSystem::Update(EntityManager& entityManager,
     std::vector<EventEntry>& /*events*/,
     bool isServer,
@@ -134,9 +125,7 @@ void ParticleSystem::Update(EntityManager& entityManager,
     }
 }
 
-// =====================================================
-//  Draw — upload and issue draw calls per blend mode
-// =====================================================
+// Draw — upload and issue draw calls per blend mode
 void ParticleSystem::Draw(const glm::mat4& view, const glm::mat4& projection)
 {
     if (m_shader == 0) return;
@@ -164,9 +153,7 @@ void ParticleSystem::Draw(const glm::mat4& view, const glm::mat4& projection)
     glUseProgram(0);
 }
 
-// =====================================================
-//  FlushStagingBuffer — upload one staging batch and draw
-// =====================================================
+// FlushStagingBuffer — upload one staging batch and draw
 void ParticleSystem::FlushStagingBuffer(std::vector<GPUParticle>& src,
     bool additive)
 {
@@ -189,9 +176,6 @@ void ParticleSystem::FlushStagingBuffer(std::vector<GPUParticle>& src,
         static_cast<GLsizei>(src.size()));
 }
 
-// =====================================================
-//  SimulateEmitter
-// =====================================================
 void ParticleSystem::SimulateEmitter(ParticleEmitterComponent& e,
     const glm::vec3& emitterWorldPos,
     const glm::vec3& emitterWorldDir,
@@ -204,7 +188,6 @@ void ParticleSystem::SimulateEmitter(ParticleEmitterComponent& e,
 
     e.elapsedTime += dt;
 
-    // ---- Spawn new particles ----
     if (e.enabled && (e.looping || e.elapsedTime <= e.duration))
     {
         float flickeredRate = e.emissionRate * e.speedScale;
@@ -220,10 +203,8 @@ void ParticleSystem::SimulateEmitter(ParticleEmitterComponent& e,
             SpawnParticle(e, emitterWorldPos, emitterWorldDir, uniformScale);
     }
 
-    // ---- Integrate alive particles ----
     e.aliveCount = 0;
 
-    // Choose the right staging buffer for this emitter's blend mode
     auto& staging = e.additiveBlend ? m_stagingAdditive : m_stagingAlpha;
 
     for (int idx = 0; idx < static_cast<int>(e.pool.size()); ++idx)
@@ -240,7 +221,6 @@ void ParticleSystem::SimulateEmitter(ParticleEmitterComponent& e,
             continue;
         }
 
-        // Physics
         p.velocity += kGravity * e.gravityModifier * dt;
 
         if (e.turbulenceStrength > 0.0f)
@@ -256,10 +236,7 @@ void ParticleSystem::SimulateEmitter(ParticleEmitterComponent& e,
         // FIX: SimulationSpace::Local — offset particle by emitter movement
         if (e.simulationSpace == SimulationSpace::Local)
         {
-            // The caller passes the current world position every frame.
-            // We store the last known emitter position in the component and
-            // move all local-space particles by the delta each tick.
-            // (emitterLastPos is updated at the end of this function.)
+            // Move local-space particles by the emitter's delta since last tick (emitterLastPos updated at function end).
             p.position += emitterWorldPos - e.emitterLastPos;
         }
 
@@ -289,9 +266,6 @@ void ParticleSystem::SimulateEmitter(ParticleEmitterComponent& e,
     }
 }
 
-// =====================================================
-//  SpawnParticle
-// =====================================================
 void ParticleSystem::SpawnParticle(ParticleEmitterComponent& e,
     const glm::vec3& emitterWorldPos,
     const glm::vec3& emitterWorldDir,
@@ -304,13 +278,11 @@ void ParticleSystem::SpawnParticle(ParticleEmitterComponent& e,
     e.freeList.pop_back();
     Particle& slot = e.pool[idx];
 
-    // Lifetime variance
     float lifetime = e.startLifetime * e.speedScale;
     if (e.lifetimeVariance > 0.0f)
         lifetime += (RandF() * 2.0f - 1.0f) * e.lifetimeVariance;
     lifetime = std::max(0.05f, lifetime);
 
-    // Speed variance
     float speed = e.startSpeed;
     if (e.speedVariance > 0.0f)
         speed += (RandF() * 2.0f - 1.0f) * e.speedVariance;
@@ -345,11 +317,7 @@ void ParticleSystem::SpawnParticle(ParticleEmitterComponent& e,
     slot.velocity = spawnDir * speed;
 }
 
-// =====================================================
-//  SampleSpawnPosition
-//  Returns a local-space offset (before uniformScale).
-//  emitterWorldPos is not needed here — removed from signature.
-// =====================================================
+// SampleSpawnPosition — returns a local-space offset (before uniformScale).
 glm::vec3 ParticleSystem::SampleSpawnPosition(const ParticleEmitterComponent& e)
 {
     switch (e.shape)
@@ -372,12 +340,7 @@ glm::vec3 ParticleSystem::SampleSpawnPosition(const ParticleEmitterComponent& e)
     }
 }
 
-// =====================================================
-//  SampleSpawnVelocity
-//  outConeT: normalised [0,1] deviation from cone axis.
-//            0 = dead centre, 1 = cone edge.
-//            Only meaningful for EmitterShape::Cone.
-// =====================================================
+// SampleSpawnVelocity — outConeT is the normalised [0,1] deviation from the cone axis (0=centre, 1=edge); only meaningful for EmitterShape::Cone.
 glm::vec3 ParticleSystem::SampleSpawnVelocity(const ParticleEmitterComponent& e,
     const glm::vec3& emitterWorldDir,
     float& outConeT)
@@ -388,10 +351,7 @@ glm::vec3 ParticleSystem::SampleSpawnVelocity(const ParticleEmitterComponent& e,
     {
     case EmitterShape::Cone:
     {
-        // FIX #3 — uniform solid-angle sample within the cone.
-        // Linear angle sampling (old code) biases toward the axis because
-        // equal angle steps cover less solid angle near the centre.
-        // Correct method: sample cos(angle) uniformly in [cos(halfAngle), 1].
+        // Uniform solid-angle sample within the cone: sample cos(angle) uniformly in [cos(halfAngle), 1], not the angle itself (which biases toward the axis).
         float cosMax = std::cos(e.shapeConeAngle);
         float cosA = cosMax + RandF() * (1.0f - cosMax);  // uniform in solid angle
         float sinA = std::sqrt(std::max(0.0f, 1.0f - cosA * cosA));
@@ -429,10 +389,7 @@ glm::vec3 ParticleSystem::SampleSpawnVelocity(const ParticleEmitterComponent& e,
     }
 }
 
-// =====================================================
-//  EnsurePool
-//  Initialises or resizes the particle pool and free-list.
-// =====================================================
+// EnsurePool — initialises or resizes the particle pool and free-list.
 void ParticleSystem::EnsurePool(ParticleEmitterComponent& e)
 {
     const int target = e.maxParticles;
@@ -460,9 +417,6 @@ void ParticleSystem::EnsurePool(ParticleEmitterComponent& e)
     }
 }
 
-// =====================================================
-//  GPU helpers
-// =====================================================
 void ParticleSystem::EnsureSSBOCapacity(int needed)
 {
     if (needed <= m_ssboCapacity) return;
@@ -523,9 +477,6 @@ void ParticleSystem::InitQuadVAO()
     glGenVertexArrays(1, &m_quadVAO);
 }
 
-// =====================================================
-//  Destructor
-// =====================================================
 ParticleSystem::~ParticleSystem()
 {
     glDeleteProgram(m_shader);

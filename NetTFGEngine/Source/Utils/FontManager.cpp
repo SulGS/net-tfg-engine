@@ -9,7 +9,6 @@ FontManager::FontManager() {
 }
 
 FontManager::~FontManager() {
-    // Delete all character textures
     for (auto& [fontName, characters] : fonts) {
         for (auto& [c, character] : characters) {
             glDeleteTextures(1, &character.textureID);
@@ -20,19 +19,24 @@ FontManager::~FontManager() {
 }
 
 bool FontManager::LoadFont(const std::string& fontName, const std::string& fontPath, unsigned int fontSize) {
+
+	if (fonts.find(fontName) != fonts.end()) {
+		Debug::Warning("FontManager") << "Font already loaded: " << fontName << "\n";
+		return true;
+	}
+
     FT_Face face;
     if (FT_New_Face(ft, fontPath.c_str(), 0, &face)) {
         Debug::Error("FontManager") << "ERROR: Failed to load font: " << fontPath << "\n";
         return false;
     }
 
-    // Set font size
     FT_Set_Pixel_Sizes(face, 0, fontSize);
 
     // Disable byte-alignment restriction
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
-    // Load first 128 ASCII characters
+    // Only the first 128 ASCII characters are pre-loaded
     std::map<char, Character> characters;
     for (unsigned char c = 0; c < 128; c++) {
         GenerateCharacterTexture(face, c, characters);
@@ -47,13 +51,11 @@ bool FontManager::LoadFont(const std::string& fontName, const std::string& fontP
 }
 
 void FontManager::GenerateCharacterTexture(FT_Face face, char c, std::map<char, Character>& characters) {
-    // Load character glyph
     if (FT_Load_Char(face, c, FT_LOAD_RENDER)) {
         Debug::Error("FontManager") << "ERROR: Failed to load Glyph for character: " << c << "\n";
         return;
     }
 
-    // Generate texture
     GLuint texture;
     glGenTextures(1, &texture);
     glBindTexture(GL_TEXTURE_2D, texture);
@@ -69,13 +71,11 @@ void FontManager::GenerateCharacterTexture(FT_Face face, char c, std::map<char, 
         face->glyph->bitmap.buffer
     );
 
-    // Set texture options
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-    // Store character
     Character character = {
         texture,
         glm::ivec2(face->glyph->bitmap.width, face->glyph->bitmap.rows),

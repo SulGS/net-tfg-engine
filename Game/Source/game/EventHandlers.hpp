@@ -143,8 +143,6 @@ class SpawnBulletHandler : public IEventHandler {
 public:
     void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
     {
-        //std::cout << "Processing SPAWN_BULLET event\n";
-
         const int BULLET_LIFETIME = 30;
         auto spawn_ev = *reinterpret_cast<const SpawnBulletEventData*>(event.data);
 

@@ -17,23 +17,19 @@ public:
 
     // Half extents (width/2, height/2, depth/2)
     glm::vec3 size;
-    
-    // Reference to entity's transform
+
     Transform* transform;
 
-    // ICollider interface
     int GetColliderType() const override { return COLLIDER_BOX_3D; }
-    
+
     bool CheckCollision(const ICollider* other, CollisionInfo& info) const override {
         const ICollider3D* other3D = dynamic_cast<const ICollider3D*>(other);
         if (!other3D) return false;
         return other3D->CollidesWith(this, info);
     }
 
-    // ICollider3D generic collision
     bool CollidesWith(const ICollider3D* other, CollisionInfo& info) const override;
 
-    // Bounds (AABB)
     glm::vec3 GetMin() const override {
         glm::vec3 center = GetCenter();
         return center - size;
@@ -52,19 +48,16 @@ public:
     // Get 8 corners of the box (for OBB if rotated)
     std::vector<glm::vec3> GetCorners() const {
         glm::vec3 center = GetCenter();
-        
-        // If no rotation, return AABB corners
+
         if (!transform) {
             return GetAABBCorners(center);
         }
-        
-        // Apply rotation for OBB
+
         glm::vec3 rot = transform->getRotation();
         if (rot.x == 0.0f && rot.y == 0.0f && rot.z == 0.0f) {
             return GetAABBCorners(center);
         }
-        
-        // Create rotation matrix
+
         glm::mat4 rotMat = glm::mat4(1.0f);
         rotMat = glm::rotate(rotMat, glm::radians(rot.x), glm::vec3(1, 0, 0));
         rotMat = glm::rotate(rotMat, glm::radians(rot.y), glm::vec3(0, 1, 0));

@@ -27,7 +27,10 @@ public:
     virtual void Render(const GameStateBlob& state, OpenGLWindow* window) = 0;
 
     virtual void Interpolate(const GameStateBlob& previousServerState, const GameStateBlob& currentServerState, const GameStateBlob& previousLocalState, const GameStateBlob& currentLocalState, GameStateBlob& renderState, float serverInterpolation, float localInterpolation) = 0;
-    
+
+    // Releases AssetManager-backed resources held by this renderer's components; no-op by default, must run on the render thread.
+    virtual void ReleaseECSAssets() {}
+
     virtual ~IGameRenderer() = 0;
 
 };

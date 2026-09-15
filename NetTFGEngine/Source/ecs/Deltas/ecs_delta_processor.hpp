@@ -34,7 +34,6 @@ public:
         for (const auto& deltaBlob : deltas) {
             auto it = handlers.find(deltaBlob.delta_type);
             if (it != handlers.end()) {
-                // First compare to check if delta is still relevant
                 if (!(it->second->Compare(deltaBlob, currentState))) {
                     return false;
                 }

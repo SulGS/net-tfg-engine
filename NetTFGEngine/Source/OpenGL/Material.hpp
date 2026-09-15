@@ -8,9 +8,6 @@
 #include "ShaderLoader.hpp"
 #include "Utils/AssetManager.hpp"
 
-// ---------------------------------------------------------------------------
-// Supported uniform types
-// ---------------------------------------------------------------------------
 using UniformValue = std::variant<
     float,
     glm::vec2,
@@ -20,20 +17,14 @@ using UniformValue = std::variant<
     int
 >;
 
-// ---------------------------------------------------------------------------
-// Material
-//   Owns a shader program and all uniform state for it.
-//   Multiple meshes can share a single Material (via shared_ptr).
-// ---------------------------------------------------------------------------
+// Owns a shader program and all uniform state for it; multiple meshes can share one Material via shared_ptr.
 class Material {
 public:
-    // Loads vertex and fragment shaders from the AssetManager by key,
-    // then compiles and links them into a program.
     Material(const std::string& vertexShaderAsset,
         const std::string& fragmentShaderAsset);
     ~Material();
 
-    // --- typed setters (location is looked up and cached on first call) ---
+    // typed setters (location is looked up and cached on first call)
     void setFloat(const std::string& name, float value);
     void setInt(const std::string& name, int value);
 	void setIVec2(const std::string& name, const glm::ivec2& value);
@@ -54,11 +45,10 @@ public:
 private:
     GLuint shaderProgram = 0;
 
-    // Asset keys — stored so the destructor and clone can reference the cache
+    // Asset keys ï¿½ stored so the destructor and clone can reference the cache
     std::string vertexAssetKey;
     std::string fragmentAssetKey;
 
-    // Cached uniform locations for engine uniforms
     GLint modelLoc = -1;
     GLint viewLoc = -1;
     GLint projectionLoc = -1;

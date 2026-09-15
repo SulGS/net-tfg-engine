@@ -54,7 +54,6 @@ public:
         if (camQuery.Count() == 0)
             return;
 
-        // Check if the local player is alive
         bool localAlive = false;
         bool localFound = false;
         int  localPlayerId = -1;
@@ -78,7 +77,7 @@ public:
 
         glm::vec3 targetPos(0.0f);
 
-        // ── Game over: all players see the winner zoom regardless of alive state ──
+        // Game over: all players see the winner zoom regardless of alive state
         int winnerId = GetWinnerId(entityManager);
         bool gameOver = (winnerId >= 0);
 
@@ -129,7 +128,7 @@ public:
             return;
         }
 
-        // ── Normal gameplay ───────────────────────────────────────────────────
+        // Normal gameplay
         if (localAlive)
         {
             targetPos = localPos;
@@ -161,7 +160,6 @@ public:
                     // Lazily add SpectatorState if missing
                     if (!spectator)
                     {
-                        // Find first alive player to watch (skip self)
                         int firstAlive = -1;
                         for (auto [e2, pt2, pl2, sh2] : playerQuery)
                         {
@@ -184,7 +182,6 @@ public:
 
                     auto cycleTarget = [&](int direction)
                         {
-                            // Collect alive player ids (excluding local)
                             std::vector<int> alive;
                             for (auto [e2, pt2, pl2, sh2] : playerQuery)
                                 if (pl2->playerId != localPlayerId && sh2->isAlive)
@@ -525,8 +522,6 @@ public:
         auto thrusterQuery = entityManager.CreateQuery<Transform, ParticleEmitterComponent, ThrusterOwner>();
         auto shipQuery = entityManager.CreateQuery<Transform, Playable, SpaceShip>();
 
-        //Rotate ship
-
         for (auto [shipEntity, shipTransform, play, ship] : shipQuery)
         {
             if (!ship->isAlive) continue;
@@ -552,7 +547,7 @@ public:
                     break;
                 }
 
-                // --- Position (same for both thruster and smoke) ---
+                // Position (same for both thruster and smoke)
                 glm::vec3 localOffset = glm::vec3(-1.8f, 0.0f, 0.0f);
 
                 if (thrusterOwner->isLeftEngine)
@@ -575,7 +570,6 @@ public:
                 thrusterTransform->setPosition(shipTransform->getPosition() + rot * localOffset);
 
 
-                // --- Activation ---
                 if (thrusterOwner->isSmoke)
                 {
                     thrusterEmitter->enabled = !ship->isMovingForward;  // smoke when idle
@@ -644,7 +638,7 @@ public:
         const int x_size = 5;
         const int y_size = 5;
 
-        // ── Advance warning blink timer ───────────────────────────────────────
+        // Advance warning blink timer
         warningTimer += deltaTime;
         if (warningTimer >= WARNING_BLINK_INTERVAL)
         {
@@ -652,7 +646,7 @@ public:
             warningBlinkActive = !warningBlinkActive;
         }
 
-        // ── Build active tile set ─────────────────────────────────────────────
+        // Build active tile set
         std::unordered_set<int> activeTileIds;
         {
             auto tileActiveQuery = entityManager.CreateQuery<TileID>();
@@ -660,7 +654,7 @@ public:
                 if (tileId->active) activeTileIds.insert(tileId->id);
         }
 
-        // ── Tiles: active flag drives visibility, warning drives fall ─────────
+        // Tiles: active flag drives visibility, warning drives fall
         {
             auto tileQuery = entityManager.CreateQuery<TileID, MeshComponent, Transform>();
             for (auto [entity, tileId, mesh, transform] : tileQuery)
@@ -683,7 +677,7 @@ public:
             }
         }
 
-        // ── Walls and spokes ──────────────────────────────────────────────────
+        // Walls and spokes
         {
             auto laserWallQuery = entityManager.CreateQuery<LaserWallID, MeshComponent>();
             for (auto [entity, lwID, mesh] : laserWallQuery)
@@ -737,7 +731,7 @@ public:
             }
         }
 
-        // ── Pillars: hidden when ALL their cells are inactive ─────────────────
+        // Pillars: hidden when ALL their cells are inactive
         {
             auto pillarQuery = entityManager.CreateQuery<PillarID, MeshComponent>();
             for (auto [entity, pid, mesh] : pillarQuery)

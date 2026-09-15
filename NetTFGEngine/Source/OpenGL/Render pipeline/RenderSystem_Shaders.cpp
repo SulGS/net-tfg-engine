@@ -1,8 +1,6 @@
 ﻿#include "RenderSystem.hpp"
 
-// =====================================================
-//  CompileShadowShader  — point light cubemap
-// =====================================================
+// CompileShadowShader — point light cubemap
 void RenderSystem::CompileShadowShader()
 {
     const char* vert = R"GLSL(
@@ -52,12 +50,7 @@ void RenderSystem::CompileShadowShader()
         });
 }
 
-// =====================================================
-//  CompileDirShadowShader
-//  Simple depth-only pass for the directional light.
-//  No geometry shader needed — a single view-projection
-//  matrix transforms all geometry.
-// =====================================================
+// Simple depth-only pass for the directional light; no geometry shader needed since a single view-projection matrix transforms all geometry.
 void RenderSystem::CompileDirShadowShader()
 {
     const char* vert = R"GLSL(
@@ -83,9 +76,6 @@ void RenderSystem::CompileDirShadowShader()
         });
 }
 
-// =====================================================
-//  CompileTonemapShader
-// =====================================================
 void RenderSystem::CompileTonemapShader()
 {
     const char* vert = R"GLSL(
@@ -146,9 +136,6 @@ void RenderSystem::CompileTonemapShader()
         });
 }
 
-// =====================================================
-//  CompileBloomShaders
-// =====================================================
 void RenderSystem::CompileBloomShaders()
 {
     const char* fullscreenVert = R"GLSL(
@@ -203,9 +190,6 @@ void RenderSystem::CompileBloomShaders()
         });
 }
 
-// =====================================================
-//  CompileFXAAShader
-// =====================================================
 void RenderSystem::CompileFXAAShader()
 {
     const char* vert = R"GLSL(
@@ -277,9 +261,6 @@ void RenderSystem::CompileFXAAShader()
         });
 }
 
-// =====================================================
-//  CompileGBufferShader
-// =====================================================
 void RenderSystem::CompileGBufferShader()
 {
     const char* vert = R"GLSL(

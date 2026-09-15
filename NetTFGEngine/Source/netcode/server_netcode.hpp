@@ -55,7 +55,6 @@ public:
 
    
 
-    // ✅ FIXED: Now thread-safe with mutex lock
     StateUpdate Tick() {
         std::lock_guard<std::mutex> lk(mtx);
 
@@ -63,14 +62,10 @@ public:
 
         currentFrame++;
 
-        // Create state update
         StateUpdate update;
         update.frame = currentFrame;
         update.state = gameState;
 
-        
-
-        // Cleanup old frames every 60 frames
         if (currentFrame % 60 == 0) {
             CleanupOldFramesInternal();
         }
@@ -90,8 +85,7 @@ public:
 
 	GameStateBlob GetStateAtFrame(int frame) {
 		std::lock_guard<std::mutex> lk(mtx);
-		
-		// Search in state history
+
 		std::queue<GameStateBlob> tempQueue = stateHistory;
 		while (!tempQueue.empty())
 		{
@@ -103,7 +97,6 @@ public:
 			}
 		}
 
-		// If not found, return current state as fallback
 		return gameState;
 	}
 
@@ -115,7 +108,6 @@ public:
         gameState.frame = 0;
     }
 
-    // ✅ FIXED: Now thread-safe with mutex lock
     IGameLogic* GetGameLogic() {
         std::lock_guard<std::mutex> lk(mtx);
         return gameLogic.get();
@@ -133,27 +125,13 @@ private:
     EventsHistory appliedEvents;
     std::set<int> connectedPlayers;
 
-    // ✅ FIXED: Now private and assumes lock is held
+    // Assumes caller already holds mtx (not locked internally)
     void SimulateFrame(int frame) {
-        // Assumes caller holds mtx lock
-
         std::map<int, InputEntry> inputs;
         auto frameInIt = appliedInputs.find(frame);
         if (frameInIt != appliedInputs.end()) {
             inputs = frameInIt->second;
         }
-
-        /*for (auto& entry : inputs) {
-			// Print inputs for debugging
-			std::cout << "Frame " << frame << " - Player " << entry.first << " Input: ";
-
-            for (int i = 0; i < 4; i++) 
-            {
-                std::cout << static_cast<int>(entry.second.input.data[i]);
-            }
-
-            std::cout << "\n";
-		}*/
 
         std::vector<EventEntry> events;
         auto frameEvIt = appliedEvents.find(frame);
@@ -162,8 +140,6 @@ private:
         }
 
         gameLogic->SimulateFrame(gameState, events, inputs);
-
-		//gameLogic->PrintState(gameState);
 
         for (auto& event : gameLogic->generatedEvents) {
             event.frame = frame + 1;
@@ -178,14 +154,12 @@ private:
 		}
     }
 
-    // ✅ NEW: Cleanup old frames to prevent unbounded memory growth
-    // Internal version called from Tick() - assumes lock is held
+    // Called from Tick() (lock already held); keeps memory bounded
     void CleanupOldFramesInternal() {
         // Keep last 300 frames (5 seconds at 60fps)
         const int FRAMES_TO_KEEP = 300;
         int minFrameToKeep = currentFrame - FRAMES_TO_KEEP;
 
-        // Clean up old inputs
         for (auto it = appliedInputs.begin(); it != appliedInputs.end(); ) {
             if (it->first < minFrameToKeep) {
                 it = appliedInputs.erase(it);
@@ -195,7 +169,6 @@ private:
             }
         }
 
-        // Clean up old events
         for (auto it = appliedEvents.begin(); it != appliedEvents.end(); ) {
             if (it->first < minFrameToKeep) {
                 it = appliedEvents.erase(it);

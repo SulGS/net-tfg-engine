@@ -6,7 +6,6 @@
 #include <string>
 #include <functional>
 
-// UI Anchor positions
 enum class UIAnchor {
     TOP_LEFT,
     TOP_CENTER,
@@ -19,7 +18,6 @@ enum class UIAnchor {
     BOTTOM_RIGHT
 };
 
-// Base UI element component
 class UIElement : public IComponent {
 public:
     UIElement() 
@@ -38,13 +36,11 @@ public:
     // Size in pixels
     glm::vec2 size;
     
-    // Anchor point on screen
     UIAnchor anchor;
-    
+
     // Pivot point (0,0 = top-left, 0.5,0.5 = center, 1,1 = bottom-right)
     glm::vec2 pivot;
-    
-    // Visibility
+
     bool isVisible;
     
     // Render order (higher = rendered on top)
@@ -53,20 +49,17 @@ public:
     // Opacity (0.0 = transparent, 1.0 = opaque)
     float opacity;
     
-    // Get screen position based on anchor
     glm::vec2 GetScreenPosition(int screenWidth, int screenHeight) const {
         glm::vec2 anchorPos = GetAnchorPosition(screenWidth, screenHeight);
         glm::vec2 pivotOffset = glm::vec2(size.x * pivot.x, size.y * pivot.y);
         return anchorPos + position - pivotOffset;
     }
-    
-    // Get bounding box in screen space
+
     glm::vec4 GetBounds(int screenWidth, int screenHeight) const {
         glm::vec2 pos = GetScreenPosition(screenWidth, screenHeight);
         return glm::vec4(pos.x, pos.y, pos.x + size.x, pos.y + size.y);
     }
-    
-    // Check if point is inside element
+
     bool Contains(const glm::vec2& point, int screenWidth, int screenHeight) const {
         glm::vec4 bounds = GetBounds(screenWidth, screenHeight);
         return point.x >= bounds.x && point.x <= bounds.z &&

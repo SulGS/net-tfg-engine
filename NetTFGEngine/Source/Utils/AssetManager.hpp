@@ -78,18 +78,23 @@ public:
     AssetManager(const AssetManager&) = delete;
     AssetManager& operator=(const AssetManager&) = delete;
 
-    /* ============================
-       Bin management
-       ============================ */
     bool loadBin(const std::string& binFile)
     {
-        if (binNameToId.count(binFile)) return true;
+        // binNameToId survives unloadBin(), so an existing entry means already-loaded (data non-empty) or known-but-unloaded (must reload into the same slot below).
+        auto existing = binNameToId.find(binFile);
+        if (existing != binNameToId.end() && !bins[existing->second].data.empty())
+            return true;
 
         std::ifstream f(binFile, std::ios::binary | std::ios::ate);
         if (!f.is_open()) return false;
 
         size_t size = f.tellg();
         f.seekg(0, std::ios::beg);
+
+		if (size < 12) {
+			Debug::Error("AssetManager") << "Bin file too small: " << binFile << "\n";
+			return false;
+		}
 
         BinData bin;
         bin.data.resize(size);
@@ -98,7 +103,6 @@ public:
 
         const uint8_t* ptr = bin.data.data();
 
-        // Validate header
         if (std::memcmp(ptr, "ASPK", 4) != 0) {
             Debug::Error("AssetManager") << "Invalid bin magic: " << binFile << "\n";
             return false;
@@ -115,9 +119,17 @@ public:
         // Each entry: id(8) + offset(8) + size(8)
         bin.dataOffset = 12 + entryCount * (8 + 8 + 8);
 
-        uint32_t binId = static_cast<uint32_t>(bins.size());
-        binNameToId[binFile] = binId;
-        bins.push_back(std::move(bin));
+        if (existing != binNameToId.end()) {
+            // Re-loading a previously unloaded bin: overwrite its reserved
+            // slot instead of appending a new one, so its binId (and every
+            // assetIndex entry pointing at it) stays valid.
+            bins[existing->second] = std::move(bin);
+        }
+        else {
+            uint32_t binId = static_cast<uint32_t>(bins.size());
+            binNameToId[binFile] = binId;
+            bins.push_back(std::move(bin));
+        }
 
         Debug::Info("AssetManager") << "Loaded bin: " << binFile << "\n";
         return true;
@@ -159,15 +171,16 @@ public:
             }
         }
 
-        bins[binId].data.clear();
-        binNameToId.erase(itBin);
+        // swap with an empty vector to actually release the buffer's capacity (clear() alone doesn't).
+        std::vector<uint8_t>().swap(bins[binId].data);
+
+        // Deliberately NOT erasing binNameToId[binFile]: the binId slot
+        // stays reserved for this name so a later loadBin() reuses it — see
+        // loadBin()'s comment for why a fresh slot would break assetIndex.
 
         Debug::Info("AssetManager") << "Unloaded bin: " << binFile << "\n";
     }
 
-    /* ============================
-       Asset-level API
-       ============================ */
     template<typename Handle>
     std::optional<Handle> loadAsset(const Key& key)
     {
@@ -198,7 +211,6 @@ public:
             return std::nullopt;
         }
 
-        // Load asset via registered loader
         auto loaderIt = loaders.find(typeid(Handle));
         if (loaderIt == loaders.end()) return std::nullopt;
 
@@ -212,7 +224,6 @@ public:
 
         Handle h = std::any_cast<Handle>(anyHandle);
 
-        // ---- HANDLE VALIDATION ----
         if constexpr (std::is_same_v<Handle, AudioBuffer>)
         {
             if (h.value == 0)
@@ -260,9 +271,6 @@ public:
         }
     }
 
-    /* ============================
-       Type registration
-       ============================ */
     template<typename Handle>
     void registerType(
         std::function<Handle(const uint8_t*, size_t)> loader,
@@ -271,7 +279,7 @@ public:
         loaders[typeid(Handle)] = [loader](const AssetLocation& loc, const BinData& bin) {
             return std::any(
                 loader(
-                    bin.data.data() + bin.dataOffset + loc.offset, // <-- FIXED
+                    bin.data.data() + bin.dataOffset + loc.offset,
                     static_cast<size_t>(loc.size)
                 )
             );
@@ -282,9 +290,6 @@ public:
             };
     }
 
-    /* ============================
-       Asset index management
-       ============================ */
     void setAssetIndex(const std::unordered_map<AssetID, AssetLocation>& idx)
     {
         assetIndex = idx;

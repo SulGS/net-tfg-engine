@@ -1,9 +1,6 @@
 ﻿#include "RenderSystem.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 
-// =====================================================
-//  GBufferPass
-// =====================================================
 void RenderSystem::GBufferPass(EntityManager::Query<MeshComponent, Transform>& meshQuery,
     const glm::mat4& view, const glm::mat4& projection)
 {
@@ -34,9 +31,6 @@ void RenderSystem::GBufferPass(EntityManager::Query<MeshComponent, Transform>& m
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-// =====================================================
-//  ResolveMSAA
-// =====================================================
 void RenderSystem::ResolveMSAA()
 {
     if (m_msaaSamples <= 1)
@@ -61,15 +55,10 @@ void RenderSystem::ResolveMSAA()
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-// =====================================================
-//  CollectLightsPass
-//  Uploads point lights (respecting castShadows) to the
-//  light SSBO and uploads the directional light (if any)
-//  to the dir light UBO.
-// =====================================================
+// Uploads point lights to the light SSBO and the directional light (if any) to the dir light UBO.
 void RenderSystem::CollectLightsPass(EntityManager& em)
 {
-    // ---- Point lights ----
+    // Point lights
     std::vector<GPUPointLight> lightVec;
     lightVec.reserve(MAX_LIGHTS);
 
@@ -92,8 +81,7 @@ void RenderSystem::CollectLightsPass(EntityManager& em)
             sizeof(GPUPointLight) * m_lightCount, lightVec.data());
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 
-    // ---- Directional light ----
-    // Write into the CPU cache — no glGetBufferSubData readback stall.
+    // Directional light — write into the CPU cache — no glGetBufferSubData readback stall.
     m_cpuDirLight = GPUDirLight{};  // clear each frame
 
     auto dirQuery = em.CreateQuery<DirectionalLightComponent>();
@@ -116,10 +104,7 @@ void RenderSystem::CollectLightsPass(EntityManager& em)
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
 }
 
-// =====================================================
-//  ShadowPass  — point light cubemap array
-//  Only lights with castShadows == true consume a shadow slot.
-// =====================================================
+// Point light cubemap array; only lights with castShadows == true consume a shadow slot.
 void RenderSystem::ShadowPass(EntityManager& em, EntityManager::Query<MeshComponent, Transform>& meshQuery)
 {
     const auto& rs = RenderSettings::instance();
@@ -209,24 +194,7 @@ void RenderSystem::ShadowPass(EntityManager& em, EntityManager::Query<MeshCompon
     glViewport(0, 0, m_screenW, m_screenH);
 }
 
-// =====================================================
-//  DirShadowPass
-//  Renders the scene from the directional light's point
-//  of view into a 2-D orthographic shadow map.
-//
-//  The frustum is centred on cameraPos so that distant
-//  objects visible to the camera always receive shadows.
-//
-//  Peter panning fix:
-//    - glPolygonOffset is NOT used for directional shadows.
-//      With kFar = 800 the depth range is huge, making any
-//      fixed polygon offset massive in world space and
-//      causing geometry to visually detach from its shadow.
-//    - Instead we enable GL_DEPTH_CLAMP (prevents near-plane
-//      clipping of steep casters) and rely on a receiver-side
-//      normal-scaled bias in the shading shader, normalised by
-//      kFar so it stays correct regardless of frustum depth.
-// =====================================================
+// Renders the scene from the directional light into a 2-D ortho shadow map, frustum centred on cameraPos. No glPolygonOffset (huge depth range would cause peter panning) — instead GL_DEPTH_CLAMP plus a receiver-side normal-scaled bias in the shading shader.
 void RenderSystem::DirShadowPass(EntityManager::Query<MeshComponent, Transform>& meshQuery,
     const glm::vec3& cameraPos)
 {
@@ -245,11 +213,7 @@ void RenderSystem::DirShadowPass(EntityManager::Query<MeshComponent, Transform>&
         ? glm::vec3(1, 0, 0)
         : glm::vec3(0, 1, 0);
 
-    // Eye pulled back kFar units upstream from cameraPos.
-    // Depth range [0, kFar*2] places cameraPos at the midpoint so objects
-    // up to kFar units in front of AND behind the camera are captured.
-    // The old [kNear, kFar] with a large negative kNear wasted depth range
-    // behind the eye and cut off distant forward objects.
+    // Eye pulled back kFar units from cameraPos; depth range [0, kFar*2] puts cameraPos at the midpoint so objects both in front of and behind it are captured.
     glm::mat4 lightView = glm::lookAt(
         cameraPos - lightDir * kFar,
         cameraPos,
@@ -269,7 +233,6 @@ void RenderSystem::DirShadowPass(EntityManager::Query<MeshComponent, Transform>&
     glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(GPUDirLight), &m_cpuDirLight);
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
 
-    // ---- Depth-only render ----
     glBindFramebuffer(GL_FRAMEBUFFER, m_dirShadowFBO);
     glViewport(0, 0, res, res);
     glClear(GL_DEPTH_BUFFER_BIT);
@@ -277,11 +240,7 @@ void RenderSystem::DirShadowPass(EntityManager::Query<MeshComponent, Transform>&
     glDepthMask(GL_TRUE);
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
 
-    // GL_DEPTH_CLAMP prevents steep/back-facing casters from being clipped by
-    // the near plane, which is the main cause of missing shadow fragments.
-    // We do NOT use glPolygonOffset here — with kFar = 800 a fixed offset
-    // translates to several world-units of displacement, causing peter panning.
-    // Bias is applied receiver-side in the shading shader instead (see below).
+    // GL_DEPTH_CLAMP prevents steep/back-facing casters from being clipped by the near plane; no glPolygonOffset here (bias is applied receiver-side instead).
     glEnable(GL_DEPTH_CLAMP);
 
     glUseProgram(m_dirShadowShader);
@@ -301,9 +260,6 @@ void RenderSystem::DirShadowPass(EntityManager::Query<MeshComponent, Transform>&
     glViewport(0, 0, m_screenW, m_screenH);
 }
 
-// =====================================================
-//  ShadingPass
-// =====================================================
 void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& meshQuery,
     const glm::mat4& view,
     const glm::mat4& projection,
@@ -366,9 +322,6 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
     glViewport(0, 0, m_screenW, m_screenH);
 }
 
-// =====================================================
-//  TonemapPass
-// =====================================================
 void RenderSystem::TonemapPass()
 {
     const auto& rs = RenderSettings::instance();
@@ -411,9 +364,6 @@ void RenderSystem::TonemapPass()
     glEnable(GL_DEPTH_TEST);
 }
 
-// =====================================================
-//  BloomPass
-// =====================================================
 void RenderSystem::BloomPass()
 {
     const auto& rs = RenderSettings::instance();
@@ -480,9 +430,6 @@ void RenderSystem::BloomPass()
     glViewport(0, 0, m_screenW, m_screenH);
 }
 
-// =====================================================
-//  FXAAPass
-// =====================================================
 void RenderSystem::FXAAPass()
 {
     const auto& rs = RenderSettings::instance();

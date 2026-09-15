@@ -5,7 +5,6 @@
 #include <glm/glm.hpp>
 #include <functional>
 
-// Collision layer for filtering
 enum class CollisionLayer : uint32_t {
     DEFAULT = 1 << 0,
     PLAYER = 1 << 1,
@@ -30,15 +29,13 @@ inline CollisionLayer operator&(CollisionLayer a, CollisionLayer b)
         static_cast<uint32_t>(b));
 }
 
-// Collision callback data
 struct CollisionInfo {
     Entity otherEntity;
-    glm::vec3 normal;        // Collision normal
-    float penetration;       // Penetration depth
-    glm::vec3 contactPoint;  // Point of contact
+    glm::vec3 normal;
+    float penetration;
+    glm::vec3 contactPoint;
 };
 
-// Collision callback function types
 using OnCollisionEnterCallback = std::function<void(Entity self, Entity other, const CollisionInfo& info)>;
 using OnCollisionStayCallback = std::function<void(Entity self, Entity other, const CollisionInfo& info)>;
 using OnCollisionExitCallback = std::function<void(Entity self, Entity other)>;
@@ -46,59 +43,50 @@ using OnTriggerEnterCallback = std::function<void(Entity self, Entity other)>;
 using OnTriggerStayCallback = std::function<void(Entity self, Entity other)>;
 using OnTriggerExitCallback = std::function<void(Entity self, Entity other)>;
 
-// Base collider interface
 class ICollider : public IComponent {
 public:
     virtual ~ICollider() = default;
 
-    // Collision detection (pure virtual)
     virtual bool CheckCollision(const ICollider* other, CollisionInfo& info) const = 0;
-    
-    // Get collider type for double dispatch
+
+    // For double dispatch.
     virtual int GetColliderType() const = 0;
-    
-    // Layer filtering
+
     CollisionLayer layer = CollisionLayer::DEFAULT;
     CollisionLayer collidesWith = CollisionLayer::ALL;
-    
-    // Trigger vs solid collider
+
     bool isTrigger = false;  // If true, detects but doesn't block
-    
-    // Enabled state
+
     bool isEnabled = true;
-    
-    // Collision callbacks (for solid colliders)
+
     OnCollisionEnterCallback onCollisionEnter = nullptr;
     OnCollisionStayCallback onCollisionStay = nullptr;
     OnCollisionExitCallback onCollisionExit = nullptr;
-    
-    // Trigger callbacks (for trigger colliders)
+
     OnTriggerEnterCallback onTriggerEnter = nullptr;
     OnTriggerStayCallback onTriggerStay = nullptr;
     OnTriggerExitCallback onTriggerExit = nullptr;
-    
-    // Helper to check if should collide with layer
+
     bool CanCollideWith(CollisionLayer otherLayer) const {
         return (static_cast<uint32_t>(collidesWith) & static_cast<uint32_t>(otherLayer)) != 0;
     }
-    
-    // Set collision callbacks (chainable)
+
+    // Setters return `this` so calls can be chained.
     ICollider* SetOnCollisionEnter(OnCollisionEnterCallback callback) {
         onCollisionEnter = callback;
         return this;
     }
-    
+
     ICollider* SetOnCollisionStay(OnCollisionStayCallback callback) {
         onCollisionStay = callback;
         return this;
     }
-    
+
     ICollider* SetOnCollisionExit(OnCollisionExitCallback callback) {
         onCollisionExit = callback;
         return this;
     }
-    
-    // Set trigger callbacks (chainable)
+
     ICollider* SetOnTriggerEnter(OnTriggerEnterCallback callback) {
         onTriggerEnter = callback;
         return this;
@@ -115,7 +103,7 @@ public:
     }
 };
 
-// Collider type IDs for double dispatch
+// IDs for double dispatch
 enum ColliderType {
     COLLIDER_CIRCLE_2D = 0,
     COLLIDER_BOX_2D = 1,

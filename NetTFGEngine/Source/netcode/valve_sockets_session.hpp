@@ -64,7 +64,7 @@ public:
             return false;
         }
 
-        socketsInitialized = true;  // mark static flag
+        socketsInitialized = true;
         sockets = SteamNetworkingSockets();
         if (!sockets) {
             Debug::Error("Sockets") << "Failed to get SteamNetworkingSockets interface\n";
@@ -88,7 +88,6 @@ public:
         serverAddr.Clear();
         serverAddr.m_port = port;
 
-        // Set up callback for connection state changes
         SteamNetworkingConfigValue_t opt;
         opt.SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged,
             (void*)SteamNetConnectionStatusChangedCallback);
@@ -182,7 +181,7 @@ public:
         if (!sockets) return;
 
         ISteamNetworkingMessage* pMsgs[64];
-        int numMsgs;
+        int numMsgs = 0;
 		int messagesToFetch = fetchOnlyOne ? 1 : 64;
 
         if (isServer && pollGroup != k_HSteamNetPollGroup_Invalid) {
@@ -250,7 +249,16 @@ public:
 
     InputDelayPacket ParseInputDelaySync(const uint8_t* buf, size_t len) {
 
+		const size_t EXPECTED_MIN_LEN = 1 + sizeof(InputDelayPacket);
+
         InputDelayPacket packet;
+
+		if (len < EXPECTED_MIN_LEN) {
+			Debug::Error("Sockets") << "Malformed input delay packet, len=" << len << "\n";
+            return packet;
+		}
+
+        
 
         size_t offset = 0;
 
@@ -335,6 +343,19 @@ public:
 		eventLen = bigEndianToHost32(eventLen);
 		offset += 4;
 		eventEntry.event.len = eventLen;
+        
+		if (eventLen > len - offset) {
+			Debug::Error("Sockets") << "Event length exceeds buffer size\n";
+			eventEntry.event.len = 0;
+			return eventEntry;
+		}
+
+		if (eventLen > sizeof(eventEntry.event.data)) {
+			Debug::Error("Sockets") << "Event length exceeds buffer size\n";
+			eventEntry.event.len = 0;
+			return eventEntry;
+		}
+
 		std::memcpy(eventEntry.event.data, buf + offset, eventLen);
 		offset += eventLen;
 		return eventEntry;
@@ -380,6 +401,18 @@ public:
         stateLen = bigEndianToHost32(stateLen);
         offset += 4;
         update.state.len = stateLen;
+
+		if (stateLen > len - offset) {
+			Debug::Error("Sockets") << "State length exceeds buffer size\n";
+			update.state.len = 0;
+			return update;
+		}
+
+		if (stateLen > sizeof(update.state.data)) {
+			Debug::Error("Sockets") << "State length exceeds buffer size\n";
+			update.state.len = 0;
+			return update;
+		}
 
         std::memcpy(update.state.data, buf + offset, stateLen);
         offset += stateLen;
@@ -435,20 +468,17 @@ public:
         deltas.clear();
         size_t offset = 0;
 
-        // 1) Read packet type
         if (offset + 1 > len) return;
         uint8_t packetType = buf[offset++];
         if (packetType != PACKET_DELTA_STATE_UPDATE)
             return;
 
-        // 2) Read first frame
         if (offset + 4 > len) return;
         uint32_t frameBE;
         std::memcpy(&frameBE, &buf[offset], 4);
         offset += 4;
         frame = bigEndianToHost32(frameBE);
 
-        // 3) Read number of deltas
         if (offset + 4 > len) return;
         uint32_t numDeltasBE;
         std::memcpy(&numDeltasBE, &buf[offset], 4);
@@ -457,28 +487,29 @@ public:
 
         deltas.reserve(numDeltas);
 
-        // 4) Read each delta
         for (uint32_t i = 0; i < numDeltas; i++)
         {
             DeltaStateBlob d{};
 
             d.frame = frame;
 
-            // delta_type
             if (offset + 4 > len) return;
             uint32_t typeBE;
             std::memcpy(&typeBE, &buf[offset], 4);
             offset += 4;
             d.delta_type = bigEndianToHost32(typeBE);
 
-            // delta_len
             if (offset + 4 > len) return;
             uint32_t deltaLenBE;
             std::memcpy(&deltaLenBE, &buf[offset], 4);
             offset += 4;
             d.len = bigEndianToHost32(deltaLenBE);
 
-            // data pointer allocation
+			if (d.len > sizeof(d.data)) {
+				Debug::Error("Sockets") << "Delta length exceeds buffer size\n";
+				return;
+			}
+
             if (offset + d.len > len) return;
             std::memcpy(d.data, &buf[offset], d.len);
             offset += d.len;
@@ -500,6 +531,12 @@ public:
     }
 
 	HashPacket ParseHashPacket(const uint8_t* buf, size_t len) {
+
+		if (len < 1 + 4 + SHA256_DIGEST_LENGTH) {
+			Debug::Error("Sockets") << "Hash packet length is too short\n";
+			return HashPacket{};
+		}
+
 		HashPacket packet;
 
 		size_t offset = 0;
@@ -543,7 +580,6 @@ private:
     void OnConnectionStateChanged(SteamNetConnectionStatusChangedCallback_t* pInfo) {
         ConnectionEventType eventType = CONNECTION_STATE_NONE;
 
-        // Determine event type
         switch (pInfo->m_info.m_eState) {
         case k_ESteamNetworkingConnectionState_Connecting:
             eventType = CONNECTION_STATE_CONNECTING;
@@ -562,12 +598,10 @@ private:
             break;
         }
 
-        // Notify callback listener
         if (onConnectionStateChanged) {
             onConnectionStateChanged(pInfo->m_hConn, eventType);
         }
 
-        // Server-side: accept connecting clients
         if (isServer) {
             switch (pInfo->m_info.m_eState) {
             case k_ESteamNetworkingConnectionState_Connecting:
@@ -629,7 +663,12 @@ private:
 
         if (socketsInitialized) {
             GameNetworkingSockets_Kill();
-            socketsInitialized = false;  // reset static flag
+            socketsInitialized = false;
+        }
+
+        if (s_pInstance == this) 
+        {
+			s_pInstance = nullptr;
         }
     }
 

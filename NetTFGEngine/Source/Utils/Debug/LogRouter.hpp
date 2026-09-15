@@ -2,6 +2,7 @@
 #include "LogMessage.hpp"
 #include "ThreadSafeQueue.hpp"
 #include "FileOutput.hpp"
+#include <shared_mutex>
 #include <unordered_map>
 #include <string>
 #include <thread>
@@ -33,6 +34,7 @@ private:
     std::thread worker;
 
     std::unordered_map<std::string, bool> channelStates;
+    mutable std::shared_mutex channelStatesMutex;
 
     FileOutput fileOutput;
     std::string logFilePath;

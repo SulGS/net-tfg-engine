@@ -13,25 +13,21 @@ public:
         this->offset = offset;
     }
 
-    // Radius
     float radius;
-    
-    // Reference to entity's transform (set by collision system)
+
+    // Set by CollisionSystem, not owned here.
     Transform* transform;
 
-    // ICollider interface
     int GetColliderType() const override { return COLLIDER_CIRCLE_2D; }
-    
+
     bool CheckCollision(const ICollider* other, CollisionInfo& info) const override {
         const ICollider2D* other2D = dynamic_cast<const ICollider2D*>(other);
         if (!other2D) return false;
         return other2D->CollidesWith(this, info);
     }
 
-    // ICollider2D generic collision
     bool CollidesWith(const ICollider2D* other, CollisionInfo& info) const override;
 
-    // Bounds
     glm::vec2 GetMin() const override {
         glm::vec2 center = GetCenter();
         return center - glm::vec2(radius);

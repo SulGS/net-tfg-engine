@@ -21,10 +21,49 @@
 
 #include <openssl/evp.h>
 
-// Simple game state for start screen
+#include "settings_menu.hpp"
+
+// Id used to register this scene in main().
+inline constexpr int MENU_SCENE_ID = 0;
+
+// Player's form; survives the ECS rebuild when entering/leaving settings.
+struct MenuFormMemory {
+    std::string ip;
+    std::string port;
+    std::string clientName;
+};
+
+inline MenuFormMemory g_menuForm;
+
 struct StartScreenGameState {
     bool spacePressed;
     int frameCount;
+};
+
+// Connect button state: pressed is an edge (consumed once), busy is level (lasts the whole attempt).
+class ConnectButton : public IComponent {
+public:
+    bool pressed = false;
+    bool busy = false;
+
+    void Press() {
+        pressed = true;
+        busy = true;
+    }
+
+    // Devuelve true una sola vez por pulsacion.
+    bool ConsumePress() {
+        if (!pressed) return false;
+        pressed = false;
+        return true;
+    }
+
+    // Intento terminado en error: descarta la pulsacion pendiente, si la hay,
+    // para que no se reintente sola.
+    void Reset() {
+        pressed = false;
+        busy = false;
+    }
 };
 
 class ConnectionData : public IComponent {
@@ -51,26 +90,37 @@ public:
     std::string errorMessage = "";
 };
 
+// Single place to write connection status text, instead of repeating the query in every branch.
+inline void SetConnectStatus(EntityManager& em, bool connecting, const std::string& message) {
+    auto query = em.CreateQuery<UIElement, UIText, TextAnimationData>();
+    for (auto [entity, element, text, animData] : query) {
+        animData->active = connecting;
+        animData->errorMessage = message;
+    }
+}
+
+// Only writer of the Connect button's isInteractable: clickable only while no connection attempt is in progress.
+class ConnectButtonSystem : public ISystem {
+public:
+    void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
+        auto query = entityManager.CreateQuery<UIButton, ConnectButton>();
+        for (auto [entity, button, connectBtn] : query) {
+            button->isInteractable = !connectBtn->busy;
+        }
+    }
+};
+
+// Animates text only — no longer touches UIButton (removed to avoid grabbing an arbitrary button).
 class TextAnimationSystem : public ISystem {
     void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
         auto query = entityManager.CreateQuery<UIElement, UIText, TextAnimationData>();
-
-        auto buttonQuery = entityManager.CreateQuery<UIButton>();
-        UIButton* button = nullptr;
-
-        for (auto [buttonEntity, btn] : buttonQuery) {
-            button = btn;
-        }
 
         for (auto [entity, element, text, animData] : query) {
             if (!animData->active)
             {
                 text->text = animData->errorMessage;
-                button->isInteractable = true;
                 continue;
             }
-
-            if (button) button->isInteractable = false;
 
             animData->remainTicks--;
             if (animData->remainTicks <= 0) {
@@ -95,7 +145,6 @@ class TextAnimationSystem : public ISystem {
     }
 };
 
-// System to detect space key press
 class StartScreenInputSystem : public ISystem {
 public:
     void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
@@ -109,12 +158,8 @@ public:
                     [conn](int id, ConnectionCode code) {
                         if (code == CONN_SUCCESS) {
                             Debug::Info("StartScreen") << "Client " << id << " activated!\n";
-                            // Use RequestDeactivateClient instead of DeactivateClient:
-                            // this callback runs on a background thread while client 0
-                            // may still be mid-tick on the main thread. The deferred
-                            // version is applied by the engine loop between ticks, which
-                            // is the only safe place to call CloseClient().
-                            NetTFG_Engine::Get().RequestDeactivateClient(0);
+                            // Deferred (not DeactivateClient) since client 0 may still be mid-tick on this background thread.
+                            NetTFG_Engine::Get().RequestDeactivateClient(MENU_SCENE_ID);
                         }
                         else {
                             Debug::Error("StartScreen") << "Client " << id << " failed: " << code << "\n";
@@ -140,34 +185,21 @@ public:
     }
 
     InputBlob GenerateLocalInput() override {
-        //uint8_t m = INPUT_NULL;
         InputBlob buf = MakeZeroInputBlob();
-
-        /*if (Input::IsInputBlockedForUI()) return buf;
-
-        if (Input::KeyPressed(Input::CharToKeycode(' '))) {
-            m |= INPUT_SPACE;
-        }
-
-
-        buf.data[0] = m;*/
         return buf;
     }
 
     void GameState_To_ECSWorld(const GameStateBlob& state) {
         StartScreenGameState s = *reinterpret_cast<const StartScreenGameState*>(state.data);
 
-        // Update any ECS components if needed
-        // In this simple case, we don't need to sync much
+        // Nothing to sync from state into ECS for this simple screen.
     }
 
     void ECSWorld_To_GameState(GameStateBlob& state) {
         StartScreenGameState& s = *reinterpret_cast<StartScreenGameState*>(state.data);
 
-        // Increment frame count
         s.frameCount++;
 
-        // Check if space was pressed
         auto query = world.GetEntityManager().CreateQuery<ConnectionData>();
         for (auto [entity, connData] : query) {
 
@@ -186,46 +218,38 @@ public:
     void InitECSLogic(GameStateBlob& state) override {
         StartScreenGameState* s = reinterpret_cast<StartScreenGameState*>(state.data);
 
-        // Initialize state
         s->spacePressed = false;
         s->frameCount = 0;
         state.len = sizeof(StartScreenGameState);
 
         world.GetEntityManager().RegisterComponentType<ConnectionData>();
 
-        // Create a player entity to receive input
         Entity player = world.GetEntityManager().CreateEntity();
         world.GetEntityManager().AddComponent<Playable>(player, Playable{ 0, MakeZeroInputBlob(), true });
         world.GetEntityManager().AddComponent<ConnectionData>(player, ConnectionData{ "", "", "" });
 
-        // Add input detection system
         world.AddSystem(std::make_unique<StartScreenInputSystem>());
 
         printf("[StartScreen] Game logic initialized!\n");
     }
 
     void HashState(const GameStateBlob& state, uint8_t(&outHash)[SHA256_DIGEST_LENGTH]) const override {
-        // Create context
         EVP_MD_CTX* ctx = EVP_MD_CTX_new();
         if (!ctx) throw std::runtime_error("Failed to create EVP_MD_CTX");
 
-        // Initialize SHA-256
         if (1 != EVP_DigestInit_ex(ctx, EVP_sha256(), nullptr)) {
             EVP_MD_CTX_free(ctx);
             throw std::runtime_error("EVP_DigestInit_ex failed");
         }
 
-        // No data to hash currently
-        // (would normally call EVP_DigestUpdate(ctx, data, size); here)
+        // No data to hash yet (would normally call EVP_DigestUpdate here).
 
-        // Finalize hash
         unsigned int len = 0;
         if (1 != EVP_DigestFinal_ex(ctx, outHash, &len)) {
             EVP_MD_CTX_free(ctx);
             throw std::runtime_error("EVP_DigestFinal_ex failed");
         }
 
-        // Cleanup
         EVP_MD_CTX_free(ctx);
     }
 
@@ -244,13 +268,6 @@ public:
     void GameState_To_ECSWorld(const GameStateBlob& state) {
         StartScreenGameState s = *reinterpret_cast<const StartScreenGameState*>(state.data);
 
-        // Update text if space was pressed
-        /*auto textQuery = world.GetEntityManager().CreateQuery<UIElement, UIText>();
-        for (auto [entity, element, text] : textQuery) {
-            if (s.spacePressed) {
-                text->text = "Starting...";
-            }
-        }*/
     }
 
 
@@ -259,108 +276,135 @@ public:
         StartScreenGameState s;
         std::memcpy(&s, state.data, sizeof(StartScreenGameState));
 
-        world.GetEntityManager().RegisterComponentType<TextAnimationData>();
+        EntityManager& em = world.GetEntityManager();
+
+        em.RegisterComponentType<TextAnimationData>();
         world.AddSystem(std::make_unique<TextAnimationSystem>());
 
-        // Create camera
-        Entity camera = world.GetEntityManager().CreateEntity();
-        Transform* camTrans = world.GetEntityManager().AddComponent<Transform>(camera, Transform{});
+        // Connect button state; must be registered before it's used below.
+        em.RegisterComponentType<ConnectButton>();
+
+        world.AddSystem(std::make_unique<ConnectButtonSystem>());
+
+        Entity camera = em.CreateEntity();
+        Transform* camTrans = em.AddComponent<Transform>(camera, Transform{});
         camTrans->setPosition(glm::vec3(0.0f, 0.0f, 2.0f));
-        Camera* camSettings = world.GetEntityManager().AddComponent<Camera>(camera, Camera{});
+        Camera* camSettings = em.AddComponent<Camera>(camera, Camera{});
         camSettings->setOrthographic(-100.0f, 100.0f, -100.0f, 100.0f, 0.1f, 100.0f);
         camSettings->setTarget(glm::vec3(0.0f, 0.0f, 0.0f));
         camSettings->setUp(glm::vec3(0.0f, 1.0f, 0.0f));
 
         // Create text field (LOWER layer = rendered first, behind other elements)
-        Entity ipField = world.GetEntityManager().CreateEntity();
-        UIElement* element = world.GetEntityManager().AddComponent<UIElement>(ipField);
+        Entity ipField = em.CreateEntity();
+        UIElement* element = em.AddComponent<UIElement>(ipField);
         element->anchor = UIAnchor::TOP_LEFT;
         element->position = glm::vec2(100.0f, 10.0f);
         element->size = glm::vec2(300.0f, 40.0f);
         element->isVisible = true;
-        element->layer = 1;  // Lower layer number
+        element->layer = 1;
 
-        UITextField* field = world.GetEntityManager().AddComponent<UITextField>(ipField);
-        field->id = "ip_input";
-        field->placeholderText = "Enter IP here...";
-        field->fontSize = 16.0f;
-        field->padding = 10.0f;
-        field->maxLength = 100;
+        UITextField* ipInput = em.AddComponent<UITextField>(ipField);
+        ipInput->id = "ip_input";
+        ipInput->placeholderText = "Enter IP here...";
+        ipInput->fontSize = 16.0f;
+        ipInput->padding = 10.0f;
+        ipInput->maxLength = 100;
+        ipInput->text = g_menuForm.ip;
 
-        Entity portField = world.GetEntityManager().CreateEntity();
-        element = world.GetEntityManager().AddComponent<UIElement>(portField);
+        Entity portField = em.CreateEntity();
+        element = em.AddComponent<UIElement>(portField);
         element->anchor = UIAnchor::TOP_LEFT;
         element->position = glm::vec2(100.0f, 55.0f);
         element->size = glm::vec2(300.0f, 40.0f);
         element->isVisible = true;
-        element->layer = 1;  // Lower layer number
+        element->layer = 1;
 
-        field = world.GetEntityManager().AddComponent<UITextField>(portField);
-        field->id = "port_input";
-        field->placeholderText = "Enter port here...";
-        field->fontSize = 16.0f;
-        field->padding = 10.0f;
-        field->maxLength = 100;
+        UITextField* portInput = em.AddComponent<UITextField>(portField);
+        portInput->id = "port_input";
+        portInput->placeholderText = "Enter port here...";
+        portInput->fontSize = 16.0f;
+        portInput->padding = 10.0f;
+        portInput->maxLength = 100;
+        portInput->text = g_menuForm.port;
 
-        Entity nameField = world.GetEntityManager().CreateEntity();
-        element = world.GetEntityManager().AddComponent<UIElement>(nameField);
+        Entity nameField = em.CreateEntity();
+        element = em.AddComponent<UIElement>(nameField);
         element->anchor = UIAnchor::TOP_LEFT;
         element->position = glm::vec2(100.0f, 100.0f);
         element->size = glm::vec2(300.0f, 40.0f);
         element->isVisible = true;
-        element->layer = 1;  // Lower layer number
+        element->layer = 1;
 
-        field = world.GetEntityManager().AddComponent<UITextField>(nameField);
-        field->id = "name_input";
-        field->placeholderText = "Enter name here...";
-        field->fontSize = 16.0f;
-        field->padding = 10.0f;
-        field->maxLength = 100;
+        UITextField* nameInput = em.AddComponent<UITextField>(nameField);
+        nameInput->id = "name_input";
+        nameInput->placeholderText = "Enter name here...";
+        nameInput->fontSize = 16.0f;
+        nameInput->padding = 10.0f;
+        nameInput->maxLength = 100;
+        nameInput->text = g_menuForm.clientName;
 
-        Entity buttonElement = world.GetEntityManager().CreateEntity();
-        element = world.GetEntityManager().AddComponent<UIElement>(buttonElement, UIElement{});
+        Entity buttonElement = em.CreateEntity();
+        element = em.AddComponent<UIElement>(buttonElement, UIElement{});
         element->anchor = UIAnchor::TOP_LEFT;
         element->position = glm::vec2(100.0f, 160.0f);
         element->size = glm::vec2(300.0f, 40.0f);
-        element->layer = 10;  // HIGHER layer number - renders on top!
+        element->layer = 10;  // higher layer number renders on top
 
-        UIButton* button = world.GetEntityManager().AddComponent<UIButton>(buttonElement);
+        UIButton* button = em.AddComponent<UIButton>(buttonElement);
         button->text = "Connect";
 
-        button->onClick = [this, button]() {
-            button->isInteractable = false; // Disable button after click
+        // onClick only records the press; ConnectButtonSystem disables the button once busy == true.
+        ConnectButton* connectBtn = em.AddComponent<ConnectButton>(buttonElement);
+        button->onClick = [connectBtn]() {
+            connectBtn->Press();
             };
 
-        // Create UI text entity (HIGHER layer = rendered last, on top of everything)
-        Entity startText = world.GetEntityManager().CreateEntity();
-        element = world.GetEntityManager().AddComponent<UIElement>(startText, UIElement{});
+        Entity startText = em.CreateEntity();
+        element = em.AddComponent<UIElement>(startText, UIElement{});
         element->anchor = UIAnchor::CENTER;
         element->position = glm::vec2(0.0f, 0.0f);
         element->size = glm::vec2(400.0f, 80.0f);
         element->pivot = glm::vec2(0.5f, 0.5f);
-        element->layer = 10;  // HIGHER layer number - renders on top!
+        element->layer = 10;
 
-        UIText* text = world.GetEntityManager().AddComponent<UIText>(startText, UIText{});
+        UIText* text = em.AddComponent<UIText>(startText, UIText{});
         text->text = "";
         text->fontSize = 18.0f;
-        text->SetColor(1.0f, 1.0f, 1.0f, 1.0f);  // White
+        text->SetColor(1.0f, 1.0f, 1.0f, 1.0f);
         text->SetFont("default");
 
-        Entity imageEntity = world.GetEntityManager().CreateEntity();
-        UIElement* imgElement = world.GetEntityManager().AddComponent<UIElement>(imageEntity, UIElement{});
+        Entity imageEntity = em.CreateEntity();
+        UIElement* imgElement = em.AddComponent<UIElement>(imageEntity, UIElement{});
         imgElement->anchor = UIAnchor::BOTTOM_RIGHT;
         imgElement->position = glm::vec2(-400.0f, -400.0f);
         imgElement->size = glm::vec2(400.0f, 400.0f);
         imgElement->layer = 5;
-        UIImage* imgComp = world.GetEntityManager().AddComponent<UIImage>(imageEntity, UIImage{});
+        UIImage* imgComp = em.AddComponent<UIImage>(imageEntity, UIImage{});
         imgComp->texturePath = "spaceboard.png";
 
 
-        world.GetEntityManager().AddComponent<TextAnimationData>(startText);
+        em.AddComponent<TextAnimationData>(startText);
 
-        // Create player entity for input
-        Entity player = world.GetEntityManager().CreateEntity();
-        world.GetEntityManager().AddComponent<Playable>(player, Playable{ 0, MakeZeroInputBlob(), true });
+        // Settings entry button; just requests the scene change.
+        Entity settingsButton = em.CreateEntity();
+        element = em.AddComponent<UIElement>(settingsButton, UIElement{});
+        element->anchor = UIAnchor::TOP_LEFT;
+        element->position = glm::vec2(100.0f, 210.0f);
+        element->size = glm::vec2(300.0f, 40.0f);
+        element->layer = 10;
+
+        UIButton* settingsBtn = em.AddComponent<UIButton>(settingsButton);
+        settingsBtn->text = "Ajustes";
+        settingsBtn->onClick = [ipInput, portInput, nameInput]() {
+            // Guarda el formulario antes de que este mundo se destruya.
+            g_menuForm.ip = ipInput->text;
+            g_menuForm.port = portInput->text;
+            g_menuForm.clientName = nameInput->text;
+            OpenSettingsFrom(MENU_SCENE_ID);
+            };
+
+        Entity player = em.CreateEntity();
+        em.AddComponent<Playable>(player, Playable{ 0, MakeZeroInputBlob(), true });
 
         renderDataTransferToLogicCallback = [](IECSGameLogic* logic, IECSGameRenderer* renderer) {
             if (!logic) {
@@ -374,11 +418,13 @@ public:
             }
 
             auto& em2 = gameLogic->world.GetEntityManager();
+            auto& em = gameRenderer->world.GetEntityManager();
+
+            // No longer need to check if the settings panel is open: this is the button's own data now.
             auto connQuery = em2.CreateQuery<ConnectionData>();
 
             for (auto [connEntity, connData] : connQuery) {
 
-                auto& em = gameRenderer->world.GetEntityManager();
                 auto query = em.CreateQuery<UIElement, UITextField>();
 
                 for (auto [entity, element, textField] : query) {
@@ -393,26 +439,21 @@ public:
                     }
                 }
 
-                auto buttonQuery = em.CreateQuery<UIButton>();
+                // Query keys off the button's state component, not just "any UIButton".
+                auto buttonQuery = em.CreateQuery<ConnectButton>();
 
-                for (auto [buttonEntity, button] : buttonQuery) {
+                for (auto [buttonEntity, connectBtn] : buttonQuery) {
 
                     if (connData->errorConnecting)
                     {
                         connData->errorConnecting = false;
-                        button->isInteractable = true;
-                        auto textAnimQuery = em.CreateQuery<UIElement, UIText, TextAnimationData>();
-                        for (auto [taEntity, taElement, taText, taData] : textAnimQuery) {
-                            taData->active = false;
-                            taData->errorMessage = "Error connecting to " + connData->ip + ":" + connData->port;
-                        }
+                        connectBtn->Reset();
+                        SetConnectStatus(em, false,
+                            "Error connecting to " + connData->ip + ":" + connData->port);
                     }
-                    else if (!button->isInteractable) {
+                    else if (connectBtn->ConsumePress()) {
                         connData->goingToConnect = true;
-                        auto textAnimQuery = em.CreateQuery<UIElement, UIText, TextAnimationData>();
-                        for (auto [taEntity, taElement, taText, taData] : textAnimQuery) {
-                            taData->active = true;
-                        }
+                        SetConnectStatus(em, true, "");
                     }
                 }
             }
@@ -424,7 +465,6 @@ public:
 
         AudioManager::SetMusicVolume(0.25f);
         AudioManager::PlayMusic("BandaSonora.wav", true);
-        //printf("[StartScreen] Renderer initialized!\n");
     }
 
     void Interpolate(const GameStateBlob& previousServerState,
@@ -443,7 +483,6 @@ public:
     }
 
     ~StartScreenGameRenderer() override {
-        // Cleanup if needed
     }
 
 private:

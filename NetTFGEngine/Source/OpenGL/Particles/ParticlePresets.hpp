@@ -148,22 +148,7 @@ namespace ParticlePresets
         return e;
     }
 
-    // -------------------------------------------------------
-    //  Realistic large explosion — four separate layers.
-    //
-    //  Spawn all four on the same world position.  Each is
-    //  one-shot (looping=false); poll all four emitter.done
-    //  flags before destroying the entities.
-    //
-    //  Recommended spawn order (all at t=0):
-    //      ExplosionFlash()    — instant white-orange core
-    //      ExplosionFireball() — rising billowing fireball
-    //      ExplosionDebris()   — heavy arcing chunks
-    //      ExplosionSmoke()    — long-lived dark smoke column
-    //
-    //  Or use the convenience wrapper:
-    //      auto layers = ParticlePresets::MakeExplosion();
-    // -------------------------------------------------------
+    // Realistic large explosion, four one-shot layers spawned together at the same position: Flash, Fireball, Debris, Smoke (or use MakeExplosion()); poll each emitter.done before destroying.
 
     // Layer 1 — blinding flash (~0.3 s)
     // Extremely bright, large particles that bloom and vanish.
@@ -200,10 +185,7 @@ namespace ParticlePresets
         return e;
     }
 
-    // Layer 2 — rising fireball (~2.5 s)
-    // Large slow particles that expand upward like a real fireball.
-    // Uses negative gravity so the hot gas rises naturally.
-    // Standard alpha blend so the billowing cloud occludes properly.
+    // Layer 2 — rising fireball (~2.5 s): large slow particles with negative gravity, standard alpha blend so the cloud occludes properly.
     inline ParticleEmitterComponent ExplosionFireball()
     {
         ParticleEmitterComponent e;
@@ -309,26 +291,7 @@ namespace ParticlePresets
         return e;
     }
 
-    // -------------------------------------------------------
-    //  MakeExplosion — convenience wrapper
-    //
-    //  Returns all four layers as a vector, ready to be
-    //  attached to entities at the same world position.
-    //
-    //  Example:
-    //      for (auto& preset : ParticlePresets::MakeExplosion())
-    //      {
-    //          auto entity = entityManager.CreateEntity();
-    //          entity.Add<Transform>(blastOrigin);
-    //          entity.Add<ParticleEmitterComponent>(preset);
-    //          m_explosionEntities.push_back(entity);
-    //      }
-    //      // later, clean up when all are done:
-    //      bool allDone = true;
-    //      for (auto& e : m_explosionEntities)
-    //          allDone &= e.Get<ParticleEmitterComponent>().done;
-    //      if (allDone) destroyAll(m_explosionEntities);
-    // -------------------------------------------------------
+    // Convenience wrapper: returns all four explosion layers as a vector, ready to attach to entities at the same world position.
     inline std::vector<ParticleEmitterComponent> MakeExplosion()
     {
         return {
@@ -339,24 +302,7 @@ namespace ParticlePresets
         };
     }
 
-    // -------------------------------------------------------
-    //  SingleSweep
-    //
-    //  A non-repeating emitter template: emits at a steady
-    //  rate for `duration` seconds, then stops forever.
-    //  All variance and turbulence fields are left at zero
-    //  so callers can layer their own values on top.
-    //
-    //  Poll emitter.done == true to know when the last
-    //  particle has died and the entity can be recycled.
-    //
-    //  Usage — configure after calling this:
-    //      auto e = ParticlePresets::SingleSweep();
-    //      e.duration      = 2.0f;
-    //      e.emissionRate  = 40.0f;
-    //      e.startColor    = glm::vec4(1, 0, 0, 1);
-    //      ...
-    // -------------------------------------------------------
+    // Non-repeating template: emits steadily for `duration` seconds then stops; variance/turbulence left at zero for callers to configure. Poll emitter.done to recycle.
     inline ParticleEmitterComponent SingleSweep()
     {
         ParticleEmitterComponent e;
@@ -379,25 +325,7 @@ namespace ParticlePresets
         return e;
     }
 
-    // -------------------------------------------------------
-    //  SciFiExplosion
-    //
-    //  Bright single-burst energy explosion — no fire.
-    //  Three logical layers baked into one emitter:
-    //    • Core flash  : very fast, large, opaque white-blue
-    //                    particles that fade almost instantly
-    //    • Energy ring : medium-speed outward burst, cyan→blue
-    //    • Afterglow   : slow drifting sparks, long lifetime
-    //
-    //  Because all three layers share one pool they are
-    //  approximated through variance ranges rather than
-    //  separate emitters.  For a higher-fidelity version,
-    //  spawn three SciFiExplosion emitters with different
-    //  speedScale values (0.2 / 1.0 / 2.5).
-    //
-    //  One-shot: looping=false, duration=0.07s (near-instant
-    //  burst).  Poll emitter.done to clean up the entity.
-    // -------------------------------------------------------
+    // Bright single-burst energy explosion (no fire): core flash, energy ring and afterglow approximated via variance ranges in one shared pool; one-shot, poll emitter.done to clean up.
     inline ParticleEmitterComponent SciFiExplosion()
     {
         ParticleEmitterComponent e;

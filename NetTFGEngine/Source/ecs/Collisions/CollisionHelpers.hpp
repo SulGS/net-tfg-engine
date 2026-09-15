@@ -7,7 +7,7 @@
 
 namespace CollisionHelpers {
 
-// ==================== Point Tests ====================
+// Point Tests
 
 inline bool PointInCircle(const glm::vec2& point, const glm::vec2& center, float radius) {
     glm::vec2 delta = point - center;
@@ -30,9 +30,8 @@ inline bool PointInAABB3D(const glm::vec3& point, const glm::vec3& min, const gl
            point.z >= min.z && point.z <= max.z;
 }
 
-// ==================== Line/Ray Tests ====================
+// Line/Ray Tests
 
-// Ray-Sphere intersection
 inline bool RaySphere(const glm::vec3& rayOrigin, const glm::vec3& rayDir,
                       const glm::vec3& sphereCenter, float radius,
                       float& t) {
@@ -50,7 +49,6 @@ inline bool RaySphere(const glm::vec3& rayOrigin, const glm::vec3& rayDir,
     return t >= 0.0f;
 }
 
-// Ray-AABB intersection (3D)
 inline bool RayAABB(const glm::vec3& rayOrigin, const glm::vec3& rayDir,
                     const glm::vec3& boxMin, const glm::vec3& boxMax,
                     float& tMin, float& tMax) {
@@ -80,7 +78,7 @@ inline bool RayAABB(const glm::vec3& rayOrigin, const glm::vec3& rayDir,
     return true;
 }
 
-// ==================== Closest Point Functions ====================
+// Closest Point Functions
 
 inline glm::vec2 ClosestPointOnLineSegment2D(const glm::vec2& point,
                                               const glm::vec2& lineStart,
@@ -110,9 +108,8 @@ inline glm::vec3 ClosestPointOnAABB(const glm::vec3& point,
     );
 }
 
-// ==================== SAT (Separating Axis Theorem) Helpers ====================
+// SAT (Separating Axis Theorem) Helpers
 
-// Project polygon onto axis
 inline void ProjectPolygon(const std::vector<glm::vec2>& vertices,
                           const glm::vec2& axis,
                           float& min, float& max) {
@@ -125,17 +122,15 @@ inline void ProjectPolygon(const std::vector<glm::vec2>& vertices,
     }
 }
 
-// Check if two ranges overlap
 inline bool RangesOverlap(float min1, float max1, float min2, float max2) {
     return !(max1 < min2 || max2 < min1);
 }
 
-// Get overlap amount
 inline float GetOverlap(float min1, float max1, float min2, float max2) {
     return std::min(max1, max2) - std::max(min1, min2);
 }
 
-// ==================== Distance Functions ====================
+// Distance Functions
 
 inline float DistanceSquared2D(const glm::vec2& a, const glm::vec2& b) {
     glm::vec2 delta = b - a;
@@ -155,7 +150,7 @@ inline float Distance3D(const glm::vec3& a, const glm::vec3& b) {
     return std::sqrt(DistanceSquared3D(a, b));
 }
 
-// ==================== AABB Overlap Tests ====================
+// AABB Overlap Tests
 
 inline bool AABBOverlap2D(const glm::vec2& min1, const glm::vec2& max1,
                           const glm::vec2& min2, const glm::vec2& max2) {
@@ -181,9 +176,9 @@ inline void ExpandAABB3D(glm::vec3& min, glm::vec3& max, float radius) {
     max += glm::vec3(radius);
 }
 
-// ==================== Utility Functions ====================
+// Utility Functions
 
-// Safe normalize (returns zero vector if input is too small)
+// Returns `fallback` instead of NaN when v is near-zero.
 inline glm::vec2 SafeNormalize2D(const glm::vec2& v, const glm::vec2& fallback = glm::vec2(1, 0)) {
     float lengthSq = glm::dot(v, v);
     if (lengthSq < 0.0001f) return fallback;
@@ -196,7 +191,6 @@ inline glm::vec3 SafeNormalize3D(const glm::vec3& v, const glm::vec3& fallback =
     return v / std::sqrt(lengthSq);
 }
 
-// Clamp value between min and max
 template<typename T>
 inline T Clamp(T value, T min, T max) {
     return std::max(min, std::min(value, max));

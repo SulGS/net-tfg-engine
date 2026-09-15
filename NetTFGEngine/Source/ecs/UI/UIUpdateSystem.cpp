@@ -1,6 +1,7 @@
 #include "UIUpdateSystem.hpp"
 #include "Utils/Input.hpp"
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 
 // Static pointer for callback access
@@ -18,6 +19,10 @@ UIUpdateSystem::UIUpdateSystem(int refWidth, int refHeight, GLFWwindow* win, Fon
     , cachedEntityManager(nullptr)
     , focusedTextField(0)
     , cursorBlinkInterval(0.53f)
+    , activeSlider(0)
+    , focusedSlider(0)
+    , openDropdown(0)
+    , prevMouseDown(false)
 {
     g_UIUpdateSystemInstance = this;
     SetupCallbacks();
@@ -123,8 +128,30 @@ void UIUpdateSystem::Update(EntityManager& entityManager, std::vector<EventEntry
     float refScaleY = (screenHeight > 0) ? (float)refHeight / (float)screenHeight : 1.0f;
     double refMouseX = mouseX * refScaleX;
     double refMouseY = mouseY * refScaleY;
+    glm::vec2 refMouse(static_cast<float>(refMouseX), static_cast<float>(refMouseY));
 
-    if (Input::MousePressed(GLFW_MOUSE_BUTTON_LEFT)) {
+    // Press edge. Input::MousePressed() stays true while the button is held
+    // (PRESSED || HELD), so using it directly would toggle a dropdown once
+    // per frame during a single click. Input's own one-frame edge would be
+    // MousePressed() && !MouseHeld(), but comparing against the previous
+    // state also holds up if Update() runs more than once per Input::Update().
+    bool mouseIsDown = IsMouseLeftDown();
+    bool mouseJustPressed = mouseIsDown && !prevMouseDown;
+
+    // Dropdowns and sliders get the click first: an open popup is drawn on top
+    // of the rest of the UI, so it must also be hit tested first.
+    bool clickConsumed = false;
+    if (mouseJustPressed) {
+        clickConsumed = HandleDropdownClick(entityManager, refMouse);
+        if (!clickConsumed) {
+            clickConsumed = HandleSliderClick(entityManager, refMouse);
+        }
+        if (clickConsumed && focusedTextField != 0) {
+            ClearFocus(entityManager);
+        }
+    }
+
+    if (mouseJustPressed && !clickConsumed) {
         bool clickedAnyField = false;
         Entity clickedField = 0;
         bool clickedButton = false;
@@ -188,7 +215,7 @@ void UIUpdateSystem::Update(EntityManager& entityManager, std::vector<EventEntry
         bool isInside = element->Contains({ refMouseX, refMouseY }, refWidth, refHeight);
         ButtonState previousState = button->state;
 
-        if (Input::KeyPressed(GLFW_MOUSE_BUTTON_LEFT) && isInside) {
+        if (mouseIsDown && isInside) {
             button->state = ButtonState::PRESSED;
         }
         else if (isInside) {
@@ -202,6 +229,32 @@ void UIUpdateSystem::Update(EntityManager& entityManager, std::vector<EventEntry
                 if (button->onHoverExit) button->onHoverExit();
             }
             button->state = ButtonState::NORMAL;
+        }
+    }
+
+    // Sliders: dragging + hover states
+    UpdateSliders(entityManager, refMouse, mouseIsDown, deltaTime);
+
+    // Dropdowns: header hover + highlighted row under the mouse
+    UpdateDropdowns(entityManager, refMouse);
+
+    // Mouse wheel scrolls the open list
+    if (openDropdown != 0) {
+        double scrollDeltaX = 0.0, scrollDeltaY = 0.0;
+        Input::GetScrollDelta(scrollDeltaX, scrollDeltaY);
+        if (scrollDeltaY != 0.0) {
+            OnScroll(static_cast<float>(scrollDeltaY));
+        }
+    }
+
+    // Keyboard: an open dropdown takes priority, then a focused slider.
+    // Both are skipped while a text field has focus so typing is never stolen.
+    if (focusedTextField == 0) {
+        if (openDropdown != 0) {
+            HandleDropdownKeyboard(entityManager);
+        }
+        else if (focusedSlider != 0) {
+            HandleSliderKeyboard(entityManager);
         }
     }
 
@@ -325,7 +378,15 @@ void UIUpdateSystem::Update(EntityManager& entityManager, std::vector<EventEntry
         UpdateTextField(entityManager, entity, element, textField, deltaTime);
     }
 
-    Input::BlockInputForUI(focusedTextField != 0);
+    if (focusedTextField != 0) {
+        focusedSlider = 0;
+    }
+
+    // Block gameplay input while the UI is being used
+    Input::BlockInputForUI(IsInteractingWithUI());
+
+    // Must be the last thing in Update(): everything above reads the edge
+    prevMouseDown = mouseIsDown;
 }
 
 void UIUpdateSystem::UpdateScreenSize(int width, int height) {
@@ -475,4 +536,265 @@ size_t UIUpdateSystem::GetCursorPositionFromMouse(const UITextField* textField,
     }
 
     return textField->text.length();
+}
+
+// ---------------------------------------------------------------------------
+// Mouse helpers
+// ---------------------------------------------------------------------------
+
+bool UIUpdateSystem::IsMouseLeftDown() const {
+    // Input::MousePressed is PRESSED || HELD, i.e. "the button is down",
+    // which is what dragging needs. The press edge is derived in Update().
+    return Input::MousePressed(GLFW_MOUSE_BUTTON_LEFT);
+}
+
+bool UIUpdateSystem::OnScroll(float yOffset) {
+    if (openDropdown == 0 || !cachedEntityManager) return false;
+
+    auto dropdown = cachedEntityManager->GetComponent<UIDropdown>(openDropdown);
+    if (!dropdown || !dropdown->isOpen) return false;
+
+    int rows = -static_cast<int>(std::round(yOffset));
+    if (rows == 0) rows = (yOffset > 0.0f) ? -1 : 1;
+
+    dropdown->Scroll(rows);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Dropdown input
+// ---------------------------------------------------------------------------
+
+void UIUpdateSystem::CloseAllDropdowns(EntityManager& entityManager) {
+    auto query = entityManager.CreateQuery<UIDropdown>();
+    for (auto [entity, dropdown] : query) {
+        dropdown->Close();
+    }
+    openDropdown = 0;
+}
+
+bool UIUpdateSystem::HandleDropdownClick(EntityManager& entityManager, const glm::vec2& refMouse) {
+    // An open popup behaves like a modal: it is hit tested before anything
+    // else, and any click outside of it just dismisses it.
+    if (openDropdown != 0) {
+        auto element = entityManager.GetComponent<UIElement>(openDropdown);
+        auto dropdown = entityManager.GetComponent<UIDropdown>(openDropdown);
+
+        if (!element || !dropdown || !dropdown->isOpen) {
+            openDropdown = 0;
+        }
+        else {
+            glm::vec2 pos = element->GetScreenPosition(refWidth, refHeight);
+
+            int index = dropdown->GetItemIndexAtPoint(refMouse, pos, element->size, refHeight);
+            if (index >= 0) {
+                dropdown->SelectIndex(index);
+                dropdown->Close();
+                openDropdown = 0;
+                return true;
+            }
+
+            // Border or scrollbar: swallow the click, keep the list open
+            if (dropdown->ContainsList(refMouse, pos, element->size, refHeight)) {
+                return true;
+            }
+
+            // Anywhere else (including the header): dismiss
+            dropdown->Close();
+            openDropdown = 0;
+            return true;
+        }
+    }
+
+    // No popup open: check the headers
+    auto query = entityManager.CreateQuery<UIElement, UIDropdown>();
+    for (auto [entity, element, dropdown] : query) {
+        if (!element->isVisible || !dropdown->isInteractable) continue;
+        if (!element->Contains(refMouse, refWidth, refHeight)) continue;
+
+        dropdown->Open();
+        if (dropdown->isOpen) {
+            openDropdown = entity;
+        }
+        return true;
+    }
+
+    return false;
+}
+
+void UIUpdateSystem::UpdateDropdowns(EntityManager& entityManager, const glm::vec2& refMouse) {
+    auto query = entityManager.CreateQuery<UIElement, UIDropdown>();
+    for (auto [entity, element, dropdown] : query) {
+        if (!element->isVisible || !dropdown->isInteractable) {
+            if (dropdown->isOpen) {
+                dropdown->Close();
+                if (openDropdown == entity) openDropdown = 0;
+            }
+            if (!dropdown->isInteractable) dropdown->state = DropdownState::DISABLED;
+            continue;
+        }
+
+        glm::vec2 pos = element->GetScreenPosition(refWidth, refHeight);
+
+        if (dropdown->isOpen) {
+            // Opened from code (dropdown->Open()): adopt it and close the old one
+            if (openDropdown != entity) {
+                if (openDropdown != 0) {
+                    auto other = entityManager.GetComponent<UIDropdown>(openDropdown);
+                    if (other) other->Close();
+                }
+                openDropdown = entity;
+            }
+
+            dropdown->state = DropdownState::OPEN;
+            dropdown->ClampScroll();
+
+            int index = dropdown->GetItemIndexAtPoint(refMouse, pos, element->size, refHeight);
+            if (index >= 0) {
+                dropdown->hoveredIndex = index;
+            }
+            continue;
+        }
+
+        if (openDropdown == entity) openDropdown = 0;
+
+        bool isInside = (openDropdown == 0) && element->Contains(refMouse, refWidth, refHeight);
+        dropdown->state = isInside ? DropdownState::HOVERED : DropdownState::NORMAL;
+    }
+}
+
+void UIUpdateSystem::HandleDropdownKeyboard(EntityManager& entityManager) {
+    if (openDropdown == 0) return;
+
+    auto dropdown = entityManager.GetComponent<UIDropdown>(openDropdown);
+    if (!dropdown || !dropdown->isOpen) {
+        openDropdown = 0;
+        return;
+    }
+
+    if (Input::KeyTapped(GLFW_KEY_DOWN))  dropdown->MoveHighlight(1);
+    if (Input::KeyTapped(GLFW_KEY_UP))    dropdown->MoveHighlight(-1);
+    if (Input::KeyTapped(GLFW_KEY_PAGE_DOWN)) dropdown->MoveHighlight(dropdown->GetVisibleItemCount());
+    if (Input::KeyTapped(GLFW_KEY_PAGE_UP))   dropdown->MoveHighlight(-dropdown->GetVisibleItemCount());
+
+    if (Input::KeyTapped(GLFW_KEY_HOME)) {
+        dropdown->hoveredIndex = 0;
+        dropdown->EnsureVisible(0);
+    }
+    if (Input::KeyTapped(GLFW_KEY_END)) {
+        int last = dropdown->GetOptionCount() - 1;
+        dropdown->hoveredIndex = last;
+        dropdown->EnsureVisible(last);
+    }
+
+    if (Input::KeyTapped(GLFW_KEY_ENTER) || Input::KeyTapped(GLFW_KEY_KP_ENTER)) {
+        if (dropdown->hoveredIndex >= 0) {
+            dropdown->SelectIndex(dropdown->hoveredIndex);
+        }
+        dropdown->Close();
+        openDropdown = 0;
+        return;
+    }
+
+    if (Input::KeyTapped(GLFW_KEY_ESCAPE)) {
+        dropdown->Close();
+        openDropdown = 0;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Slider input
+// ---------------------------------------------------------------------------
+
+bool UIUpdateSystem::HandleSliderClick(EntityManager& entityManager, const glm::vec2& refMouse) {
+    auto query = entityManager.CreateQuery<UIElement, UISlider>();
+    for (auto [entity, element, slider] : query) {
+        if (!element->isVisible || !slider->isInteractable) continue;
+
+        glm::vec2 pos = element->GetScreenPosition(refWidth, refHeight);
+        if (!slider->ContainsPoint(refMouse, pos, element->size)) continue;
+
+        activeSlider = entity;
+        focusedSlider = entity;
+        slider->state = SliderState::DRAGGING;
+        if (slider->onDragStart) slider->onDragStart();
+
+        // Clicking the track jumps to that value; grabbing the handle does not
+        if (!slider->ContainsHandle(refMouse, pos, element->size)) {
+            slider->SetValue(slider->GetValueFromPoint(refMouse, pos, element->size));
+        }
+        return true;
+    }
+    return false;
+}
+
+void UIUpdateSystem::UpdateSliders(EntityManager& entityManager, const glm::vec2& refMouse,
+    bool mouseIsDown, float deltaTime) {
+    (void)deltaTime;
+
+    // Active drag: keep following the mouse even outside the element bounds
+    if (activeSlider != 0) {
+        auto element = entityManager.GetComponent<UIElement>(activeSlider);
+        auto slider = entityManager.GetComponent<UISlider>(activeSlider);
+
+        if (!element || !slider || !slider->isInteractable || !element->isVisible) {
+            activeSlider = 0;
+        }
+        else if (mouseIsDown) {
+            glm::vec2 pos = element->GetScreenPosition(refWidth, refHeight);
+            slider->SetValue(slider->GetValueFromPoint(refMouse, pos, element->size));
+            slider->state = SliderState::DRAGGING;
+        }
+        else {
+            EndSliderDrag(entityManager);
+        }
+    }
+
+    // Hover states
+    auto query = entityManager.CreateQuery<UIElement, UISlider>();
+    for (auto [entity, element, slider] : query) {
+        if (!slider->isInteractable) {
+            slider->state = SliderState::DISABLED;
+            continue;
+        }
+        if (!element->isVisible || entity == activeSlider) continue;
+
+        glm::vec2 pos = element->GetScreenPosition(refWidth, refHeight);
+        bool isInside = (openDropdown == 0) &&
+            slider->ContainsPoint(refMouse, pos, element->size);
+
+        slider->state = isInside ? SliderState::HOVERED : SliderState::NORMAL;
+    }
+}
+
+void UIUpdateSystem::EndSliderDrag(EntityManager& entityManager) {
+    if (activeSlider == 0) return;
+
+    auto slider = entityManager.GetComponent<UISlider>(activeSlider);
+    if (slider) {
+        slider->state = SliderState::NORMAL;
+        if (slider->onDragEnd) slider->onDragEnd(slider->value);
+    }
+    activeSlider = 0;
+}
+
+void UIUpdateSystem::HandleSliderKeyboard(EntityManager& entityManager) {
+    if (focusedSlider == 0) return;
+
+    auto element = entityManager.GetComponent<UIElement>(focusedSlider);
+    auto slider = entityManager.GetComponent<UISlider>(focusedSlider);
+    if (!element || !slider || !element->isVisible || !slider->isInteractable) {
+        focusedSlider = 0;
+        return;
+    }
+
+    bool horizontal = (slider->orientation == SliderOrientation::HORIZONTAL);
+    int decreaseKey = horizontal ? GLFW_KEY_LEFT : GLFW_KEY_DOWN;
+    int increaseKey = horizontal ? GLFW_KEY_RIGHT : GLFW_KEY_UP;
+
+    if (Input::KeyTapped(decreaseKey)) slider->StepValue(-1);
+    if (Input::KeyTapped(increaseKey)) slider->StepValue(1);
+    if (Input::KeyTapped(GLFW_KEY_HOME)) slider->SetValue(slider->minValue);
+    if (Input::KeyTapped(GLFW_KEY_END))  slider->SetValue(slider->maxValue);
+    if (Input::KeyTapped(GLFW_KEY_ESCAPE)) focusedSlider = 0;
 }

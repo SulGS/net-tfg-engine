@@ -9,7 +9,7 @@ VERSION = 1
 import hashlib
 
 def hash_asset(path: str) -> int:
-    path = path.replace("\\", "/")  # normalize
+    path = path.replace("\\", "/")
     digest = hashlib.md5(path.encode("utf-8")).digest()
     return int.from_bytes(digest[:8], byteorder="little", signed=False)
 
@@ -29,7 +29,6 @@ def read_scene_assets(ntfg_path):
         for line in f:
             line = line.strip()
             if line and not line.startswith("#"):
-                # normalize Windows backslashes
                 assets.append(line.replace("\\", "/"))
     return assets
 
@@ -97,7 +96,6 @@ def main(asset_root, output_dir):
     bin_ids = {}
     next_bin_id = 0
 
-    # Shared bin
     if shared_assets:
         bin_name = "shared.bin"
         bin_ids[bin_name] = next_bin_id
@@ -112,7 +110,6 @@ def main(asset_root, output_dir):
                 e["size"]
             ))
 
-    # Scene bins
     for scene, assets in scene_only.items():
         bin_name = f"{scene}.bin"
         bin_ids[bin_name] = next_bin_id
@@ -128,7 +125,6 @@ def main(asset_root, output_dir):
             ))
 
 
-    # Write index
     # Write index (C++ compatible)
     idx_path = os.path.join(output_dir, "assets.idx")
     with open(idx_path, "wb") as out:

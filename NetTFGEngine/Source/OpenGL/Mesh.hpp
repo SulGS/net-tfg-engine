@@ -11,7 +11,8 @@ public:
     Mesh(const std::string& meshName,
         std::shared_ptr<Material> material);
 
-    // Mesh.hpp
+    ~Mesh();
+
     void bindMaterial(const glm::mat4& model,
         const glm::mat4& view,
         const glm::mat4& projection) const;
@@ -35,6 +36,9 @@ public:
     Material* getMaterial() const { return material.get(); }
 
 private:
+
+	std::string meshName;
+
     std::optional<MeshBuffer> buffer;
     std::shared_ptr<Material> material;
 

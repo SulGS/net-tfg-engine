@@ -16,8 +16,8 @@
 
 class IECSGameLogic : public IGameLogic {
 protected:
-	EventProcessor* eventProcessor;
-	DeltaProcessor* deltaProcessor;
+	EventProcessor* eventProcessor = nullptr;
+	DeltaProcessor* deltaProcessor = nullptr;
 
 public:
     ECSWorld world;
@@ -25,6 +25,7 @@ public:
     virtual ~IECSGameLogic() 
 	{
 		delete eventProcessor;
+		delete deltaProcessor;
 	}
 
     virtual void ECSWorld_To_GameState(GameStateBlob& state) = 0;
@@ -68,6 +69,9 @@ public:
     void Init(GameStateBlob& state) override {
         world.Reset();
 
+        delete eventProcessor;
+		delete deltaProcessor;
+
 		eventProcessor = new EventProcessor(world, isServer);
 		deltaProcessor = new DeltaProcessor(isServer);
 
@@ -87,6 +91,13 @@ public:
         InitECSLogic(state);
     }
 
+    // Destroys every component in this world, which drops any AssetManager
+    // ref-counts they hold (see ecs.hpp EntityManager::Reset). Safe to call
+    // again from the next Init(), which resets the world unconditionally.
+    void ReleaseECSAssets() override {
+        world.Reset();
+    }
+
 	void Synchronize(GameStateBlob& state) override {
 		GameState_To_ECSWorld(state);
 	}
@@ -94,7 +105,6 @@ public:
     void SimulateFrame(GameStateBlob& state, std::vector<EventEntry> events, std::map<int, InputEntry> inputs) override {
         GameStateBlob prevState;
         ECSWorld_To_GameState(prevState);
-		//GameState_To_ECSWorld(state);
         this->generatedEvents.clear();
 		this->generatedDeltas.clear();
 

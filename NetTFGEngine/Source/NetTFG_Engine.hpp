@@ -9,6 +9,7 @@
 #include <functional>
 #include "OpenAL/AudioManager.hpp"
 #include "Client-Server/ClientManager.hpp"
+#include "netcode/client_window.hpp"
 #include "Utils/Debug/Debug.hpp"
 
 #include "Utils/AssetManager.hpp"
@@ -25,19 +26,16 @@
 
 class NetTFG_Engine {
 public:
-    // ---- Singleton ----
     static NetTFG_Engine& Get() {
         static NetTFG_Engine instance;
         return instance;
     }
 
-    // Prevent copy/move
     NetTFG_Engine(const NetTFG_Engine&) = delete;
     NetTFG_Engine& operator=(const NetTFG_Engine&) = delete;
     NetTFG_Engine(NetTFG_Engine&&) = delete;
     NetTFG_Engine& operator=(NetTFG_Engine&&) = delete;
 
-    // ---- Register client using pointer ----
     void RegisterClient(int id, Client* client) {
         auto& mgr = ClientManager::Get();
         size_t index = mgr.AddClient(std::unique_ptr<Client>(client));
@@ -45,9 +43,6 @@ public:
         Debug::Info("NetTFG_Engine") << "Registered client " << id << " at index " << index << "\n";
     }
 
-    // ---- Activate/Deactivate Clients ----
-
-    // Async activation with callback
     template<typename Callback>
     void ActivateClientAsync(int id, Callback&& callback,
         const std::string& host = "0.0.0.0",
@@ -56,7 +51,6 @@ public:
         std::thread([this, id, host, port, customClientId, cb = std::forward<Callback>(callback)]() mutable {
             ActivateClientInternal(id, host, port, customClientId);
 
-            // Retrieve the connection code
             ConnectionCode code = CONN_TIMEOUT;
             auto it = clientIndexMap.find(id);
             if (it != clientIndexMap.end()) {
@@ -67,7 +61,6 @@ public:
                 }
             }
 
-            // Invoke callback with result
             cb(id, code);
             }).detach();
     }
@@ -89,30 +82,19 @@ public:
         Client* client = ClientManager::Get().GetClient(index);
 
         if (client) {
-            // ---------------------------------------------------------------
-            // AUDIO CLEANUP — must happen before CloseClient() / unloadBin().
-            //
-            // StopAllSources is the guaranteed path: it bypasses the ECS and
-            // operates directly on the AL source pool, stopping every in-use
-            // or playing source, detaching its buffer, freeing the slot, and
-            // clearing the activeAudioEntities tracking set.  This works even
-            // when GetEntityManager() returns nullptr (e.g. OnlineClient after
-            // SetupClient moves gameLogic_ into ClientPredictionNetcode).
-            //
-            // FlushEntities is called first as a best-effort ECS-level pass:
-            // if the EntityManager IS reachable it properly decrements the
-            // per-buffer AssetManager ref-counts and resets component fields.
-            // If it returns early (nullptr EM), StopAllSources still silences
-            // everything at the AL driver level.
-            // ---------------------------------------------------------------
-            AudioManager::FlushEntities(client->GetEntityManager());
+            // AUDIO CLEANUP must happen before CloseClient()/unloadBin(): FlushEntities needs the RENDERER's EntityManager (where AudioSourceComponent/AudioListenerComponent live), not the logic one, so the audio thread detaches from this world before it's torn down.
+            AudioManager::FlushEntities(client->GetRendererEntityManager());
             AudioManager::StopAllSources();
 
-            AssetManager::instance().unloadBin(client->binName);
+            // CloseClient() releases every mesh/texture/shader the client's ECS holds (on the render thread), dropping AssetManager ref-counts to 0; must run before unloadBin() or it sees refCount > 0 and leaks the bin.
             client->CloseClient();
+
+            // unloadBin() runs each freed asset's GL destroyer inline, so it must happen on the render thread, same as CloseClient()'s ReleaseECSAssets().
+            ClientWindow::RunOnRenderThread([client]() {
+                AssetManager::instance().unloadBin(client->binName);
+                });
         }
 
-        // Remove from active clients
         ClientManager::Get().DeactivateClient(index);
 
         {
@@ -124,23 +106,28 @@ public:
         return true;
     }
 
-    // ---- Deferred deactivation (safe to call from inside a TickClient) ----
-    // Queues a deactivation that will be applied by the main loop between ticks,
-    // never while any client's TickClient() is still on the call stack.
+    // Deferred deactivation: queued and applied by the main loop between ticks, safe to call from inside a TickClient.
     void RequestDeactivateClient(int id) {
         std::lock_guard<std::mutex> lock(pendingDeactivationsMutex_);
         pendingDeactivations_.push_back(id);
+    }
+
+    // Deferred activation, queued like RequestDeactivateClient: use instead of synchronous ActivateClient() when called from the render thread (e.g. a UIButton::onClick), so SetupClient()'s stale-ClientWindow delete only ever runs during the render thread's own task-drain, never reentrantly (past cause of a menu->settings->menu use-after-free).
+    void RequestActivateClient(int id, const std::string& host = "0.0.0.0",
+        uint16_t port = 0, const std::string& customClientId = "") {
+        std::lock_guard<std::mutex> lock(pendingActivationsMutex_);
+        pendingActivations_.push_back({ id, host, port, customClientId });
     }
 
     void DeactivateAllClients() {
         auto& mgr = ClientManager::Get();
         auto activeIndices = mgr.GetActiveIndices();
 
-        // Flush audio and close all active clients
         for (size_t index : activeIndices) {
             Client* client = mgr.GetClient(index);
             if (client) {
-                AudioManager::FlushEntities(client->GetEntityManager());
+                // See DeactivateClient() above: must be the renderer's EM.
+                AudioManager::FlushEntities(client->GetRendererEntityManager());
                 AudioManager::StopAllSources();
                 client->CloseClient();
             }
@@ -151,7 +138,6 @@ public:
         Debug::Info("NetTFG_Engine") << "Deactivated all clients\n";
     }
 
-    // ---- Main Engine Loop ----
     void Start(int width, int height, std::string windowName) {
         running_.store(true);
         ClientStartup(width, height, windowName);
@@ -161,7 +147,8 @@ public:
         const auto TICK_DURATION = std::chrono::microseconds(1000000 / TICKS_PER_SECOND);
         auto nextTick = std::chrono::steady_clock::now();
 
-        while (running_.load() && ClientWindow::isWindowThreadRunning()) {
+        // IsCloseRequested() is deliberately distinct from isWindowThreadRunning(): the render thread stays alive until ClientCleanup() below has released every client's GL resources and calls stopRenderThread() itself.
+        while (running_.load() && ClientWindow::isWindowThreadRunning() && !ClientWindow::IsCloseRequested()) {
             auto& mgr = ClientManager::Get();
             auto activeIndices = mgr.GetActiveIndices();
 
@@ -171,7 +158,6 @@ public:
                 break;
             }
 
-            // Tick all active clients
             for (size_t index : activeIndices) {
                 Client* client = mgr.GetClient(index);
                 if (client) {
@@ -185,11 +171,17 @@ public:
                 }
             }
 
-            // ---- Flush deferred deactivations ----
-            // Applied here, after all ticks have returned, so no client is
-            // mid-tick when CloseClient() runs. This is the only safe place
-            // to call DeactivateClient when the request comes from inside a
-            // TickClient (e.g. ExitCheckerSystem, StartScreenInputSystem).
+            // Flush deferred activations, then deactivations, after all ticks return (no client is mid-tick); activations first so a scene transition never has zero clients active.
+            {
+                std::vector<PendingActivation> toActivate;
+                {
+                    std::lock_guard<std::mutex> lock(pendingActivationsMutex_);
+                    toActivate.swap(pendingActivations_);
+                }
+                for (auto& pa : toActivate) {
+                    ActivateClient(pa.id, pa.host, pa.port, pa.customClientId);
+                }
+            }
             {
                 std::vector<int> toDeactivate;
                 {
@@ -210,7 +202,6 @@ public:
         Debug::Info("NetTFG_Engine") << "Engine ended\n";
     }
 
-    // ---- Control ----
     void Stop() {
         if (running_.load()) {
             running_.store(false);
@@ -220,7 +211,6 @@ public:
 
     bool IsRunning() const { return running_.load(); }
 
-    // ---- Query Active Clients ----
     size_t GetActiveClientCount() const {
         return ClientManager::Get().ActiveClientCount();
     }
@@ -240,7 +230,6 @@ public:
         return std::find(activeClients.begin(), activeClients.end(), client) != activeClients.end();
     }
 
-    // ---- Get Client Instances ----
     Client* GetClient(int id) {
         auto it = clientIndexMap.find(id);
         if (it == clientIndexMap.end()) return nullptr;
@@ -253,7 +242,6 @@ public:
         return ClientManager::Get().GetClient(it->second);
     }
 
-    // ---- Get Client Connection Info ----
     bool GetClientConnection(int id, std::string& host, uint16_t& port, std::string& name) const {
         auto it = clientIndexMap.find(id);
         if (it == clientIndexMap.end()) return false;
@@ -268,13 +256,11 @@ public:
         return true;
     }
 
-    // ---- Reconnect Client ----
     template<typename Callback>
     void ReconnectClientAsync(int id, Callback&& callback) {
         std::thread([this, id, cb = std::forward<Callback>(callback)]() mutable {
             ReconnectClientInternal(id);
 
-            // Retrieve the connection code
             ConnectionCode code = CONN_TIMEOUT;
             auto it = clientIndexMap.find(id);
             if (it != clientIndexMap.end()) {
@@ -319,25 +305,15 @@ private:
                 std::vector<Vertex>   vertices;
                 std::vector<uint32_t> indices;
 
-                // -------------------------------------------------------
                 // Read quality settings once for the whole load
-                // -------------------------------------------------------
                 const auto& rs = RenderSettings::instance();
                 const int    baseMip = rs.texBaseMip();
                 const bool   useCompression = rs.texCompression();
 
-                // -------------------------------------------------------
-                // Texture cache — key = (imageSource << 1 | sRGB)
-                // Ensures the same image uploaded as sRGB and linear are
-                // stored as two separate GL textures (different internal fmt).
-                // -------------------------------------------------------
+                // Texture cache keyed by (imageSource << 1 | sRGB) so the same image uploaded sRGB vs linear gets two separate GL textures.
                 std::unordered_map<uint64_t, GLuint> texCache;
 
-                // isNormalMap: applies GL_TEXTURE_LOD_BIAS = 2.0 to push sampling
-                // toward blurrier mips. At large world scale (e.g. 200) the GPU picks
-                // mip 0 because screen-space UV derivatives are tiny — every normal
-                // map texel covers a large screen area and produces a distinct specular
-                // dot. The LOD bias fixes this at all resolutions without shader changes.
+                // isNormalMap applies GL_TEXTURE_LOD_BIAS=2.0: at large world scale the GPU otherwise always picks mip 0, producing a distinct specular dot on normal maps.
                 auto loadTex = [&](int texIndex, bool sRGB, bool isNormalMap = false) -> GLuint
                     {
                         if (texIndex < 0 || texIndex >= (int)model.textures.size())
@@ -354,9 +330,6 @@ private:
 
                         const auto& img = model.images[tex.source];
 
-                        // -------------------------------------------------------
-                        // Select internal format based on compression + sRGB flags
-                        // -------------------------------------------------------
                         GLint internalFmt, uploadFmt;
                         if (useCompression) {
                             // BC7/BPTC — driver compresses at upload time
@@ -375,10 +348,7 @@ private:
                             }
                         }
 
-                        // -------------------------------------------------------
-                        // If compression is on or the source is RGB, pad to RGBA.
-                        // BC7 always needs 4 channels.
-                        // -------------------------------------------------------
+                        // If compression is on or the source is RGB, pad to RGBA (BC7 always needs 4 channels).
                         std::vector<uint8_t> paddedRGBA;
                         const uint8_t* uploadData = img.image.data();
 
@@ -395,10 +365,7 @@ private:
                             uploadData = paddedRGBA.data();
                         }
 
-                        // -------------------------------------------------------
-                        // Resolution reduction — box-filter downsample on CPU by
-                        // skipping `baseMip` mip levels.
-                        // -------------------------------------------------------
+                        // Resolution reduction: box-filter downsample on CPU by skipping `baseMip` mip levels.
                         std::vector<uint8_t> downsampled;
                         int uploadW = img.width;
                         int uploadH = img.height;
@@ -464,9 +431,7 @@ private:
                             uploadData = downsampled.data();
                         }
 
-                        // -------------------------------------------------------
                         // Upload to GPU
-                        // -------------------------------------------------------
                         GLuint id = 0;
                         glGenTextures(1, &id);
                         glBindTexture(GL_TEXTURE_2D, id);
@@ -481,9 +446,6 @@ private:
                         glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY,
                             RenderSettings::instance().getAnisotropy());
 
-                        // Normal maps: bias toward blurrier mips to prevent per-texel
-                        // specular dots at large world scale. Tune 2.0f if needed:
-                        // raise if dots persist, lower if normals look too flat.
                         if (isNormalMap)
                             glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS, 0.0f);
 
@@ -493,9 +455,7 @@ private:
                         return id;
                     };
 
-                // -------------------------------------------------------
                 // Stride-aware accessor helper.
-                // -------------------------------------------------------
                 auto getAccessor = [&](const tinygltf::Primitive& prim,
                     const std::string& name)
                     -> std::function<const float* (size_t)>
@@ -522,7 +482,7 @@ private:
                             };
                     };
 
-                // ---- Pack all primitives into a single VBO/EBO ----
+                // Pack all primitives into a single VBO/EBO
                 for (const auto& mesh : model.meshes) {
                     for (const auto& prim : mesh.primitives) {
 
@@ -565,7 +525,7 @@ private:
                             }
                         }
 
-                        // ---- Generate tangents if mesh didn't provide them ----
+                        // Generate tangents if the mesh didn't provide them
                         if (!getTan) {
                             std::vector<glm::vec3> tangentAccum(posAcc.count, glm::vec3(0.0f));
 
@@ -627,9 +587,6 @@ private:
                             }
                         }
 
-                        // -------------------------------------------------------
-                        // Index extraction
-                        // -------------------------------------------------------
                         std::vector<uint32_t> primIndices;
                         if (prim.indices >= 0) {
                             const auto& idxAcc = model.accessors[prim.indices];
@@ -656,10 +613,7 @@ private:
                             indices.insert(indices.end(), primIndices.begin(), primIndices.end());
                         }
 
-                        // -------------------------------------------------------
-                        // Load PBR textures
-                        // normalTex passes isNormalMap=true to apply LOD bias.
-                        // -------------------------------------------------------
+                        // Load PBR textures; normalTex passes isNormalMap=true to apply LOD bias.
                         SubMeshRange smr{};
                         smr.indexOffset = static_cast<uint32_t>(indices.size() - primIndices.size());
                         smr.indexCount = static_cast<uint32_t>(primIndices.size());
@@ -679,9 +633,6 @@ private:
                     }
                 }
 
-                // -------------------------------------------------------
-                // Upload geometry to GPU
-                // -------------------------------------------------------
                 glGenVertexArrays(1, &buffer.VAO);
                 glGenBuffers(1, &buffer.VBO);
                 glGenBuffers(1, &buffer.EBO);
@@ -787,7 +738,6 @@ private:
                     return texture;
                 }
 
-                // Set texture parameters
                 glBindTexture(GL_TEXTURE_2D, textureID);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
@@ -831,12 +781,10 @@ private:
             connInfo = connIt->second;
         }
 
-        // Deactivate first
         if (IsClientActive(id)) {
             DeactivateClient(id);
         }
 
-        // Reactivate with stored connection info
         return ActivateClientInternal(id, connInfo.host, connInfo.port, connInfo.name);
     }
 
@@ -867,7 +815,6 @@ private:
             Debug::Error("NetTFG_Engine") << "Failed to setup client " << id
                 << " with error code: " << result << "\n";
 
-            // Store the error code for callback access
             {
                 std::lock_guard<std::mutex> lock(connectionsMutex_);
                 clientErrorCodes_[index] = result;
@@ -875,10 +822,8 @@ private:
             return false;
         }
 
-        // Add to active clients in ClientManager
         ClientManager::Get().ActivateClient(index);
 
-        // Store connection info for this client (thread-safe with mutex)
         {
             std::lock_guard<std::mutex> lock(connectionsMutex_);
             clientConnections[index] = { host, port, customClientId };
@@ -896,7 +841,6 @@ private:
     }
 
     void ClientCleanup() {
-        // Properly close all clients before shutting down
         DeactivateAllClients();
 
         AudioManager::Stop();
@@ -911,17 +855,24 @@ private:
         std::string name;
     };
 
+    struct PendingActivation {
+        int id;
+        std::string host;
+        uint16_t port;
+        std::string customClientId;
+    };
+
     std::atomic<bool> running_{ false };
     std::unordered_map<int, size_t> clientIndexMap;  // Maps user-friendly ID to ClientManager index
     std::unordered_map<size_t, ConnectionInfo> clientConnections;  // Connection info per client index
     std::unordered_map<size_t, ConnectionCode> clientErrorCodes_;  // Last error code per client index
     mutable std::mutex connectionsMutex_;  // Protect clientConnections and clientErrorCodes_ for async access
 
-    // ---- Deferred deactivation queue ----
-    // Callbacks from ActivateClientAsync fire on a background thread and must
-    // not call DeactivateClient directly (the target client may be mid-tick).
-    // Instead they call RequestDeactivateClient, which pushes here, and the
-    // main loop in Start() drains this vector after every round of ticks.
+    // Deferred deactivation queue: ActivateClientAsync callbacks fire on a background thread and can't call DeactivateClient directly (target may be mid-tick), so they queue here for Start() to drain post-tick.
     std::vector<int> pendingDeactivations_;
     std::mutex pendingDeactivationsMutex_;
+
+    // Deferred activation queue; see RequestActivateClient(). Drained before pendingDeactivations_ by the same post-tick block in Start().
+    std::vector<PendingActivation> pendingActivations_;
+    std::mutex pendingActivationsMutex_;
 };

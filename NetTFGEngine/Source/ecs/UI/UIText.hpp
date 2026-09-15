@@ -17,7 +17,7 @@ public:
     std::string text;
     float fontSize;
     glm::vec4 color;  // RGBA
-    std::string fontName;  // Font to use
+    std::string fontName;
     
     void SetColor(float r, float g, float b, float a = 1.0f) {
         color = glm::vec4(r, g, b, a);

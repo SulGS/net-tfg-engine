@@ -26,10 +26,9 @@ private:
     static std::thread           audioThread;
     static std::atomic<bool>     threadRunning;
 
-    // Set to true by FlushEntities while a client is being torn down.
-    // Prevents Update() from re-initializing sources whose components were
-    // just reset to initialized=false as part of the cleanup, which would
-    // cause ghostly audio from the dying client on the very next tick.
+	static std::string currentMusicFile;
+
+    // Set by FlushEntities during client teardown so Update() doesn't re-init sources mid-cleanup (avoids ghost audio).
     static std::atomic<bool>     flushing;
 
 public:
@@ -62,31 +61,7 @@ public:
         entityManager = em;
     }
 
-    // -----------------------------------------------------------------------
-    // FlushEntities — call BEFORE CloseClient() / unloadBin() on a client.
-    //
-    // Problem this solves:
-    //   The audio thread runs independently. When a client is torn down its
-    //   AudioSourceComponents still hold live AL source handles. Without an
-    //   explicit flush those handles leak into the pool, their AssetManager
-    //   buffer refs are never decremented, and the audio thread may call
-    //   Update() on a dangling EntityManager pointer — all producing the
-    //   "ghostly sound from dead client" symptom.
-    //
-    // What this does, atomically under the audio mutex:
-    //   1. Sets flushing=true so the audio loop skips Update() for this tick,
-    //      preventing it from re-initializing sources we're about to clean up.
-    //   2. For every initialized AudioSourceComponent in the closing client's
-    //      ECS: stops the AL source, returns it to the pool, drops the
-    //      AssetManager buffer ref-count, resets the component fields, and
-    //      removes the entity from activeAudioEntities.
-    //   3. Clears the stored EntityManager pointer so the audio loop will not
-    //      dereference it after this call returns.
-    //   4. Clears flushing so the next client's audio resumes normally.
-    //
-    // The entire operation holds the mutex, so the audio thread is guaranteed
-    // to be idle (sleeping between ticks) for the full duration of the flush.
-    // -----------------------------------------------------------------------
+    // Call BEFORE CloseClient()/unloadBin(): releases every AL source held by the closing client's entities so they don't leak into the pool or keep playing as ghost audio.
     static void FlushEntities(EntityManager* em) {
         if (!em) return;
 
@@ -114,36 +89,25 @@ public:
         Debug::Info("AudioManager") << "Flushed audio entities for closing client\n";
     }
 
-    // -----------------------------------------------------------------------
-    // StopAllSources — the guaranteed client-switch cleanup path.
-    //
-    // Why this exists instead of relying solely on FlushEntities:
-    //   FlushEntities walks the ECS to find AudioSourceComponents, but that
-    //   pointer is not always valid.  For OnlineClient, gameLogic_ is moved
-    //   into ClientPredictionNetcode during SetupClient, so GetEntityManager()
-    //   returns nullptr.  For any client, SetEntityManager may never have been
-    //   called.  In both cases FlushEntities returns immediately having done
-    //   nothing, and AL sources keep playing in the driver.
-    //
-    //   StopAllSources bypasses the ECS entirely and operates directly on the
-    //   AL source pool.  It stops and detaches every slot that is in-use or
-    //   audible, and clears the activeAudioEntities tracking set.  This is the
-    //   authoritative cleanup; FlushEntities is best-effort on top of it.
-    // -----------------------------------------------------------------------
+    // Authoritative client-switch cleanup: operates directly on the AL source pool instead of the ECS, since FlushEntities alone can't reach entities when the EntityManager pointer isn't valid (e.g. OnlineClient moves gameLogic_ before teardown).
     static void StopAllSources() {
         std::lock_guard<std::mutex> lock(audioMutex);
         if (audioSystem) audioSystem->StopAllSources();
     }
 
-    // Music control
     static void PlayMusic(const std::string& file, bool loop = true) {
         std::lock_guard<std::mutex> lock(audioMutex);
+
+		if (currentMusicFile == file) return; // Avoid restarting the same music file
+
         if (audioSystem) audioSystem->PlayMusic(file, loop);
+		currentMusicFile = file;
     }
 
     static void StopMusic() {
         std::lock_guard<std::mutex> lock(audioMutex);
         if (audioSystem) audioSystem->StopMusic();
+		currentMusicFile.clear();
     }
 
     static void SetMusicVolume(float volume) {
@@ -177,36 +141,17 @@ private:
             float dt = std::chrono::duration<float>(now - lastTick).count();
             lastTick = now;
 
-            // ---------------------------------------------------------------
-            // FIX: snapshot + Update() are now a single critical section.
-            //
-            // Previously the loop did: lock → snapshot em → unlock → re-lock
-            // → Update(*em). The gap between the two locks meant FlushEntities
-            // could set entityManager=nullptr between them, but the stale local
-            // `em` copy was already taken — so Update() still ran on the dying
-            // client's ECS, re-initializing and re-playing sources that had
-            // just been cleaned up (the "ghostly sound" bug).
-            //
-            // Now the snapshot and the Update() call share one lock, so if
-            // FlushEntities holds the mutex first, entityManager is already
-            // nullptr when we read it, and we skip Update() entirely.
-            // If we hold the mutex first, FlushEntities will block until
-            // Update() finishes, then clear entityManager safely.
-            // ---------------------------------------------------------------
+            // FIX: snapshot entityManager and call Update() under the same lock, so FlushEntities can't null it out mid-tick and cause ghost audio.
             {
                 std::lock_guard<std::mutex> lock(audioMutex);
 
                 // Skip this tick while FlushEntities is tearing down sources.
-                // flushing is set/cleared inside the same mutex, so this check
-                // is redundant given the single lock, but kept as a clear
-                // statement of intent and defence against future refactors.
                 if (!flushing && entityManager && audioSystem) {
                     std::vector<EventEntry> events;
                     audioSystem->Update(*entityManager, events, false, dt);
                 }
             }
 
-            // Performance monitoring
             tickCount++;
             if (tickCount == AUDIO_TICKS_PER_SECOND) {
                 auto tickEnd = std::chrono::high_resolution_clock::now();
@@ -225,8 +170,6 @@ private:
                 double currentMs = (durationUs / 1000.0) / AUDIO_TICKS_PER_SECOND;
                 double meanMs = (mean / 1000.0) / AUDIO_TICKS_PER_SECOND;
 
-                //Debug::Info("AudioManager") << "Current: " << currentMs << " ms | Mean: " << meanMs << " ms\n";
-
                 tickCount = 0;
             }
 
@@ -238,12 +181,12 @@ private:
     }
 };
 
-// Static member definitions
 AudioSystem* AudioManager::audioSystem = nullptr;
 EntityManager* AudioManager::entityManager = nullptr;
 std::mutex        AudioManager::audioMutex;
 std::thread       AudioManager::audioThread;
 std::atomic<bool> AudioManager::threadRunning{ false };
 std::atomic<bool> AudioManager::flushing{ false };
+std::string AudioManager::currentMusicFile = "";
 
 #endif // AUDIO_MANAGER_HPP
