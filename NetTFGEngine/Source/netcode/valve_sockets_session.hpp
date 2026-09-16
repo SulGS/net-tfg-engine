@@ -321,7 +321,7 @@ public:
 		offset += 4;
 		std::memcpy(&buf[offset], event.event.data, event.event.len);
 		offset += event.event.len;
-		sockets->SendMessageToConnection(conn, buf.data(), buf.size(), k_nSteamNetworkingSend_Reliable, nullptr);
+		sockets->SendMessageToConnection(conn, buf.data(), static_cast<uint32>(buf.size()), k_nSteamNetworkingSend_Reliable, nullptr);
 	}
 
 	EventEntry ParseEventEntryPacket(const uint8_t* buf, size_t len) {
@@ -382,7 +382,7 @@ public:
         std::memcpy(&buf[offset], update.state.data, update.state.len);
         offset += update.state.len;
 
-        sockets->SendMessageToConnection(conn, buf.data(), buf.size(), k_nSteamNetworkingSend_Reliable, nullptr);
+        sockets->SendMessageToConnection(conn, buf.data(), static_cast<uint32>(buf.size()), k_nSteamNetworkingSend_Reliable, nullptr);
     }
 
     StateUpdate ParseStateUpdate(const uint8_t* buf, size_t len) {
@@ -442,7 +442,7 @@ public:
         std::memcpy(&buf[offset], &f, 4);
         offset += 4;
 
-        uint32_t numDeltas = hostToBigEndian32(deltas.size());
+        uint32_t numDeltas = hostToBigEndian32(static_cast<uint32_t>(deltas.size()));
         std::memcpy(&buf[offset], &numDeltas, 4);
         offset += 4;
 
@@ -460,7 +460,7 @@ public:
             offset += delta.len;
         }
 
-        sockets->SendMessageToConnection(conn, buf.data(), buf.size(), k_nSteamNetworkingSend_Reliable, nullptr);
+        sockets->SendMessageToConnection(conn, buf.data(), static_cast<uint32>(buf.size()), k_nSteamNetworkingSend_Reliable, nullptr);
     }
 
     void ParseDeltasUpdate(const uint8_t* buf, size_t len, std::vector<DeltaStateBlob>& deltas, int& frame)

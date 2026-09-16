@@ -61,7 +61,7 @@ inline SpawnPoint GetSpawnPoint(int playerIndex)
         { 0, 0,  45.0f },   // bottom-left corner        → face NE
         { 3, 0,  83.0f },   // bottom edge, 1/3          → face N-NE
         {6, 0,  97.0f},   // bottom edge, 2/3          → face N-NW
-        /*{ 9, 0, 135.0f },   // bottom-right corner       → face NW
+        { 9, 0, 135.0f },   // bottom-right corner       → face NW
         { 9, 3, 153.0f },   // right edge, 1/3           → face W-NW
         { 9, 6, 167.0f },   // right edge, 2/3           → face W-SW
         { 9, 9, 225.0f },   // top-right corner          → face SW
@@ -69,7 +69,7 @@ inline SpawnPoint GetSpawnPoint(int playerIndex)
         { 3, 9, 277.0f },   // top edge, 1/3             → face S-SE
         { 0, 9, 315.0f },   // top-left corner           → face SE
         { 0, 6, 333.0f },   // left edge, 2/3            → face E-SE  (going down)
-        { 0, 3, 347.0f },   // left edge, 1/3            → face E-NE  (going down)*/
+        { 0, 3, 347.0f },   // left edge, 1/3            → face E-NE  (going down)
     };
 
     if (playerIndex < 0 || playerIndex >= NUM_PLAYERS)
@@ -122,7 +122,7 @@ public:
         return buf;
     }
 
-    void GameState_To_ECSWorld(const GameStateBlob& state) {
+    void GameState_To_ECSWorld(const GameStateBlob& state) override {
         AsteroidShooterGameState s = *reinterpret_cast<const AsteroidShooterGameState*>(state.data);
 
         auto query = world.GetEntityManager().CreateQuery<Transform, Playable, SpaceShip>();
@@ -130,7 +130,7 @@ public:
             int p = play->playerId;
             transform->setPosition(glm::vec3(s.posX[p], s.posY[p], 0.0f));
             transform->setRotation(glm::vec3(0.0f, 0.0f, s.rot[p]));
-            ship->shipZRotation = s.rot[p];
+            ship->shipZRotation = static_cast<int>(s.rot[p]);
             ship->shootCooldown = s.shootCooldown[p];
             ship->health = s.health[p];
             ship->isShooting = s.isShooting[p];
@@ -208,7 +208,7 @@ public:
         }
     }
 
-    void ECSWorld_To_GameState(GameStateBlob& state) {
+    void ECSWorld_To_GameState(GameStateBlob& state) override {
         AsteroidShooterGameState& s = *reinterpret_cast<AsteroidShooterGameState*>(state.data);
 
         std::memset(&s, 0, sizeof(s));
@@ -666,7 +666,7 @@ public:
         Debug::Info("GameState") << "===================================\n";
     }
 
-    void GameState_To_ECSWorld(const GameStateBlob& state)
+    void GameState_To_ECSWorld(const GameStateBlob& state) override
     {
         AsteroidShooterGameState s =
             *reinterpret_cast<const AsteroidShooterGameState*>(state.data);
@@ -682,7 +682,7 @@ public:
             transform->setRotation(glm::vec3(0.0f, 0.0f, s.rot[p]));
             ship->health = s.health[p];
             ship->isAlive = s.alive[p];
-            ship->shipZRotation = s.rot[p];
+            ship->shipZRotation = static_cast<int>(s.rot[p]);
             ship->isShooting = s.isShooting[p];
             ship->isMovingForward = s.isMovingForward[p];
             ship->shipInclination = s.shipInclination[p];

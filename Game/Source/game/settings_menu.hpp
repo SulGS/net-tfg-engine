@@ -62,12 +62,19 @@ namespace SettingsUI
 {
     inline std::string FmtBool(bool v) { return v ? "Activado" : "Desactivado"; }
 
-    inline std::string FmtInt(int v) { return std::to_string(v); }
+    // Nombres de nivel genericos: los usa tanto el preset como los ajustes
+    // sueltos que se exponen como nivel (calidad de sombras, cantidad de
+    // luces), para que un jugador casual elija "Alto" en vez de un numero
+    // crudo que no significa nada para el.
+    inline std::vector<std::string> TierNames()
+    {
+        return { "Muy bajo", "Bajo", "Medio", "Alto", "Ultra" };
+    }
 
     inline std::vector<std::string> PresetNames()
     {
         // El orden debe coincidir con enum class QualityPreset.
-        return { "Muy bajo", "Bajo", "Medio", "Alto", "Ultra" };
+        return TierNames();
     }
 
     // Nombre del preset. Sale de PresetNames() a proposito: el dropdown y el
@@ -179,7 +186,7 @@ public:
             data->pendingRenderReInit = false;
             data->pendingShadowReInit = false;
 			requestRenderReinit = true;
-            if (data->statusMessage.empty()) data->SetStatus("Render reinicializado");
+            if (data->statusMessage.empty()) data->SetStatus("Renderizado reinicializado");
         }
         else if (data->pendingShadowReInit)
         {
@@ -475,13 +482,6 @@ private:
                 // anisotropia, asi que hace falta el reinit completo.
                 data->pendingRenderReInit = true;
             });
-
-        // Derivados del preset, sin control propio.
-        AddInfo(em, baseLayer, TAB_CALIDAD, row++, "Mip base de texturas",
-            []() { return SettingsUI::FmtInt(RenderSettings::instance().texBaseMip()); });
-
-        AddInfo(em, baseLayer, TAB_CALIDAD, row++, "Compresion de texturas",
-            []() { return SettingsUI::FmtBool(RenderSettings::instance().texCompression()); });
     }
 
     // SOMBRAS
@@ -493,8 +493,15 @@ private:
             []() { return RenderSettings::instance().getDirShadowsEnabled(); },
             [](bool v) { RenderSettings::instance().setDirShadowsEnabled(v); });
 
-        AddIntChoice(em, data, baseLayer, TAB_SOMBRAS, row++, "Resolucion direccional",
-            { 512, 1024, 2048, 4096, 8192 }, "",
+        AddToggle(em, baseLayer, TAB_SOMBRAS, row++, "Sombras de luces puntuales",
+            []() { return RenderSettings::instance().getPointShadowsEnabled(); },
+            [](bool v) { RenderSettings::instance().setPointShadowsEnabled(v); });
+
+        // Separadas y no fusionadas: las sombras puntuales se calculan una
+        // vez por cara de cubemap y por luz, mucho mas caras que la unica
+        // sombra direccional, asi que conviene poder bajarlas por separado.
+        AddTierChoice(em, data, baseLayer, TAB_SOMBRAS, row++, "Calidad de sombras direccionales",
+            { 512, 1024, 2048, 4096, 8192 },
             []() { return RenderSettings::instance().getDirShadowResolution(); },
             [data](int v)
             {
@@ -502,48 +509,14 @@ private:
                 data->pendingShadowReInit = true;
             });
 
-        AddSlider(em, baseLayer, TAB_SOMBRAS, row++, "Alcance direccional",
-            10.0f, 2000.0f, 5.0f, 0, "",
-            []() { return RenderSettings::instance().getDirShadowExtent(); },
-            [](float v) { RenderSettings::instance().setDirShadowExtent(v); });
-
-        AddSlider(em, baseLayer, TAB_SOMBRAS, row++, "Plano cercano direccional",
-            -1000.0f, 0.0f, 10.0f, 0, "",
-            []() { return RenderSettings::instance().getDirShadowNear(); },
-            [](float v) { RenderSettings::instance().setDirShadowNear(v); });
-
-        AddSlider(em, baseLayer, TAB_SOMBRAS, row++, "Plano lejano direccional",
-            10.0f, 2000.0f, 10.0f, 0, "",
-            []() { return RenderSettings::instance().getDirShadowFar(); },
-            [](float v) { RenderSettings::instance().setDirShadowFar(v); });
-
-        AddToggle(em, baseLayer, TAB_SOMBRAS, row++, "Sombras de luces puntuales",
-            []() { return RenderSettings::instance().getPointShadowsEnabled(); },
-            [](bool v) { RenderSettings::instance().setPointShadowsEnabled(v); });
-
-        AddIntChoice(em, data, baseLayer, TAB_SOMBRAS, row++, "Resolucion puntual",
-            { 128, 256, 512, 1024, 2048, 4096 }, "",
+        AddTierChoice(em, data, baseLayer, TAB_SOMBRAS, row++, "Calidad de sombras puntuales",
+            { 128, 256, 512, 1024, 2048 },
             []() { return RenderSettings::instance().getShadowResolution(); },
             [data](int v)
             {
                 RenderSettings::instance().setShadowResolution(v);
                 data->pendingShadowReInit = true;
             });
-
-        AddSlider(em, baseLayer, TAB_SOMBRAS, row++, "Plano cercano puntual",
-            0.01f, 2.0f, 0.01f, 2, "",
-            []() { return RenderSettings::instance().getShadowNearPlane(); },
-            [](float v) { RenderSettings::instance().setShadowNearPlane(v); });
-
-        AddSlider(em, baseLayer, TAB_SOMBRAS, row++, "Bias (factor)",
-            0.0f, 16.0f, 0.25f, 2, "",
-            []() { return RenderSettings::instance().getShadowBiasFactor(); },
-            [](float v) { RenderSettings::instance().setShadowBiasFactor(v); });
-
-        AddSlider(em, baseLayer, TAB_SOMBRAS, row++, "Bias (unidades)",
-            0.0f, 32.0f, 0.25f, 2, "",
-            []() { return RenderSettings::instance().getShadowBiasUnits(); },
-            [](float v) { RenderSettings::instance().setShadowBiasUnits(v); });
     }
 
     // IMAGEN (HDR / tonemapping)
@@ -561,44 +534,9 @@ private:
             []() { return RenderSettings::instance().getGamma(); },
             [](float v) { RenderSettings::instance().setGamma(v); });
 
-        AddToggle(em, baseLayer, TAB_IMAGEN, row++, "Tonemapping filmico",
+        AddToggle(em, baseLayer, TAB_IMAGEN, row++, "Filmic Tonemapping",
             []() { return RenderSettings::instance().getFilmicEnabled(); },
             [](bool v) { RenderSettings::instance().setFilmicEnabled(v); });
-
-        AddSlider(em, baseLayer, TAB_IMAGEN, row++, "Curva: hombro",
-            0.0f, 1.0f, 0.01f, 2, "",
-            []() { return RenderSettings::instance().getFilmicShoulder(); },
-            [](float v) { RenderSettings::instance().setFilmicShoulder(v); });
-
-        AddSlider(em, baseLayer, TAB_IMAGEN, row++, "Curva: fuerza lineal",
-            0.0f, 1.0f, 0.01f, 2, "",
-            []() { return RenderSettings::instance().getFilmicLinearStrength(); },
-            [](float v) { RenderSettings::instance().setFilmicLinearStrength(v); });
-
-        AddSlider(em, baseLayer, TAB_IMAGEN, row++, "Curva: angulo lineal",
-            0.0f, 1.0f, 0.01f, 2, "",
-            []() { return RenderSettings::instance().getFilmicLinearAngle(); },
-            [](float v) { RenderSettings::instance().setFilmicLinearAngle(v); });
-
-        AddSlider(em, baseLayer, TAB_IMAGEN, row++, "Curva: fuerza del pie",
-            0.0f, 1.0f, 0.01f, 2, "",
-            []() { return RenderSettings::instance().getFilmicToeStrength(); },
-            [](float v) { RenderSettings::instance().setFilmicToeStrength(v); });
-
-        AddSlider(em, baseLayer, TAB_IMAGEN, row++, "Curva: numerador del pie",
-            0.0f, 0.2f, 0.01f, 2, "",
-            []() { return RenderSettings::instance().getFilmicToeNumerator(); },
-            [](float v) { RenderSettings::instance().setFilmicToeNumerator(v); });
-
-        AddSlider(em, baseLayer, TAB_IMAGEN, row++, "Curva: denominador del pie",
-            0.01f, 1.0f, 0.01f, 2, "",
-            []() { return RenderSettings::instance().getFilmicToeDenominator(); },
-            [](float v) { RenderSettings::instance().setFilmicToeDenominator(v); });
-
-        AddSlider(em, baseLayer, TAB_IMAGEN, row++, "Curva: blanco lineal",
-            1.0f, 30.0f, 0.1f, 1, "",
-            []() { return RenderSettings::instance().getFilmicLinearWhite(); },
-            [](float v) { RenderSettings::instance().setFilmicLinearWhite(v); });
     }
 
     // EFECTOS (bloom / FXAA)
@@ -610,43 +548,14 @@ private:
             []() { return RenderSettings::instance().getBloomEnabled(); },
             [](bool v) { RenderSettings::instance().setBloomEnabled(v); });
 
-        AddSlider(em, baseLayer, TAB_EFECTOS, row++, "Bloom: umbral",
-            0.0f, 5.0f, 0.05f, 2, "",
-            []() { return RenderSettings::instance().getBloomThreshold(); },
-            [](float v) { RenderSettings::instance().setBloomThreshold(v); });
-
         AddSlider(em, baseLayer, TAB_EFECTOS, row++, "Bloom: intensidad",
             0.0f, 2.0f, 0.01f, 2, "",
             []() { return RenderSettings::instance().getBloomStrength(); },
             [](float v) { RenderSettings::instance().setBloomStrength(v); });
 
-        // Entero expuesto como slider de paso 1.
-        AddSlider(em, baseLayer, TAB_EFECTOS, row++, "Bloom: pasadas",
-            1.0f, 10.0f, 1.0f, 0, "",
-            []() { return static_cast<float>(RenderSettings::instance().getBloomPasses()); },
-            [](float v) { RenderSettings::instance().setBloomPasses(static_cast<int>(v + 0.5f)); });
-
         AddToggle(em, baseLayer, TAB_EFECTOS, row++, "FXAA",
             []() { return RenderSettings::instance().getFXAAEnabled(); },
             [](bool v) { RenderSettings::instance().setFXAAEnabled(v); });
-
-        AddSlider(em, baseLayer, TAB_EFECTOS, row++, "FXAA: subpixel",
-            0.0f, 1.0f, 0.05f, 2, "",
-            []() { return RenderSettings::instance().getFXAASubpix(); },
-            [](float v) { RenderSettings::instance().setFXAASubpix(v); });
-
-        // Continuos a proposito: los valores de FXAA (0.125, 0.0833) no caen
-        // en una rejilla comoda, y con step>0 el slider los redondearia al
-        // sincronizar y mostraria algo distinto de lo que hay en el shader.
-        AddSlider(em, baseLayer, TAB_EFECTOS, row++, "FXAA: umbral de borde",
-            0.0625f, 0.3330f, 0.0f, 4, "",
-            []() { return RenderSettings::instance().getFXAAEdgeThreshold(); },
-            [](float v) { RenderSettings::instance().setFXAAEdgeThreshold(v); });
-
-        AddSlider(em, baseLayer, TAB_EFECTOS, row++, "FXAA: umbral minimo",
-            0.0312f, 0.0833f, 0.0f, 4, "",
-            []() { return RenderSettings::instance().getFXAAEdgeThresholdMin(); },
-            [](float v) { RenderSettings::instance().setFXAAEdgeThresholdMin(v); });
     }
 
     // AVANZADO (init-time: se aplican con un RenderSystem::Init())
@@ -654,8 +563,8 @@ private:
     {
         int row = 0;
 
-        AddIntChoice(em, data, baseLayer, TAB_AVANZADO, row++, "Luces maximas",
-            { 64, 128, 256, 512, 1024 }, "",
+        AddTierChoice(em, data, baseLayer, TAB_AVANZADO, row++, "Cantidad de luces",
+            { 64, 128, 256, 512, 1024 },
             []() { return RenderSettings::instance().getMaxLights(); },
             [data](int v)
             {
@@ -663,8 +572,11 @@ private:
                 data->pendingRenderReInit = true;
             });
 
-        AddIntChoice(em, data, baseLayer, TAB_AVANZADO, row++, "Luces con sombra",
-            { 0, 1, 2, 4, 8, 16 }, "",
+        // Sin el 0 de la lista original: apagar del todo las sombras de
+        // puntuales ya es el toggle "Sombras de luces puntuales" de la
+        // pestana Sombras, aqui solo interesa cuantas como maximo a la vez.
+        AddTierChoice(em, data, baseLayer, TAB_AVANZADO, row++, "Cantidad de luces con sombra",
+            { 1, 2, 4, 8, 16 },
             []() { return RenderSettings::instance().getMaxShadowLights(); },
             [data](int v)
             {
@@ -704,21 +616,6 @@ private:
         MakeText(em, glm::vec2(LABEL_X, RowY(rowIndex)), glm::vec2(LABEL_W, ROW_TEXT_H),
             baseLayer + 1, label, 16.0f,
             SettingsWidget::Vis::Tab, tab);
-    }
-
-    // Fila de solo lectura: etiqueta + valor en gris.
-    static void AddInfo(EntityManager& em, int baseLayer, int tab, int rowIndex,
-        const std::string& label,
-        std::function<std::string()> read)
-    {
-        AddLabel(em, baseLayer, tab, rowIndex, label);
-
-        MakeText(em, glm::vec2(DROPDOWN_X, RowY(rowIndex)),
-            glm::vec2(DROPDOWN_W, ROW_TEXT_H),
-            baseLayer + 1, "", 16.0f,
-            SettingsWidget::Vis::Tab, tab,
-            std::move(read),
-            glm::vec4(0.65f, 0.65f, 0.65f, 1.0f));
     }
 
     // Booleano: un boton cuyo texto sale del getter.
@@ -831,6 +728,29 @@ private:
             });
     }
 
+    // Como AddIntChoice, pero con nombres de nivel (SettingsUI::TierNames())
+    // en vez del numero crudo: para ajustes que un jugador casual debe poder
+    // tocar sin saber que significa "2048" o "256". options debe tener el
+    // mismo tamano que TierNames().
+    static void AddTierChoice(EntityManager& em, SettingsPanelData* data,
+        int baseLayer, int tab, int rowIndex,
+        const std::string& label,
+        const std::vector<int>& options,
+        std::function<int()> get,
+        std::function<void(int)> set)
+    {
+        const std::vector<int> opts = options;
+
+        AddChoice(em, data, baseLayer, tab, rowIndex, label,
+            SettingsUI::TierNames(),
+            [opts, get]() { return SettingsUI::IndexOfNearest(opts, get()); },
+            [opts, set](int index)
+            {
+                if (index >= 0 && index < static_cast<int>(opts.size()))
+                    set(opts[index]);
+            });
+    }
+
     // Primitivas
 
     static void Tag(EntityManager& em, Entity e,
@@ -919,11 +839,11 @@ public:
         return MakeZeroInputBlob();
     }
 
-    void GameState_To_ECSWorld(const GameStateBlob& state) {
+    void GameState_To_ECSWorld(const GameStateBlob& state) override {
         // Nada que sincronizar: el panel vive solo en el renderer.
     }
 
-    void ECSWorld_To_GameState(GameStateBlob& state) {
+    void ECSWorld_To_GameState(GameStateBlob& state) override {
         SettingsSceneState& s = *reinterpret_cast<SettingsSceneState*>(state.data);
         s.frameCount++;
         state.len = sizeof(SettingsSceneState);
@@ -970,7 +890,7 @@ public:
 
 class SettingsScreenGameRenderer : public IECSGameRenderer {
 public:
-    void GameState_To_ECSWorld(const GameStateBlob& state) {
+    void GameState_To_ECSWorld(const GameStateBlob& state) override {
         // El panel se refresca solo desde RenderSettings en SettingsPanelSystem.
     }
 

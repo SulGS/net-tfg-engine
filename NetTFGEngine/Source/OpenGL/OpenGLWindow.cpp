@@ -34,7 +34,6 @@ OpenGLWindow::OpenGLWindow(int width, int height, const std::string& title)
         self->logicalHeight = h;
         });
 
-    int w, h;
     glfwGetFramebufferSize(window, &currentWidth, &currentHeight);
     glViewport(0, 0, currentWidth, currentHeight);
 

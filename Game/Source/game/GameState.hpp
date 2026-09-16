@@ -1,6 +1,6 @@
 ﻿#pragma once
 
-const int NUM_PLAYERS = 3;
+const int NUM_PLAYERS = 12;
 const int MAX_BULLETS = 32;
 const int MAP_SIZE = 5;      // 5x5 grid of tiles
 

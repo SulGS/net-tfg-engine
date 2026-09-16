@@ -50,7 +50,7 @@ public:
         std::lock_guard<std::mutex> lk(mtx);
         auto frameIt = appliedInputs.find(frame);
         if (frameIt == appliedInputs.end()) return 0;
-        return frameIt->second.size();
+        return static_cast<int>(frameIt->second.size());
     }
 
    

@@ -391,7 +391,6 @@ private:
         ISteamNetworkingSockets* sockets = net_.GetSockets();
         if (!sockets) return;
 
-        SteamNetConnectionStatusChangedCallback_t callback;
         while (sockets->GetConnectionUserData(net_.GetListenSocket())) {
             // This is a simplified approach; in production you'd use proper callbacks
             // For now we rely on message polling to detect connection state changes
@@ -469,7 +468,7 @@ private:
         info.connection = conn;
         info.clientId = clientId;
         info.isConnected = true;
-        info.playerId = allPlayers_.size();
+        info.playerId = static_cast<int>(allPlayers_.size());
 
         allPlayers_.push_back(info);
         peerInfo_[conn] = info;

@@ -294,7 +294,7 @@ private:
                 tinygltf::Model    model;
                 std::string        err, warn;
 
-                if (!loader.LoadBinaryFromMemory(&model, &err, &warn, data, size, "")) {
+                if (!loader.LoadBinaryFromMemory(&model, &err, &warn, data, static_cast<unsigned int>(size), "")) {
                     Debug::Error("GLTF") << err << "\n";
                     return buffer;
                 }

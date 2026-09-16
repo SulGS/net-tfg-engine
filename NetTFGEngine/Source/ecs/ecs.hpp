@@ -70,7 +70,7 @@ public:
     }
 
     // Remove all components, calling Destroy() on each.
-    void Clear() {
+    void Clear() override {
         for (auto& [entity, comp] : components) {
             if (comp) comp->Destroy();
         }

@@ -14,6 +14,8 @@
 #include <thread>
 #include <cstdint>
 #include <cmath>    // for std::ceil
+#include <cstring>  // for std::memcpy
+#include <algorithm> // for std::min
 #include "Utils/Debug/Debug.hpp"
 
 #include "Client-Server/Client.hpp"
@@ -251,8 +253,11 @@ private:
         ClientHelloPacket hello;
         hello.type = PACKET_CLIENT_HELLO;
 
-        std::strncpy(hello.clientId, clientId_.c_str(), sizeof(hello.clientId) - 1);
-        hello.clientId[sizeof(hello.clientId) - 1] = '\0';
+        // Copia truncada portable: strncpy_s/_TRUNCATE es solo MSVC y strncpy
+        // esta deprecado en MSVC, esto evita ambos sin depender de plataforma.
+        const size_t copyLen = std::min(clientId_.size(), sizeof(hello.clientId) - 1);
+        std::memcpy(hello.clientId, clientId_.data(), copyLen);
+        hello.clientId[copyLen] = '\0';
 
         ISteamNetworkingSockets* sockets = net_.GetSockets();
         if (!sockets || serverConnection_ == k_HSteamNetConnection_Invalid) {
@@ -482,14 +487,14 @@ private:
         uint8_t type = data[0];
 
         if (type == PACKET_STATE_UPDATE) {
-            bool correctPacket = true;
+            bool correctPacket = false;
             uint32_t lenVector = 0;
             uint32_t lenState = 0;
 
             std::memcpy(&lenState, data + 1 + 4, sizeof(uint32_t));
             lenState = bigEndianToHost32(lenState);
 
-            if (len >= 1 + 4 + 4 + lenState) {
+            if (static_cast<uint32_t>(len) >= 1 + 4 + 4 + lenState) {
                 correctPacket = true;
             }
 

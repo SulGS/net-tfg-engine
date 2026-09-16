@@ -189,13 +189,13 @@ public:
         return buf;
     }
 
-    void GameState_To_ECSWorld(const GameStateBlob& state) {
+    void GameState_To_ECSWorld(const GameStateBlob& state) override {
         StartScreenGameState s = *reinterpret_cast<const StartScreenGameState*>(state.data);
 
         // Nothing to sync from state into ECS for this simple screen.
     }
 
-    void ECSWorld_To_GameState(GameStateBlob& state) {
+    void ECSWorld_To_GameState(GameStateBlob& state) override {
         StartScreenGameState& s = *reinterpret_cast<StartScreenGameState*>(state.data);
 
         s.frameCount++;
@@ -265,7 +265,7 @@ public:
 
 class StartScreenGameRenderer : public IECSGameRenderer {
 public:
-    void GameState_To_ECSWorld(const GameStateBlob& state) {
+    void GameState_To_ECSWorld(const GameStateBlob& state) override {
         StartScreenGameState s = *reinterpret_cast<const StartScreenGameState*>(state.data);
 
     }

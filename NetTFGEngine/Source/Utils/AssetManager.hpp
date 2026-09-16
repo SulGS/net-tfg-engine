@@ -15,7 +15,7 @@
 #include "Utils/Debug/Debug.hpp"
 
 #include <AL/al.h>
-#include <openssl/md5.h>
+#include <openssl/evp.h>
 
 using AssetID = uint64_t;
 
@@ -318,10 +318,11 @@ private:
         std::string normalized = path;
         std::replace(normalized.begin(), normalized.end(), '\\', '/');
 
-        unsigned char digest[MD5_DIGEST_LENGTH];
-        MD5(reinterpret_cast<const unsigned char*>(normalized.data()),
-            normalized.size(),
-            digest);
+        // MD5() de <openssl/md5.h> esta deprecado desde OpenSSL 3.0; EVP_Digest
+        // es la API sustituta para un hash de una sola pasada.
+        unsigned char digest[EVP_MAX_MD_SIZE];
+        unsigned int digestLen = 0;
+        EVP_Digest(normalized.data(), normalized.size(), digest, &digestLen, EVP_md5(), nullptr);
 
         AssetID id = 0;
         std::memcpy(&id, digest, sizeof(AssetID)); // first 8 bytes
