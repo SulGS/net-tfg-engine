@@ -2,6 +2,7 @@
 #define OPENGLWINDOW_HPP
 
 #include "OpenGLIncludes.hpp"
+#include "OpenGL/Render pipeline/RenderSettings.hpp"
 #include <string>
 
 class OpenGLWindow {
@@ -15,6 +16,9 @@ public:
     void makeContextCurrent();
     void releaseContext();
     void close();
+
+    void       setWindowMode(WindowMode mode);
+    WindowMode getWindowMode() const;
 
     int getWidth() const;          // framebuffer size (physical pixels) � use for glViewport
     int getHeight() const;
@@ -39,6 +43,13 @@ private:
     int logicalWidth;   // window size (logical pixels) � matches glfwGetCursorPos
     int logicalHeight;
     bool resized = false;
+
+    // Windowed position/size, remembered so leaving fullscreen restores it
+    // instead of guessing; refreshed just before entering fullscreen.
+    int windowedX = 0;
+    int windowedY = 0;
+    int windowedWidth = 0;
+    int windowedHeight = 0;
 };
 
 #endif // OPENGLWINDOW_HPP

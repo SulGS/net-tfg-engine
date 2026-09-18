@@ -626,7 +626,7 @@ private:
                     }
                     else 
                     {
-                        net_.SendDeltasUpdate(conn, generatedDeltas, server_.GetCurrentFrame()-1);
+                        net_.SendDeltasUpdate(conn, generatedDeltas, server_.GetCurrentFrame());
                     }
                 }
             }

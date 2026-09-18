@@ -3,13 +3,17 @@
 #include "netcode_common.hpp"
 #include "OpenGL/OpenGLWindow.hpp"
 #include "OpenGL/Mesh.hpp"
+#include "OpenGL/Render pipeline/RenderSettings.hpp"
 #include "Utils/Input.hpp"
 #include "Utils/Debug/Debug.hpp"
 #include <functional>
 #include <future>
+#include <algorithm>
 
-const int RENDER_TICKS_PER_SECOND = 144;
-const int RENDER_MS_PER_TICK = 1000 / RENDER_TICKS_PER_SECOND;
+// Target render FPS now lives in RenderSettings (RenderSettings::instance().getTargetFPS()),
+// adjustable at runtime from the settings menu instead of being fixed at compile time.
+inline int CurrentTargetFPS() { return std::max(1, RenderSettings::instance().getTargetFPS()); }
+inline int CurrentMsPerTick() { return 1000 / CurrentTargetFPS(); }
 
 class ClientWindow {
 
@@ -85,6 +89,9 @@ public:
                 renderThreadId = std::this_thread::get_id();
                 window = new OpenGLWindow(width, height, title);
                 Input::Init(window->getWindow());
+
+                // Apply a window mode saved from a previous session.
+                window->setWindowMode(RenderSettings::instance().getWindowMode());
 
                 renderLoop();
 
@@ -206,6 +213,11 @@ public:
         return activeInstances.size();
     }
 
+    // Raw window access for render-thread callers only (e.g. a UIButton::onClick,
+    // which runs from inside renderLoop() via renderCallback -> Render() -> world.Update()).
+    // Not locked: window is only ever written on the render thread itself.
+    static OpenGLWindow* GetWindow() { return window; }
+
 private:
     static void renderLoop() {
         auto nextTick = std::chrono::high_resolution_clock::now();
@@ -299,7 +311,7 @@ private:
             }
 
             tickCount++;
-            if (tickCount == RENDER_TICKS_PER_SECOND) {
+            if (tickCount == CurrentTargetFPS()) {
                 tickCount = 0;
 
                 auto frameEnd = std::chrono::high_resolution_clock::now();
@@ -330,7 +342,7 @@ private:
 
             Input::Update();
 
-            nextTick += std::chrono::milliseconds(RENDER_MS_PER_TICK);
+            nextTick += std::chrono::milliseconds(CurrentMsPerTick());
             std::this_thread::sleep_until(nextTick);
         }
     }

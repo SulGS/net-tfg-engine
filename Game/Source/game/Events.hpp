@@ -8,9 +8,7 @@ enum AsteroidEventMask : uint8_t {
 	DEATH = 2,
 	ENTER_SPECTATOR = 3,
 	DESTROY_TILE = 4,
-	TOGGLE_WALL = 5,
 	WARN_TILE = 6,
-	WARN_WALL = 7,
 };
 
 struct SpawnBulletEventData {
@@ -26,22 +24,8 @@ struct WarnTileEventData {
 	int tileId;
 };
 
-struct WarnWallEventData {
-	int cellId;
-	CellCardinalDirection dir;
-	bool isSpoke;
-	bool warning; // true = enter warning, false = cancel warning
-};
-
 struct DestroyTileEventData {
 	int tileId;
-};
-
-struct ToggleWallEventData {
-	int cellId;
-	CellCardinalDirection dir;
-	bool isSpoke;
-	bool enabled;
 };
 
 struct BulletCollidesEventData {

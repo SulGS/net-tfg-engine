@@ -127,7 +127,7 @@ public:
         ui_update->UpdateScreenSize(window->getLogicalWidth(), window->getLogicalHeight());
 
         auto t1 = std::chrono::high_resolution_clock::now();
-        world.Update(false, 1.0f / RENDER_TICKS_PER_SECOND);
+        world.Update(false, 1.0f / CurrentTargetFPS());
 
 		for (auto& system : world.GetSystems()) {
 			if (system.get()->requestRenderReinit) {
@@ -147,7 +147,7 @@ public:
 
         frameCount++;
 
-        if (frameCount >= RENDER_TICKS_PER_SECOND * 25) {
+        if (frameCount >= CurrentTargetFPS() * 25) {
             frameCount = 0;
         }
     }

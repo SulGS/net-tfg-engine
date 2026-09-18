@@ -277,7 +277,7 @@ public:
 					audioTransform->setPosition(playerTransform->getPosition());
                     AudioSourceComponent* audio = entityManager.AddComponent<AudioSourceComponent>(
                         audioEntity, AudioSourceComponent("explosion.wav", AudioChannel::SFX, false));
-					audio->gain = 3.0f;
+					audio->gain = 1.0f;
                     audio->play = true;
                     entityManager.AddComponent<ExplosionPlayerID>(audioEntity, ExplosionPlayerID{ play->playerId });
                 }
@@ -573,9 +573,12 @@ public:
                 if (thrusterOwner->isSmoke)
                 {
                     thrusterEmitter->enabled = !ship->isMovingForward;  // smoke when idle
+                    // Particle system reads local -Z, so this aligns it to world
+                    // -Y (down), independent of the ship's heading, so idle smoke
+                    // drifts downward under gravity instead of trailing backward.
                     thrusterTransform->setRotation(glm::vec3(
+                        -90.0f,
                         0.0f,
-                        shipTransform->getRotation().z,
                         0.0f
                     ));
                 }
@@ -765,7 +768,11 @@ public:
 				if (thrusterOwner->shipEntity != play->playerId) continue;
 				if (!ship->isAlive)
 				{
+					// `play` only ever triggers alSourcePlay (see AudioSystem::Update) — it
+					// never stops an already-looping source, so the engine loop would keep
+					// looping forever at its last pitch/gain if we didn't silence it here.
 					audio->play = false;
+					audio->gain = 0.0f;
 				}
 				else
 				{
@@ -780,6 +787,34 @@ public:
                     audio->pitch = 0.5f + 0.7f * t;   // 0.5 idle → 1.2 full
 				}
 			}
+		}
+	}
+};
+
+// Drives the "uTime" uniform for every FluidSurface-tagged mesh (fluid.vert
+// wave displacement, water.frag/lava.frag scrolling detail). Purely a
+// render-side clock: no gameplay state, so it isn't synced or predicted —
+// each client just animates on its own local timeline.
+class FluidAnimationSystem : public ISystem
+{
+	float time = 0.0f;
+
+public:
+	void Update(
+		EntityManager& entityManager,
+		std::vector<EventEntry>& events,
+		bool isServer,
+		float deltaTime
+	) override
+	{
+		time += deltaTime;
+
+		auto query = entityManager.CreateQuery<MeshComponent, FluidSurface>();
+		for (auto [entity, meshC, fluidTag] : query)
+		{
+			if (!meshC->mesh) continue;
+			if (Material* mat = meshC->mesh->getMaterial())
+				mat->setFloat("uTime", time);
 		}
 	}
 };

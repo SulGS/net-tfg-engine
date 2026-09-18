@@ -534,6 +534,31 @@ public:
             lwid.enabled = w.onBorder;
             lwid.timer = initDist(initRng);
             em.AddComponent<LaserWallID>(e, lwid);
+
+            if (isServer)
+            {
+                // Border/shared walls run along the shared edge between two cells:
+                // Down/Up walls are wide along X, Left/Right walls are wide along Y.
+                const bool wideX = (w.dir == CellCardinalDirection::Down || w.dir == CellCardinalDirection::Up);
+                glm::vec2 halfExtents = wideX ? glm::vec2(19.0f, 2.0f) : glm::vec2(2.0f, 19.0f);
+
+                BoxCollider2D* collider = em.AddComponent<BoxCollider2D>(e, BoxCollider2D{ halfExtents });
+                collider->isEnabled = w.onBorder;
+                collider->layer = CollisionLayer::WALL;
+                collider->collidesWith = CollisionLayer::PLAYER | CollisionLayer::BULLET;
+                collider->SetOnCollisionEnter([this](Entity self, Entity other, const CollisionInfo& info) {
+                    Playable* play = this->world.GetEntityManager().GetComponent<Playable>(other);
+                    if (!play) return; // only react to players
+
+                    EventEntry deathEvent;
+                    deathEvent.event.type = AsteroidEventMask::DEATH;
+                    DeathEventData deathData;
+                    deathData.playerId = play->playerId;
+                    std::memcpy(deathEvent.event.data, &deathData, sizeof(DeathEventData));
+                    deathEvent.event.len = sizeof(DeathEventData);
+                    this->world.GetEvents().push_back(deathEvent);
+                    });
+            }
         }
 
         // Center spokes
@@ -558,6 +583,32 @@ public:
                         lwid.timer = initDist(initRng);
                         em.AddComponent<LaserWallID>(e, lwid);
                         em.AddComponent<CenterSpoke>(e, CenterSpoke{});
+
+                        if (isServer)
+                        {
+                            // Spokes run from the cell centre to an edge midpoint, so their
+                            // orientation is the opposite of a border wall with the same dir:
+                            // Down/Up spokes are wide along Y, Left/Right spokes are wide along X.
+                            const bool wideX = (dir == CellCardinalDirection::Left || dir == CellCardinalDirection::Right);
+                            glm::vec2 halfExtents = wideX ? glm::vec2(19.0f, 2.0f) : glm::vec2(2.0f, 19.0f);
+
+                            BoxCollider2D* collider = em.AddComponent<BoxCollider2D>(e, BoxCollider2D{ halfExtents });
+                            collider->isEnabled = false;
+                            collider->layer = CollisionLayer::WALL;
+                            collider->collidesWith = CollisionLayer::PLAYER | CollisionLayer::BULLET;
+                            collider->SetOnCollisionEnter([this](Entity self, Entity other, const CollisionInfo& info) {
+                                Playable* play = this->world.GetEntityManager().GetComponent<Playable>(other);
+                                if (!play) return; // only react to players
+
+                                EventEntry deathEvent;
+                                deathEvent.event.type = AsteroidEventMask::DEATH;
+                                DeathEventData deathData;
+                                deathData.playerId = play->playerId;
+                                std::memcpy(deathEvent.event.data, &deathData, sizeof(DeathEventData));
+                                deathEvent.event.len = sizeof(DeathEventData);
+                                this->world.GetEvents().push_back(deathEvent);
+                                });
+                        }
                     };
 
                 {
@@ -604,11 +655,10 @@ public:
         eventProcessor->RegisterHandler(AsteroidEventMask::BULLET_COLLIDES, std::make_unique<BulletCollidesHandler>());
         eventProcessor->RegisterHandler(AsteroidEventMask::DEATH, std::make_unique<DeathHandler>());
         eventProcessor->RegisterHandler(AsteroidEventMask::DESTROY_TILE, std::make_unique<DestroyTileHandler>());
-        eventProcessor->RegisterHandler(AsteroidEventMask::TOGGLE_WALL, std::make_unique<ToggleWallHandler>());
         eventProcessor->RegisterHandler(AsteroidEventMask::WARN_TILE, std::make_unique<WarnTileHandler>());
-        eventProcessor->RegisterHandler(AsteroidEventMask::WARN_WALL, std::make_unique<WarnWallHandler>());
 
         deltaProcessor->RegisterHandler(DELTA_GAME_POSITIONS, std::make_unique<GamePositionsDeltaHandler>());
+        deltaProcessor->RegisterHandler(DELTA_WALL_STATE, std::make_unique<WallStateDeltaHandler>());
     }
 
     void HashState(const GameStateBlob& state, uint8_t(&outHash)[SHA256_DIGEST_LENGTH]) const override {
@@ -753,7 +803,7 @@ public:
                 Transform* st = em.AddComponent<Transform>(bulletSound, Transform{});
                 st->setPosition(glm::vec3(b.posX, b.posY, 0.0f));
                 DestroyTimer* dt = em.AddComponent<DestroyTimer>(bulletSound, DestroyTimer{});
-                dt->framesRemaining = RENDER_TICKS_PER_SECOND * 3;
+                dt->framesRemaining = CurrentTargetFPS() * 3;
                 AudioSourceComponent* audio = em.AddComponent<AudioSourceComponent>(
                     bulletSound, AudioSourceComponent("shoot.wav", AudioChannel::SFX, false));
                 audio->play = true;
@@ -848,6 +898,7 @@ public:
 		world.GetEntityManager().RegisterComponentType<LinkAudioToBullet>();
 		world.GetEntityManager().RegisterComponentType<ExitButtonChecker>();
 		world.GetEntityManager().RegisterComponentType<ThrusterSound>();
+		world.GetEntityManager().RegisterComponentType<FluidSurface>();
 
         // Sun
         Entity sunEntity = world.GetEntityManager().CreateEntity();
@@ -1035,10 +1086,21 @@ public:
         lavaTrans->setPosition(glm::vec3(-20.0f, -20.0f, -12.0f));
         lavaTrans->setRotation(glm::vec3(90.0f, 0.0f, 0.0f));
         lavaTrans->setScale(glm::vec3(5.0f, 5.0f, 5.0f));
+
+        auto lavaMat = std::make_shared<Material>("fluid.vert", "lava.frag");
+        // Molten swell — noticeably alive, still slower/heavier than water's chop.
+        lavaMat->setFloat("uWaveAmplitude", 0.45f);
+        lavaMat->setFloat("uWaveSpeed", 0.7f);
+        lavaMat->setFloat("uWaveScale", 4.0f);
+        lavaMat->setVec3("uRockColor", glm::vec3(0.05f, 0.03f, 0.03f));
+        lavaMat->setVec3("uCrackColor", glm::vec3(0.9f, 0.25f, 0.05f));
+        lavaMat->setVec3("uHotColor", glm::vec3(3.0f, 1.1f, 0.15f));
+        lavaMat->setFloat("uEmissiveStrength", 2.5f);
+
         MeshComponent* lavaMesh = world.GetEntityManager().AddComponent<MeshComponent>(
-            lavaFloor, MeshComponent(new Mesh("lava.glb",
-                std::make_shared<Material>("ggx.vert", "ggx.frag"))));
+            lavaFloor, MeshComponent(new Mesh("lava.glb", lavaMat)));
         lavaMesh->castShadows = false;
+        world.GetEntityManager().AddComponent<FluidSurface>(lavaFloor, FluidSurface{});
 
         const int x_size = 5;
         const int y_size = 5;
@@ -1209,6 +1271,7 @@ public:
         world.AddSystem(std::make_unique<LaserWallRenderSystem>());
 		world.AddSystem(std::make_unique<UpdateListenerTransformSystem>());
 		world.AddSystem(std::make_unique<ThrustersSoundSystem>());
+        world.AddSystem(std::make_unique<FluidAnimationSystem>());
         world.AddSystem(std::make_unique<DestroyTimerSystem>());
 
         AudioManager::PlayMusic("song.wav", true);

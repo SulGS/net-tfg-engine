@@ -29,6 +29,25 @@ public:
 		std::lock_guard<std::mutex> lock(mtx);
 		Snapshot& snapshot = GetSnapshot(event.frame);
 		snapshot.events.push_back(event);
+
+		// If we've already predicted past this frame, that prediction ran
+		// without this event (it arrived late over the network) and every
+		// snapshot from here to currentFrame is now stale — re-simulate
+		// forward so the event actually takes effect instead of sitting
+		// unused in a bygone snapshot. Without this, a late event (e.g.
+		// DESTROY_TILE, DEATH) is silently dropped from the client's
+		// predicted state.
+		if (event.frame < currentFrame)
+		{
+			gameLogic->Synchronize(snapshot.state);
+			for (int frame = event.frame; frame < currentFrame; ++frame) {
+				SimulateFrame(frame, true);
+			}
+
+			Snapshot& lastSnapshot = GetSnapshot(currentFrame);
+			currentState.len = lastSnapshot.state.len;
+			memcpy(currentState.data, lastSnapshot.state.data, currentState.len);
+		}
 	}
 
 	void OnServerInputUpdate(const InputEntry& inputEntry) {

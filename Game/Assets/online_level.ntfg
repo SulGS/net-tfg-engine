@@ -6,6 +6,9 @@ bullet.glb
 charge.glb
 ggx.vert
 ggx.frag
+fluid.vert
+water.frag
+lava.frag
 ship_low.glb
 generic_texture.vert
 generic_texture.frag

@@ -84,7 +84,7 @@ public:
 class TextAnimationData : public IComponent {
 public:
     bool active = false;
-    int remainTicks = RENDER_TICKS_PER_SECOND / 4;
+    int remainTicks = CurrentTargetFPS() / 4;
     int currentState = 0;
 
     std::string errorMessage = "";
@@ -125,7 +125,7 @@ class TextAnimationSystem : public ISystem {
             animData->remainTicks--;
             if (animData->remainTicks <= 0) {
                 animData->currentState = (animData->currentState + 1) % 4;
-                animData->remainTicks = RENDER_TICKS_PER_SECOND / 4;
+                animData->remainTicks = CurrentTargetFPS() / 4;
                 switch (animData->currentState) {
                 case 0:
                     text->text = "Conectando.";
@@ -402,6 +402,19 @@ public:
             g_menuForm.clientName = nameInput->text;
             OpenSettingsFrom(MENU_SCENE_ID);
             };
+
+		Entity exitButton = em.CreateEntity();
+		element = em.AddComponent<UIElement>(exitButton, UIElement{});
+		element->anchor = UIAnchor::TOP_LEFT;
+		element->position = glm::vec2(100.0f, 260.0f);
+		element->size = glm::vec2(300.0f, 40.0f);
+		element->layer = 10;
+
+		UIButton* exitBtn = em.AddComponent<UIButton>(exitButton);
+		exitBtn->text = "Salir";
+		exitBtn->onClick = []() {
+			ClientWindow::GetWindow()->close();
+			};
 
         Entity player = em.CreateEntity();
         em.AddComponent<Playable>(player, Playable{ 0, MakeZeroInputBlob(), true });

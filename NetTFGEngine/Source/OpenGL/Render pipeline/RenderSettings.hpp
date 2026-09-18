@@ -18,6 +18,16 @@ enum class QualityPreset
     Ultra
 };
 
+// Windowed: normal decorated window. Borderless: undecorated window sized to
+// cover the monitor (a.k.a. "borderless fullscreen"), keeps alt-tab fast.
+// Fullscreen: exclusive fullscreen via glfwSetWindowMonitor.
+enum class WindowMode
+{
+    Windowed,
+    Borderless,
+    Fullscreen
+};
+
 // Global singleton. [Init-time] settings must be set before RenderSystem::Init() (or re-Init() to apply); [Runtime] settings can change anytime.
 class RenderSettings
 {
@@ -39,6 +49,19 @@ public:
 
     int  texBaseMip()     const { return m_baseMip; }
     bool texCompression() const { return m_useCompression; }
+
+    // RUNTIME — RENDER LOOP: caps how fast ClientWindow's render thread spins
+    // (see renderLoop() in netcode/client_window.hpp). Deliberately not part
+    // of applyPreset(): a quality tier shouldn't dictate frame rate, and
+    // resetToPreset() must not silently change it.
+    void setTargetFPS(int v) { m_targetFPS = std::clamp(v, 1, 360); }
+    int  getTargetFPS() const { return m_targetFPS; }
+
+    // RUNTIME — WINDOW: just persisted state here; ClientWindow/OpenGLWindow
+    // (which own the GLFW window) apply it. Deliberately not part of
+    // applyPreset(), same reasoning as targetFPS above.
+    void       setWindowMode(WindowMode v) { m_windowMode = v; }
+    WindowMode getWindowMode() const { return m_windowMode; }
 
     // INIT-TIME SETTINGS
     void setMaxLights(int v) { m_maxLights = v; }
@@ -202,6 +225,11 @@ public:
             const float   v = static_cast<float>(d);
 
             if (k == "preset") { /* ya aplicado arriba */ }
+            else if (k == "targetFPS")            setTargetFPS(i);
+            else if (k == "windowMode")
+            {
+                if (i >= 0 && i <= 2) setWindowMode(static_cast<WindowMode>(i));
+            }
             else if (k == "maxLights")            setMaxLights(i);
             else if (k == "maxShadowLights")      setMaxShadowLights(i);
             else if (k == "msaaSamples")          setMsaaSamples(i);
@@ -261,6 +289,9 @@ public:
         // preset first: on load it is applied before everything else, and the
         // remaining keys override it field by field.
         f << "preset " << static_cast<int>(m_preset) << "\n";
+
+        f << "targetFPS " << m_targetFPS << "\n";
+        f << "windowMode " << static_cast<int>(m_windowMode) << "\n";
 
         f << "maxLights " << m_maxLights << "\n";
         f << "maxShadowLights " << m_maxShadowLights << "\n";
@@ -370,6 +401,7 @@ private:
         switch (m_preset)
         {
         case QualityPreset::VeryLow:
+			m_targetFPS = 30;
             m_baseMip = 3;
             m_useCompression = true;
             m_maxLights = 64;
@@ -394,6 +426,7 @@ private:
             break;
 
         case QualityPreset::Low:
+			m_targetFPS = 30;
             m_baseMip = 2;
             m_useCompression = true;
             m_maxLights = 128;
@@ -418,6 +451,7 @@ private:
             break;
 
         case QualityPreset::Medium:
+			m_targetFPS = 60;
             m_baseMip = 1;
             m_useCompression = true;
             m_maxLights = 256;
@@ -452,6 +486,7 @@ private:
             break;
 
         case QualityPreset::High:
+			m_targetFPS = 144;
             m_baseMip = 0;
             m_useCompression = true;
             m_maxLights = 512;
@@ -486,6 +521,7 @@ private:
             break;
 
         case QualityPreset::Ultra:
+			m_targetFPS = 240;
             m_baseMip = 0;
             m_useCompression = false;
             m_maxLights = 1024;
@@ -526,6 +562,12 @@ private:
     QualityPreset m_preset = QualityPreset::High;
     int           m_baseMip = 0;
     bool          m_useCompression = true;
+
+    // Render loop
+    int m_targetFPS = 144;
+
+    // Window
+    WindowMode m_windowMode = WindowMode::Windowed;
 
     // Init-time
     int   m_maxLights = 512;

@@ -38,6 +38,10 @@ OpenGLWindow::OpenGLWindow(int width, int height, const std::string& title)
     glViewport(0, 0, currentWidth, currentHeight);
 
     glfwGetWindowSize(window, &logicalWidth, &logicalHeight);
+
+    glfwGetWindowPos(window, &windowedX, &windowedY);
+    windowedWidth = logicalWidth;
+    windowedHeight = logicalHeight;
 }
 
 OpenGLWindow::~OpenGLWindow() {
@@ -67,6 +71,58 @@ void OpenGLWindow::releaseContext() {
 
 void OpenGLWindow::close() {
     glfwSetWindowShouldClose(window, GLFW_TRUE);
+}
+
+WindowMode OpenGLWindow::getWindowMode() const {
+    if (glfwGetWindowMonitor(window) != nullptr) return WindowMode::Fullscreen;
+    if (!glfwGetWindowAttrib(window, GLFW_DECORATED)) return WindowMode::Borderless;
+    return WindowMode::Windowed;
+}
+
+void OpenGLWindow::setWindowMode(WindowMode mode) {
+    if (mode == getWindowMode()) return;
+
+    // Remember the windowed geometry before leaving it, so Windowed can be
+    // restored exactly regardless of how many times Borderless/Fullscreen
+    // were toggled in between.
+    if (getWindowMode() == WindowMode::Windowed) {
+        glfwGetWindowPos(window, &windowedX, &windowedY);
+        glfwGetWindowSize(window, &windowedWidth, &windowedHeight);
+    }
+
+    switch (mode) {
+    case WindowMode::Windowed:
+        glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_TRUE);
+        glfwSetWindowMonitor(window, nullptr, windowedX, windowedY, windowedWidth, windowedHeight, 0);
+        break;
+
+    case WindowMode::Borderless:
+    {
+        GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+        const GLFWvidmode* mode_ = glfwGetVideoMode(monitor);
+        int monitorX, monitorY;
+        glfwGetMonitorPos(monitor, &monitorX, &monitorY);
+
+        // Drop exclusive fullscreen first (monitor = nullptr): GLFW only
+        // honors GLFW_DECORATED changes on a windowed-mode window.
+        glfwSetWindowMonitor(window, nullptr, monitorX, monitorY, mode_->width, mode_->height, 0);
+        glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_FALSE);
+        // Re-assert geometry: removing the border can shift the client area.
+        glfwSetWindowPos(window, monitorX, monitorY);
+        glfwSetWindowSize(window, mode_->width, mode_->height);
+        break;
+    }
+
+    case WindowMode::Fullscreen:
+    {
+        GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+        const GLFWvidmode* mode_ = glfwGetVideoMode(monitor);
+        // Restore decoration so a later direct switch back to Windowed looks right.
+        glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_TRUE);
+        glfwSetWindowMonitor(window, monitor, 0, 0, mode_->width, mode_->height, mode_->refreshRate);
+        break;
+    }
+    }
 }
 
 int OpenGLWindow::getWidth()  const { return currentWidth; }

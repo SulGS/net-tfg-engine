@@ -27,79 +27,13 @@ public:
     }
 };
 
-class WarnWallHandler : public IEventHandler {
-public:
-    void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
-    {
-        auto ev = *reinterpret_cast<const WarnWallEventData*>(event.data);
-        EntityManager& em = world.GetEntityManager();
-
-        if (ev.isSpoke)
-        {
-            auto query = em.CreateQuery<LaserWallID, CenterSpoke>();
-            for (auto [entity, lwid, spoke] : query)
-            {
-                if (lwid->cellId == ev.cellId && lwid->dir == ev.dir)
-                {
-                    lwid->warning = ev.warning;
-                    break;
-                }
-            }
-        }
-        else
-        {
-            auto query = em.CreateQuery<LaserWallID>();
-            for (auto [entity, lwid] : query)
-            {
-                if (em.GetComponent<CenterSpoke>(entity) != nullptr) continue;
-                if (lwid->cellId == ev.cellId && lwid->dir == ev.dir)
-                {
-                    lwid->warning = ev.warning;
-                    break;
-                }
-            }
-        }
-    }
-};
-
-class ToggleWallHandler : public IEventHandler {
-public:
-    void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
-    {
-        auto ev = *reinterpret_cast<const ToggleWallEventData*>(event.data);
-
-        if (ev.isSpoke)
-        {
-            auto query = world.GetEntityManager().CreateQuery<LaserWallID, CenterSpoke>();
-            for (auto [entity, lwid, spoke] : query)
-            {
-                if (lwid->cellId == ev.cellId && lwid->dir == ev.dir)
-                {
-                    lwid->enabled = ev.enabled;
-                    break;
-                }
-            }
-        }
-        else
-        {
-            auto query = world.GetEntityManager().CreateQuery<LaserWallID>();
-            for (auto [entity, lwid] : query)
-            {
-                if (world.GetEntityManager().GetComponent<CenterSpoke>(entity) != nullptr) continue;
-                if (lwid->cellId == ev.cellId && lwid->dir == ev.dir)
-                {
-                    lwid->enabled = ev.enabled;
-                    break;
-                }
-            }
-        }
-    }
-};
-
 class DestroyTileHandler : public IEventHandler {
     static const int MAP_SIZE = 5;
     static const int y_size = MAP_SIZE;
     static const int x_size = MAP_SIZE;
+
+    // Tiles are 80 units wide, centred every 80 units (see InitECSLogic).
+    static constexpr float TILE_HALF_SIZE = 40.0f;
 
     // Returns the neighbour cellId in the given direction, or -1 if out of bounds
     int NeighbourCell(int cellId, CellCardinalDirection dir)
@@ -118,6 +52,21 @@ class DestroyTileHandler : public IEventHandler {
         return cx * y_size + cy;
     }
 
+    bool IsOverActiveTile(EntityManager& em, float posX, float posY)
+    {
+        auto tileQuery = em.CreateQuery<TileID, Transform>();
+        for (auto [entity, tileId, transform] : tileQuery)
+        {
+            if (!tileId->active) continue;
+
+            glm::vec3 p = transform->getPosition();
+            if (posX >= p.x - TILE_HALF_SIZE && posX < p.x + TILE_HALF_SIZE &&
+                posY >= p.y - TILE_HALF_SIZE && posY < p.y + TILE_HALF_SIZE)
+                return true;
+        }
+        return false;
+    }
+
 public:
     void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
     {
@@ -134,6 +83,27 @@ public:
                     tileId->active = false;
                     break;
                 }
+            }
+        }
+
+        // Any ship no longer over an active tile falls into the void.
+        if (isServer)
+        {
+            auto shipQuery = em.CreateQuery<Playable, SpaceShip, Transform>();
+            for (auto [entity, play, ship, transform] : shipQuery)
+            {
+                if (!ship->isAlive) continue;
+
+                glm::vec3 pos = transform->getPosition();
+                if (IsOverActiveTile(em, pos.x, pos.y)) continue;
+
+                EventEntry deathEvent;
+                deathEvent.event.type = AsteroidEventMask::DEATH;
+                DeathEventData deathData;
+                deathData.playerId = play->playerId;
+                std::memcpy(deathEvent.event.data, &deathData, sizeof(DeathEventData));
+                deathEvent.event.len = sizeof(DeathEventData);
+                world.GetEvents().push_back(deathEvent);
             }
         }
     }

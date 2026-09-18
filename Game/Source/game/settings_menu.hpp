@@ -321,6 +321,7 @@ public:
     enum Tab
     {
         TAB_CALIDAD = 0,
+        TAB_SONIDO,
         TAB_SOMBRAS,
         TAB_IMAGEN,
         TAB_EFECTOS,
@@ -366,6 +367,7 @@ public:
 
         BuildChrome(em, data, baseLayer);
         BuildQualityTab(em, data, baseLayer);
+        BuildSoundTab(em, data, baseLayer);
         BuildShadowsTab(em, data, baseLayer);
         BuildImageTab(em, data, baseLayer);
         BuildEffectsTab(em, data, baseLayer);
@@ -383,14 +385,16 @@ private:
         // El boton que lleva a esta escena vive en el menu principal
         // (ver menu.hpp); aqui solo esta el de vuelta, en el pie.
         MakeText(em, glm::vec2(0.0f, TITLE_Y), glm::vec2(420.0f, 40.0f),
-            baseLayer + 1, "Ajustes graficos", 24.0f,
+            baseLayer + 1, "Ajustes", 24.0f,
             SettingsWidget::Vis::Always, 0);
 
         static const char* tabNames[TAB_COUNT] =
-        { "Calidad", "Sombras", "Imagen", "Efectos", "Avanzado" };
+        { "Calidad", "Sonido", "Sombras", "Imagen", "Efectos", "Avanzado" };
 
-        const float tabW = 164.0f;
-        const float tabStep = 174.0f;
+        // Sized to fit whatever TAB_COUNT is, with a small margin either
+        // side of the panel, instead of a fixed width that only fit 5 tabs.
+        const float tabStep = std::min(174.0f, (PANEL_W - 40.0f) / static_cast<float>(TAB_COUNT));
+        const float tabW = tabStep - 10.0f;
         const float tabStart = -((TAB_COUNT - 1) * tabStep) * 0.5f;
 
         for (int i = 0; i < TAB_COUNT; ++i)
@@ -445,10 +449,11 @@ private:
             baseLayer + 2, "Guardar cambios",
             [data]()
             {
-                const bool ok = RenderSettings::instance().save();
+                const bool ok = RenderSettings::instance().save()
+                    && AudioManager::SaveAudioSettings();
                 data->SetStatus(ok
                     ? "Ajustes guardados"
-                    : "No se pudo escribir render_settings.cfg");
+                    : "No se pudo escribir la configuracion");
             },
             SettingsWidget::Vis::Always, 0);
 
@@ -460,6 +465,7 @@ private:
                 // en vivo, asi que no hay nada que descartar y perderlos
                 // al reiniciar solo seria una sorpresa desagradable.
                 RenderSettings::instance().save();
+                AudioManager::SaveAudioSettings();
                 CloseSettings();
             },
             SettingsWidget::Vis::Always, 0);
@@ -482,6 +488,50 @@ private:
                 // anisotropia, asi que hace falta el reinit completo.
                 data->pendingRenderReInit = true;
             });
+
+        // Puro ritmo del bucle de render (ver renderLoop() en client_window.hpp):
+        // se aplica en el siguiente tick, sin reinit.
+        AddIntChoice(em, data, baseLayer, TAB_CALIDAD, row++, "Limite de FPS",
+            { 30, 60, 90, 120, 144, 165, 240 }, "",
+            []() { return RenderSettings::instance().getTargetFPS(); },
+            [](int v) { RenderSettings::instance().setTargetFPS(v); });
+
+        // Aplicado directamente sobre GLFW: el onClick corre en el hilo de
+        // render (dentro de world.Update(), llamado desde Render() en
+        // renderLoop()), asi que tocar la ventana aqui es seguro.
+        AddChoice(em, data, baseLayer, TAB_CALIDAD, row++, "Modo de ventana",
+            { "Ventana", "Sin bordes", "Pantalla completa" },
+            []() { return static_cast<int>(RenderSettings::instance().getWindowMode()); },
+            [](int idx)
+            {
+                const WindowMode mode = static_cast<WindowMode>(idx);
+                RenderSettings::instance().setWindowMode(mode);
+                if (OpenGLWindow* window = ClientWindow::GetWindow())
+                    window->setWindowMode(mode);
+            });
+    }
+
+    // SONIDO: cada slider lee/escribe directamente el volumen en bruto del
+    // canal (AudioManager::*ChannelVolume ya es el estado en vivo, no hay
+    // copia intermedia); "Volumen general" es el canal MASTER, que
+    // AudioChannelManager::GetVolume multiplica sobre el resto al reproducir.
+    static void BuildSoundTab(EntityManager& em, SettingsPanelData* data, int baseLayer)
+    {
+        int row = 0;
+
+        auto addChannelSlider = [&](const std::string& label, AudioChannel channel)
+            {
+                AddSlider(em, baseLayer, TAB_SONIDO, row++, label,
+                    0.0f, 100.0f, 1.0f, 0, "%",
+                    [channel]() { return AudioManager::GetChannelVolume(channel) * 100.0f; },
+                    [channel](float v) { AudioManager::SetChannelVolume(channel, v / 100.0f); });
+            };
+
+        addChannelSlider("Volumen general", AudioChannel::MASTER);
+        addChannelSlider("Musica", AudioChannel::MUSIC);
+        addChannelSlider("Efectos", AudioChannel::SFX);
+        addChannelSlider("Voz", AudioChannel::VOICE);
+        addChannelSlider("Interfaz", AudioChannel::UI);
     }
 
     // SOMBRAS

@@ -191,6 +191,29 @@ private:
         return true;
     }
 
+    // Returns the neighbouring cell id a wall would border in the given direction,
+    // or -1 if that neighbour is off the map edge.
+    int NeighborCellId(int cellId, CellCardinalDirection dir)
+    {
+        int cx = cellId / y_size;
+        int cy = cellId % y_size;
+
+        int nx = cx, ny = cy;
+        switch (dir)
+        {
+        case CellCardinalDirection::Left:  nx = cx - 1; break;
+        case CellCardinalDirection::Right: nx = cx + 1; break;
+        case CellCardinalDirection::Down:  ny = cy - 1; break;
+        case CellCardinalDirection::Up:    ny = cy + 1; break;
+        default: break;
+        }
+
+        if (nx < 0 || nx >= x_size || ny < 0 || ny >= y_size)
+            return -1;
+
+        return nx * y_size + ny;
+    }
+
     void BuildWallMap(
         EntityManager& entityManager,
         const std::unordered_set<Entity>& spokeEntities,
@@ -315,12 +338,15 @@ private:
                     q.push({ ncx, ncy, nst });
                 };
 
+            // Same UL/UR/DL/DR pairing as IsCellSubtileConnected's adj matrix:
+            // horizontal pairs (0-1, 2-3) gated by hSpoke, vertical pairs
+            // (0-2, 1-3) gated by vSpoke.
             switch (st)
             {
-            case 0: if (!vSpoke) tryVisit(cx, cy, 1); if (!hSpoke) tryVisit(cx, cy, 2); break;
-            case 1: if (!vSpoke) tryVisit(cx, cy, 0); if (!hSpoke) tryVisit(cx, cy, 3); break;
-            case 2: if (!hSpoke) tryVisit(cx, cy, 0); if (!vSpoke) tryVisit(cx, cy, 3); break;
-            case 3: if (!hSpoke) tryVisit(cx, cy, 1); if (!vSpoke) tryVisit(cx, cy, 2); break;
+            case 0: if (!hSpoke) tryVisit(cx, cy, 1); if (!vSpoke) tryVisit(cx, cy, 2); break;
+            case 1: if (!hSpoke) tryVisit(cx, cy, 0); if (!vSpoke) tryVisit(cx, cy, 3); break;
+            case 2: if (!vSpoke) tryVisit(cx, cy, 0); if (!hSpoke) tryVisit(cx, cy, 3); break;
+            case 3: if (!vSpoke) tryVisit(cx, cy, 1); if (!hSpoke) tryVisit(cx, cy, 2); break;
             }
 
             switch (st)
@@ -356,11 +382,17 @@ private:
             !downBlocked || !rightBlocked,
         };
 
+        // Subtiles: 0=UL, 1=UR, 2=DL, 3=DR.
+        // UL-UR and DL-DR are horizontally adjacent, split by the Down/Up
+        // spokes (hSpoke) — see makeSpoke: Down/Up run along the vertical
+        // centreline, so they block left/right crossing. UL-DL and UR-DR are
+        // vertically adjacent, split by the Left/Right spokes (vSpoke), which
+        // run along the horizontal centreline and block up/down crossing.
         bool adj[4][4] = {
-            { false, !vSpoke, !hSpoke, false   },
-            {!vSpoke, false,  false,  !hSpoke  },
+            { false, !hSpoke, !vSpoke, false   },
             {!hSpoke, false,  false,  !vSpoke  },
-            { false, !hSpoke,!vSpoke,  false   },
+            {!vSpoke, false,  false,  !hSpoke  },
+            { false, !vSpoke,!hSpoke,  false   },
         };
 
         for (int start = 0; start < 4; start++)
@@ -479,7 +511,6 @@ private:
                             lwid->enabled = false;
                             lwid->timer = RandomTimer();
                             SyncCollider(entityManager, entity, false);
-                            EmitToggleWall(events, cellId, dir, false, false, cx, cy);
                             break;
                         }
                         fixedAny = true;
@@ -537,7 +568,6 @@ private:
                         lwid->enabled = false;
                         lwid->timer = RandomTimer();
                         SyncCollider(entityManager, entity, false);
-                        EmitToggleWall(events, cellId, dir, true, false, cx, cy);
                         break;
                     }
                     fixedAny = true;
@@ -682,36 +712,6 @@ private:
         Debug::Info("Arena") << "========================================" << "\n";
     }
 
-    void EmitToggleWall(std::vector<EventEntry>& events, int cellId,
-        CellCardinalDirection dir, bool isSpoke, bool enabled, int cx, int cy)
-    {
-        EventEntry ev;
-        ev.event.type = AsteroidEventMask::TOGGLE_WALL;
-        ToggleWallEventData data;
-        data.cellId = cellId;
-        data.dir = dir;
-        data.isSpoke = isSpoke;
-        data.enabled = enabled;
-        std::memcpy(ev.event.data, &data, sizeof(ToggleWallEventData));
-        ev.event.len = sizeof(ToggleWallEventData);
-        events.push_back(ev);
-    }
-
-    void EmitWarnWall(std::vector<EventEntry>& events, int cellId,
-        CellCardinalDirection dir, bool isSpoke, bool warning)
-    {
-        EventEntry ev;
-        ev.event.type = AsteroidEventMask::WARN_WALL;
-        WarnWallEventData data;
-        data.cellId = cellId;
-        data.dir = dir;
-        data.isSpoke = isSpoke;
-        data.warning = warning;
-        std::memcpy(ev.event.data, &data, sizeof(WarnWallEventData));
-        ev.event.len = sizeof(WarnWallEventData);
-        events.push_back(ev);
-    }
-
     void EmitDestroyTile(std::vector<EventEntry>& events, int tileId)
     {
         Debug::Info("Arena") << "[SERVER] Destroying tile id=" << tileId
@@ -805,7 +805,7 @@ public:
                     activeTiles.push_back({ tileId->id / y_size, tileId->id % y_size });
         }
 
-        // Step 1: update all timers, emit WARN_WALL on warning transition
+        // Step 1: update all timers and the warning flag (synced to clients via DELTA_WALL_STATE)
         {
             auto wallQuery = entityManager.CreateQuery<LaserWallID>();
             for (auto [entity, lwid] : wallQuery)
@@ -822,17 +822,26 @@ public:
                 }
 
                 bool inWarningWindow = (lwid->timer <= WARNING_THRESHOLD && lwid->timer > 0.0f);
-                bool isSpoke = spokeEntities.count(entity) > 0;
+
+                // A wall whose owning or neighbouring cell is the tile currently
+                // scheduled for destruction is about to become a (instantly solid,
+                // un-toggleable) border wall the moment that tile disappears. Without
+                // this it would snap on with zero warning, unlike the falling tile
+                // itself which blinks for TILE_WARNING_THRESHOLD seconds first.
+                if (!lwid->enabled && pendingDestroyTileId != -1 &&
+                    (lwid->cellId == pendingDestroyTileId ||
+                     NeighborCellId(lwid->cellId, lwid->dir) == pendingDestroyTileId))
+                {
+                    inWarningWindow = true;
+                }
 
                 if (inWarningWindow && !lwid->warning)
                 {
                     lwid->warning = true;
-                    EmitWarnWall(events, lwid->cellId, lwid->dir, isSpoke, true);
                 }
                 else if (!inWarningWindow && lwid->warning)
                 {
                     lwid->warning = false;
-                    EmitWarnWall(events, lwid->cellId, lwid->dir, isSpoke, false);
                 }
                 else if (!inWarningWindow)
                 {
@@ -881,7 +890,6 @@ public:
                     {
                         lwid->enabled = true;
                         SyncCollider(entityManager, entity, true);
-                        EmitToggleWall(events, lwid->cellId, lwid->dir, false, true, cx, cy);
                         // Update live map
                         switch (lwid->dir)
                         {
@@ -895,7 +903,6 @@ public:
                     if (lwid->warning)
                     {
                         lwid->warning = false;
-                        EmitWarnWall(events, lwid->cellId, lwid->dir, false, false);
                     }
                     continue;
                 }
@@ -929,9 +936,7 @@ public:
                     if (lwid->warning)
                     {
                         lwid->warning = false;
-                        EmitWarnWall(events, lwid->cellId, lwid->dir, false, false);
                     }
-                    EmitToggleWall(events, lwid->cellId, lwid->dir, false, newEnabled, cx, cy);
                 }
                 else
                 {
@@ -947,7 +952,6 @@ public:
                     if (lwid->warning)
                     {
                         lwid->warning = false;
-                        EmitWarnWall(events, lwid->cellId, lwid->dir, false, false);
                     }
                     lwid->timer = RandomTimer();
                 }
@@ -984,7 +988,6 @@ public:
                         if (lwid->warning)
                         {
                             lwid->warning = false;
-                            EmitWarnWall(events, lwid->cellId, lwid->dir, true, false);
                         }
                         lwid->timer = RandomTimer();
                         continue;
@@ -1014,7 +1017,6 @@ public:
                         if (lwid->warning)
                         {
                             lwid->warning = false;
-                            EmitWarnWall(events, lwid->cellId, lwid->dir, true, false);
                         }
                         lwid->timer = RandomTimer();
                         continue;
@@ -1040,9 +1042,7 @@ public:
                 if (lwid->warning)
                 {
                     lwid->warning = false;
-                    EmitWarnWall(events, lwid->cellId, lwid->dir, true, false);
                 }
-                EmitToggleWall(events, lwid->cellId, lwid->dir, true, newEnabled, cx, cy);
             }
         }
 

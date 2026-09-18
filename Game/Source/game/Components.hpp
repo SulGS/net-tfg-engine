@@ -155,4 +155,11 @@ public:
 	ThrusterSound(int se) : shipEntity(se) {}
 };
 
+// Tag: marks a mesh entity whose Material needs "uTime" refreshed every
+// render frame (fluid.vert/water.frag/lava.frag animation). See
+// FluidAnimationSystem in RenderSystems.hpp.
+class FluidSurface : public IComponent {
+public:
+};
+
 #endif // COMPONENTS_ASTEROIDS

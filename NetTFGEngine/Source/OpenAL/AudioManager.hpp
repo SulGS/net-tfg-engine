@@ -9,6 +9,8 @@
 #include <mutex>
 #include <atomic>
 #include <chrono>
+#include <fstream>
+#include <algorithm>
 
 const int AUDIO_TICKS_PER_SECOND = 30;
 const int AUDIO_MS_PER_TICK = 1000 / AUDIO_TICKS_PER_SECOND;
@@ -38,6 +40,7 @@ public:
             threadRunning = true;
             audioThread = std::thread([]() {
                 audioSystem = new AudioSystem();
+                LoadAudioSettings();
                 Debug::Info("AudioManager") << "Audio system initialized on dedicated thread\n";
                 audioLoop();
                 delete audioSystem;
@@ -115,15 +118,62 @@ public:
         if (audioSystem) audioSystem->SetMusicVolume(volume);
     }
 
+    // Deliberately NOT behind audioMutex: AudioChannelManager is its own
+    // lock-free singleton (see AudioChannels.hpp) precisely so a settings-UI
+    // slider — called from the render thread while it holds the renderer's
+    // EntityManager mutex — can never invert lock order against the audio
+    // thread, which takes audioMutex before that same EntityManager mutex
+    // in AudioSystem::Update(). That inversion used to deadlock the game as
+    // soon as the sound settings tab was opened.
     static void SetChannelVolume(AudioChannel channel, float volume) {
-        std::lock_guard<std::mutex> lock(audioMutex);
-        if (audioSystem) audioSystem->channels.SetVolume(channel, volume);
+        AudioChannelManager::instance().SetVolume(channel, volume);
     }
 
+    // Raw, unscaled channel volume (not multiplied by master) — what the
+    // settings UI should read, so the master slider doesn't visually move
+    // every other slider when dragged.
     static float GetChannelVolume(AudioChannel channel) {
-        std::lock_guard<std::mutex> lock(audioMutex);
-        if (audioSystem) return audioSystem->channels.GetVolume(channel);
-        return 1.0f;
+        return AudioChannelManager::instance().GetVolumeRaw(channel);
+    }
+
+    // PERSISTENCE: audio_settings.cfg holds the five channel volumes. Saved
+    // from the settings menu's footer alongside RenderSettings; loaded once,
+    // right after the audio thread creates its AudioSystem (Start() above).
+    static bool SaveAudioSettings() {
+        std::ofstream f("audio_settings.cfg");
+        if (!f.is_open()) return false;
+
+        f << "master " << GetChannelVolume(AudioChannel::MASTER) << "\n";
+        f << "music "  << GetChannelVolume(AudioChannel::MUSIC)  << "\n";
+        f << "sfx "    << GetChannelVolume(AudioChannel::SFX)    << "\n";
+        f << "voice "  << GetChannelVolume(AudioChannel::VOICE)  << "\n";
+        f << "ui "     << GetChannelVolume(AudioChannel::UI)     << "\n";
+
+        return f.good();
+    }
+
+    static bool LoadAudioSettings() {
+        std::ifstream f("audio_settings.cfg");
+        if (!f.is_open()) return false;
+
+        std::string key;
+        float value = 0.0f;
+        bool applied = false;
+
+        while (f >> key >> value) {
+            value = std::clamp(value, 0.0f, 1.0f);
+
+            if (key == "master")      SetChannelVolume(AudioChannel::MASTER, value);
+            else if (key == "music")  SetChannelVolume(AudioChannel::MUSIC, value);
+            else if (key == "sfx")    SetChannelVolume(AudioChannel::SFX, value);
+            else if (key == "voice")  SetChannelVolume(AudioChannel::VOICE, value);
+            else if (key == "ui")     SetChannelVolume(AudioChannel::UI, value);
+            else continue;
+
+            applied = true;
+        }
+
+        return applied;
     }
 
 private:

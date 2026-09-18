@@ -38,7 +38,10 @@ public:
         shutdownOpenAL();
     }
 
-    AudioChannelManager channels;
+    // Lock-free global singleton (see AudioChannels.hpp) — not owned here,
+    // so channel volumes stay valid, and settable, even before this
+    // AudioSystem exists or after it's torn down.
+    AudioChannelManager& channels = AudioChannelManager::instance();
 
     // Returns list of available playback devices (OS names exposed to OpenAL)
     std::vector<std::string> GetAvailableDevices() {
@@ -254,7 +257,7 @@ public:
         alSourceStop(musicSource);
         alSourcei(musicSource, AL_BUFFER, newBuffer);
         alSourcei(musicSource, AL_LOOPING, loop ? AL_TRUE : AL_FALSE);
-        alSourcef(musicSource, AL_GAIN, musicVolume);
+        alSourcef(musicSource, AL_GAIN, MusicGain());
 
         if (alGetError() != AL_NO_ERROR)
         {
@@ -294,9 +297,17 @@ public:
         musicBuffer = 0;
     }
 
+    // Base mix level for the current track, set by game code (e.g. "play this
+    // music at 25%"); independent of the user's Music/Master channel sliders.
     void SetMusicVolume(float volume) {
         musicVolume = glm::clamp(volume, 0.0f, 1.0f);
-        if (musicSource) alSourcef(musicSource, AL_GAIN, musicVolume);
+        if (musicSource) alSourcef(musicSource, AL_GAIN, MusicGain());
+    }
+
+    // Final music gain: base track level * the user's Music channel volume
+    // (which already folds in Master via AudioChannelManager::GetVolume).
+    float MusicGain() {
+        return musicVolume * channels.GetVolume(AudioChannel::MUSIC);
     }
 
     void Update(EntityManager& entityManager,
@@ -318,6 +329,13 @@ public:
         // 1. REINITIALIZE AFTER DEVICE CHANGE (offsets/entities already restored by ChangeOutputDevice; section 4 re-initializes each source)
         if (needsReinit) {
             needsReinit = false;
+        }
+
+        // 1b. Re-apply music gain every tick so a Music/Master slider drag
+        // updates the currently playing track immediately, not just on the
+        // next PlayMusic() call.
+        if (musicSource) {
+            alSourcef(musicSource, AL_GAIN, MusicGain());
         }
 
         // 2. CLEANUP DELETED ENTITIES
