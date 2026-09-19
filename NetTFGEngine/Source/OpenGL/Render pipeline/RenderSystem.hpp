@@ -48,6 +48,8 @@ using MeshQuery = decltype(
 class RenderSystem : public ISystem {
 public:
 
+    RenderSystem() { drawsFrame = true; }
+
 	bool needsReinit = false;  // Set true to reinitialise all GPU resources next frame
 
     void Init(int screenW, int screenH);

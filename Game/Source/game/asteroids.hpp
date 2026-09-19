@@ -1408,8 +1408,8 @@ public:
         world.AddSystem(std::make_unique<FluidAnimationSystem>());
         world.AddSystem(std::make_unique<DestroyTimerSystem>());
 
-        AudioManager::PlayMusic("song.wav", true);
-        AudioManager::SetMusicVolume(0.25f);
+        AudioManager::PlayMusic("lava_sound.wav", true);
+        AudioManager::SetMusicVolume(1.00f);
     }
 
     void Interpolate(

@@ -20,15 +20,24 @@ OpenGLWindow::OpenGLWindow(int width, int height, const std::string& title)
     glfwSetWindowUserPointer(window, this);
     // Framebuffer resize callback � physical pixels, used for glViewport
     glfwSetFramebufferSizeCallback(window, [](GLFWwindow* win, int w, int h) {
-        glViewport(0, 0, w, h);
+        // Minimizing (e.g. Alt+Tab out of exclusive fullscreen) reports 0x0.
+        // Keep the last real size: resizing the render targets to 0 leaves
+        // every FBO incomplete and turns the aspect ratio into NaN.
+        if (w <= 0 || h <= 0) return;
+
         auto* self = static_cast<OpenGLWindow*>(glfwGetWindowUserPointer(win));
-        self->currentWidth = w;
-        self->currentHeight = h;
-        self->resized = true;
+        glViewport(0, 0, w, h);
+        if (w != self->currentWidth || h != self->currentHeight) {
+            self->currentWidth = w;
+            self->currentHeight = h;
+            self->resized = true;
+        }
         });
 
     // Window size callback � logical pixels, matches glfwGetCursorPos space
     glfwSetWindowSizeCallback(window, [](GLFWwindow* win, int w, int h) {
+        if (w <= 0 || h <= 0) return; // minimized, see framebuffer callback
+
         auto* self = static_cast<OpenGLWindow*>(glfwGetWindowUserPointer(win));
         self->logicalWidth = w;
         self->logicalHeight = h;
@@ -55,6 +64,10 @@ void OpenGLWindow::swapBuffers() {
 
 void OpenGLWindow::pollEvents() {
     glfwPollEvents();
+}
+
+bool OpenGLWindow::isMinimized() const {
+    return glfwGetWindowAttrib(window, GLFW_ICONIFIED) == GLFW_TRUE;
 }
 
 bool OpenGLWindow::shouldClose() const {

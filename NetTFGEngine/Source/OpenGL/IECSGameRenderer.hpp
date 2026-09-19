@@ -123,7 +123,8 @@ public:
         auto activeCamera = em.CreateQuery<Camera, Transform>();
 
         for (auto [entity, camera, transform] : activeCamera) {
-            camera->updateAspectRatio(static_cast<float>(window->getWidth()) / window->getHeight());
+            if (window->getHeight() > 0)
+                camera->updateAspectRatio(static_cast<float>(window->getWidth()) / window->getHeight());
             break; // Only one camera supported for now
         }
 
@@ -134,7 +135,8 @@ public:
         ui_update->UpdateScreenSize(window->getLogicalWidth(), window->getLogicalHeight());
 
         auto t1 = std::chrono::high_resolution_clock::now();
-        world.Update(false, 1.0f / CurrentTargetFPS());
+        // Minimized: keep game/audio systems advancing, skip only GL drawing.
+        world.Update(false, 1.0f / CurrentTargetFPS(), window->isMinimized());
 
 		for (auto& system : world.GetSystems()) {
 			if (system.get()->requestRenderReinit) {

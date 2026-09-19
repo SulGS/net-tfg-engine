@@ -40,6 +40,9 @@ void RenderSystem::Init(int screenW, int screenH)
 
 void RenderSystem::Resize(int screenW, int screenH)
 {
+    // A 0-sized target (minimized window) makes every FBO incomplete.
+    if (screenW <= 0 || screenH <= 0) return;
+
     m_screenW = screenW;
     m_screenH = screenH;
 

@@ -366,6 +366,10 @@ public:
     bool emitGameFinishEvent = false;
 	bool requestRenderReinit = false;
 
+    // True for systems whose Update() only issues GL draw calls (no game/ECS
+    // state); ECSWorld::Update() can skip them while the window is minimized.
+    bool drawsFrame = false;
+
     virtual ~ISystem() = default;
     virtual void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) = 0;
 };
@@ -391,10 +395,13 @@ public:
         entityManager.Reset();
     }
 
-    bool Update(bool isServer, float deltaTime) {
+    // skipDrawSystems: run every system except the ones flagged drawsFrame,
+    // so game/audio state keeps advancing with nothing to draw into.
+    bool Update(bool isServer, float deltaTime, bool skipDrawSystems = false) {
         bool gameFinished = false;
 
         for (auto& system : systems) {
+            if (skipDrawSystems && system->drawsFrame) continue;
             system->Update(entityManager, events, isServer, deltaTime);
             if (system->emitGameFinishEvent) gameFinished = true;
         }

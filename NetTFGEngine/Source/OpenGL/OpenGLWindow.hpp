@@ -13,6 +13,9 @@ public:
     void swapBuffers();
     void pollEvents();
     bool shouldClose() const;
+    // True while iconified (also what Alt+Tab from exclusive fullscreen does);
+    // the framebuffer is 0x0 then, so callers should skip rendering.
+    bool isMinimized() const;
     void makeContextCurrent();
     void releaseContext();
     void close();

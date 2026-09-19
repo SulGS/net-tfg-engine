@@ -312,6 +312,12 @@ private:
                 instances = activeInstances;
             }
 
+            // Iconified (Alt+Tab out of fullscreen): the framebuffer is 0x0, so
+            // there is nothing to present. The render callback still runs so
+            // ECS/audio state keeps advancing (it skips its draw systems when
+            // minimized); only the buffer swap is skipped.
+            const bool minimized = window->isMinimized();
+
             for (ClientWindow* instance : instances) {
                 if (!instance || !instance->gRunning) continue;
 
@@ -384,7 +390,7 @@ private:
                 }
             }
 
-            window->swapBuffers();
+            if (!minimized) window->swapBuffers();
 
             // Signal-only: NetTFG_Engine::Start() sees IsCloseRequested() and runs shutdown; stopRenderThread() sets threadRunning false once done.
             if (!closeRequested && window->shouldClose()) {

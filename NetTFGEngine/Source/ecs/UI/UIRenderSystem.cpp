@@ -77,6 +77,7 @@ UIRenderSystem::UIRenderSystem(int refWidth, int refHeight)
     , pressedButton(0)
     , fontManager(std::make_unique<FontManager>())
 {
+    drawsFrame = true;
     InitializeShaders();
     InitializeQuad();
     InitializeTextRendering();
