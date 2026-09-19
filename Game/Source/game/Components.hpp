@@ -2,6 +2,8 @@
 #define COMPONENTS_ASTEROIDS
 
 #include "ecs/ecs_common.hpp"
+#include "GameState.hpp"
+#include <unordered_set>
 
 enum class CellCardinalDirection {
 	None,
@@ -11,11 +13,89 @@ enum class CellCardinalDirection {
 	Left
 };
 
+inline CellCardinalDirection OppositeDirection(CellCardinalDirection dir)
+{
+	switch (dir)
+	{
+	case CellCardinalDirection::Left:  return CellCardinalDirection::Right;
+	case CellCardinalDirection::Right: return CellCardinalDirection::Left;
+	case CellCardinalDirection::Down:  return CellCardinalDirection::Up;
+	case CellCardinalDirection::Up:    return CellCardinalDirection::Down;
+	default: return CellCardinalDirection::None;
+	}
+}
+
+// Returns the neighbouring cell id sharing an edge with `cellId` in `dir`,
+// or -1 if that neighbour would fall outside the MAP_SIZE x MAP_SIZE grid.
+inline int NeighborCellId(int cellId, CellCardinalDirection dir)
+{
+	int cx = cellId / MAP_SIZE;
+	int cy = cellId % MAP_SIZE;
+
+	int nx = cx, ny = cy;
+	switch (dir)
+	{
+	case CellCardinalDirection::Left:  nx = cx - 1; break;
+	case CellCardinalDirection::Right: nx = cx + 1; break;
+	case CellCardinalDirection::Down:  ny = cy - 1; break;
+	case CellCardinalDirection::Up:    ny = cy + 1; break;
+	default: break;
+	}
+
+	if (nx < 0 || nx >= MAP_SIZE || ny < 0 || ny >= MAP_SIZE)
+		return -1;
+
+	return nx * MAP_SIZE + ny;
+}
+
+// A shared interior edge is now represented by exactly ONE LaserWallID
+// entity (see the wall-building loops in asteroids.hpp), owned by whichever
+// of its two cells happened to be visited first. Since either side can die
+// independently (a tile getting destroyed), classifying "is this wall solid"
+// has to look at BOTH the entity's own stored cell and its geometric
+// neighbour, not just the one it happens to be stored under:
+//   - both cells alive       -> Interior: normal random on/off toggling.
+//   - exactly one cell alive -> SoleBorder: forced solid, protects the
+//     survivor from falling into the void where the other cell used to be.
+//   - neither cell alive (or this is a map-edge wall whose only cell died)
+//     -> Dead: forced off, hidden, no collider.
+enum class WallEdgeState { Interior, SoleBorder, Dead };
+
+inline WallEdgeState ClassifyWallEdge(int cellId, CellCardinalDirection dir,
+	const std::unordered_set<int>& activeCellIds)
+{
+	bool selfActive = activeCellIds.count(cellId) > 0;
+	int neighborId = NeighborCellId(cellId, dir);
+
+	if (neighborId == -1)
+		return selfActive ? WallEdgeState::SoleBorder : WallEdgeState::Dead;
+
+	bool neighborActive = activeCellIds.count(neighborId) > 0;
+	if (selfActive && neighborActive) return WallEdgeState::Interior;
+	if (selfActive != neighborActive) return WallEdgeState::SoleBorder;
+	return WallEdgeState::Dead;
+}
+
 struct CenterSpoke : public IComponent {
 	// Marker component for walls that go from cell center to edge midpoint
 };
 
-// Laser walls: each owned by one cell, facing one direction; border walls start enabled, interior ones disabled.
+// Singleton (one entity, both worlds): counts down the pre-match freeze —
+// see MatchStartSystem in LogicSystems.hpp. Synced through
+// AsteroidShooterGameState::startCountdownTicks (piggybacked on
+// GamePositionsDelta, which is already sent every tick) so the client's
+// local prediction blocks input in lockstep with the server instead of
+// drifting during the freeze.
+class MatchStartTimer : public IComponent {
+public:
+	int ticksRemaining;
+	MatchStartTimer() : ticksRemaining(0) {}
+	MatchStartTimer(int t) : ticksRemaining(t) {}
+};
+
+// Laser walls: each shared edge is ONE entity, stored from one of its two
+// bordering cells' point of view (see ClassifyWallEdge above for why both
+// sides still matter); border walls start enabled, interior ones disabled.
 struct WallDef
 {
 	int                   cellX, cellY;
@@ -159,6 +239,16 @@ public:
 // render frame (fluid.vert/water.frag/lava.frag animation). See
 // FluidAnimationSystem in RenderSystems.hpp.
 class FluidSurface : public IComponent {
+public:
+};
+
+// Tag: marks the game's own status label (health/"REMAINING"/"YOU DIED"/
+// winner text) so CreateQuery<UIElement, UIText>() in RenderSystems.hpp
+// only ever matches that one entity. Without it, those queries also pick up
+// any other UIText in the same EntityManager — e.g. the DebugOverlay FPS/
+// latency label that IECSGameRenderer::Init() adds to every scene — and
+// reposition/overwrite it along with the real HUD text.
+class GameStatusText : public IComponent {
 public:
 };
 

@@ -43,6 +43,17 @@ public:
 class InputSystem : public ISystem {
 public:
     void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
+        // Pre-match freeze: no movement, rotation or shooting until the
+        // countdown reaches 0. Runs identically on client and server (this
+        // system isn't isServer-gated) since MatchStartTimer is synced —
+        // skipping here, not just gating the server's bullet spawn, keeps
+        // client-side prediction from drifting ahead during the freeze.
+        {
+            auto timerQuery = entityManager.CreateQuery<MatchStartTimer>();
+            for (auto [entity, timer] : timerQuery)
+                if (timer->ticksRemaining > 0) return;
+        }
+
         auto query = entityManager.CreateQuery<Transform, Playable, SpaceShip>();
         for (auto [entity, transform, play, ship] : query) {
             InputBlob input = play->input;
@@ -137,6 +148,21 @@ public:
     }
 };
 
+// Server-authoritative pre-match countdown. Ticks the single MatchStartTimer
+// entity down to 0; InputSystem and ArenaSystem both gate on it reading the
+// synced result (see the comment in InputSystem::Update), so this is the
+// only place that actually decrements it.
+class MatchStartSystem : public ISystem {
+public:
+    void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
+        if (!isServer) return;
+
+        auto query = entityManager.CreateQuery<MatchStartTimer>();
+        for (auto [entity, timer] : query)
+            if (timer->ticksRemaining > 0) timer->ticksRemaining--;
+    }
+};
+
 class ArenaSystem : public ISystem {
 private:
     std::mt19937 rng{ std::random_device{}() };
@@ -191,27 +217,32 @@ private:
         return true;
     }
 
-    // Returns the neighbouring cell id a wall would border in the given direction,
-    // or -1 if that neighbour is off the map edge.
-    int NeighborCellId(int cellId, CellCardinalDirection dir)
+    // NeighborCellId/OppositeDirection/ClassifyWallEdge now live in
+    // Components.hpp as free functions: RenderSystems.hpp's
+    // LaserWallRenderSystem needs the exact same edge classification, and
+    // duplicating it here would risk the two definitions drifting apart.
+
+    // A shared edge is one LaserWallID entity, stored under one of its two
+    // bordering cells (see the wall-building loops in asteroids.hpp).
+    // FixInitialReachability wants to disable "cell X's wall in direction D"
+    // by that (cellId,dir) pair, but the entity might actually be stored
+    // under the NEIGHBOUR's (opposite) perspective — this checks both.
+    Entity FindWallEntity(EntityManager& entityManager,
+        const std::unordered_set<Entity>& spokeEntities,
+        int cellId, CellCardinalDirection dir)
     {
-        int cx = cellId / y_size;
-        int cy = cellId % y_size;
+        int neighborCellId = NeighborCellId(cellId, dir);
+        CellCardinalDirection oppositeDir = OppositeDirection(dir);
 
-        int nx = cx, ny = cy;
-        switch (dir)
+        auto wallQuery = entityManager.CreateQuery<LaserWallID>();
+        for (auto [entity, lwid] : wallQuery)
         {
-        case CellCardinalDirection::Left:  nx = cx - 1; break;
-        case CellCardinalDirection::Right: nx = cx + 1; break;
-        case CellCardinalDirection::Down:  ny = cy - 1; break;
-        case CellCardinalDirection::Up:    ny = cy + 1; break;
-        default: break;
+            if (spokeEntities.count(entity)) continue;
+            if (lwid->cellId == cellId && lwid->dir == dir) return entity;
+            if (neighborCellId != -1 && lwid->cellId == neighborCellId && lwid->dir == oppositeDir)
+                return entity;
         }
-
-        if (nx < 0 || nx >= x_size || ny < 0 || ny >= y_size)
-            return -1;
-
-        return nx * y_size + ny;
+        return 0;
     }
 
     void BuildWallMap(
@@ -236,13 +267,16 @@ private:
         for (auto [entity, lwid] : wallQuery)
         {
             if (!lwid->enabled) continue;
-            if (!activeTileSet.count(lwid->cellId)) continue;
 
             int cx = lwid->cellId / y_size;
             int cy = lwid->cellId % y_size;
 
             if (spokeEntities.count(entity))
             {
+                // Spokes are single-owner (never a shared edge): only their
+                // own cell matters.
+                if (!activeTileSet.count(lwid->cellId)) continue;
+
                 switch (lwid->dir)
                 {
                 case CellCardinalDirection::Down:  cWalls[cx][cy][0] = true; break;
@@ -254,6 +288,16 @@ private:
             }
             else
             {
+                // Shared edge: a stale "enabled" carried over from the tick
+                // before its owning cell died would otherwise read as a live
+                // wall here even though ArenaSystem's Step 3 hasn't caught up
+                // yet this same tick (BuildWallMap runs before Step 3). Skip
+                // only if NEITHER bordering cell is active — checking just
+                // lwid->cellId would wrongly drop a SoleBorder wall whenever
+                // it happens to be stored under the dead side.
+                if (ClassifyWallEdge(lwid->cellId, lwid->dir, activeTileSet) == WallEdgeState::Dead)
+                    continue;
+
                 switch (lwid->dir)
                 {
                 case CellCardinalDirection::Down:  vWalls[2 * cx][2 * cy] = true; break;
@@ -502,16 +546,15 @@ private:
                     bool fixed = IsCellSubtileConnected(cx, cy, hSpoke, vSpoke, hWalls, vWalls, activeTiles);
                     if (fixed)
                     {
-                        auto wallQuery = entityManager.CreateQuery<LaserWallID>();
-                        for (auto [entity, lwid] : wallQuery)
+                        // The entity for (cellId,dir) may actually be stored
+                        // under the neighbour's opposite-direction view.
+                        Entity wallEntity = FindWallEntity(entityManager, spokeEntities, cellId, dir);
+                        LaserWallID* lwid = wallEntity ? entityManager.GetComponent<LaserWallID>(wallEntity) : nullptr;
+                        if (lwid && lwid->enabled)
                         {
-                            if (spokeEntities.count(entity)) continue;
-                            if (lwid->cellId != cellId || lwid->dir != dir) continue;
-                            if (!lwid->enabled) continue;
                             lwid->enabled = false;
                             lwid->timer = RandomTimer();
-                            SyncCollider(entityManager, entity, false);
-                            break;
+                            SyncCollider(entityManager, wallEntity, false);
                         }
                         fixedAny = true;
                         break;
@@ -787,6 +830,14 @@ public:
     {
         if (!isServer) return;
 
+        // Pre-match freeze: no wall toggling, no tile destruction timer
+        // running, until the countdown reaches 0.
+        {
+            auto timerQuery = entityManager.CreateQuery<MatchStartTimer>();
+            for (auto [entity, timer] : timerQuery)
+                if (timer->ticksRemaining > 0) return;
+        }
+
         // Cache spoke entities once
         std::unordered_set<Entity> spokeEntities;
         {
@@ -798,11 +849,15 @@ public:
         // Cache active tiles once
         std::vector<std::pair<int, int>> activeTiles;
         activeTiles.reserve(MAP_SIZE * MAP_SIZE);
+        std::unordered_set<int> activeCellIds;
         {
             auto tileQuery = entityManager.CreateQuery<TileID>();
             for (auto [entity, tileId] : tileQuery)
                 if (tileId->active)
+                {
                     activeTiles.push_back({ tileId->id / y_size, tileId->id % y_size });
+                    activeCellIds.insert(tileId->id);
+                }
         }
 
         // Step 1: update all timers and the warning flag (synced to clients via DELTA_WALL_STATE)
@@ -812,10 +867,11 @@ public:
             {
                 lwid->timer -= deltaTime;
 
-                bool isBorder = !spokeEntities.count(entity) &&
-                    IsBorderWall(lwid->cellId, lwid->dir, activeTiles);
+                bool isSpoke = spokeEntities.count(entity) > 0;
+                bool notInterior = !isSpoke &&
+                    ClassifyWallEdge(lwid->cellId, lwid->dir, activeCellIds) != WallEdgeState::Interior;
 
-                if (isBorder)
+                if (notInterior)
                 {
                     lwid->warning = false;
                     continue;
@@ -884,8 +940,31 @@ public:
                 int cx = lwid->cellId / y_size;
                 int cy = lwid->cellId % y_size;
 
-                if (IsBorderWall(lwid->cellId, lwid->dir, activeTiles))
+                // ClassifyWallEdge looks at BOTH cells this edge borders, not
+                // just lwid->cellId: since dedup means only one entity exists
+                // per shared edge, the "still alive" side isn't necessarily
+                // the one it happens to be stored under.
+                WallEdgeState edgeState = ClassifyWallEdge(lwid->cellId, lwid->dir, activeCellIds);
+
+                if (edgeState == WallEdgeState::Dead)
                 {
+                    // Neither bordering cell exists anymore (or this is a
+                    // map-edge wall whose only cell died): nothing to
+                    // protect, force off and stop touching it.
+                    if (lwid->enabled)
+                    {
+                        lwid->enabled = false;
+                        SyncCollider(entityManager, entity, false);
+                    }
+                    if (lwid->warning) lwid->warning = false;
+                    continue;
+                }
+
+                if (edgeState == WallEdgeState::SoleBorder)
+                {
+                    // Exactly one side is alive: solid, un-toggleable wall
+                    // protecting that survivor from the void on the other
+                    // side (whether that's the map edge or a destroyed cell).
                     if (!lwid->enabled)
                     {
                         lwid->enabled = true;
@@ -907,6 +986,7 @@ public:
                     continue;
                 }
 
+                // edgeState == Interior: both cells alive, normal random toggle.
                 if (lwid->timer > 0.0f) continue;
 
                 bool newEnabled = !lwid->enabled;
@@ -963,6 +1043,21 @@ public:
             auto spokeQuery = entityManager.CreateQuery<LaserWallID, CenterSpoke>();
             for (auto [entity, lwid, spoke] : spokeQuery)
             {
+                // Same reasoning as the border/interior walls above: a spoke
+                // whose own tile was destroyed must be forced off (and its
+                // collider with it) regardless of its timer, or it can be
+                // left mid-cycle with an active collider under a hidden mesh.
+                if (!activeCellIds.count(lwid->cellId))
+                {
+                    if (lwid->enabled)
+                    {
+                        lwid->enabled = false;
+                        SyncCollider(entityManager, entity, false);
+                    }
+                    if (lwid->warning) lwid->warning = false;
+                    continue;
+                }
+
                 if (lwid->timer > 0.0f) continue;
 
                 int cx = lwid->cellId / y_size;

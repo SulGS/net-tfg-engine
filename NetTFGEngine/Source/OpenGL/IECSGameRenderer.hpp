@@ -18,6 +18,7 @@
 #include "ecs/UI/UITextField.hpp"
 #include "ecs/UI/UIRenderSystem.hpp"
 #include "ecs/UI/UIUpdateSystem.hpp"
+#include "ecs/UI/DebugOverlay.hpp"
 #include "OpenAL/AudioManager.hpp"
 
 #include <functional>
@@ -66,9 +67,15 @@ public:
 
         world.GetEntityManager().RegisterComponentType<ParticleEmitterComponent>();
 
+        DebugOverlay::Register(world.GetEntityManager());
+
         world.AddSystem(std::make_unique<DestroyingSystem>());
 
         InitECSRenderer(state, window);
+
+        // Built after InitECSRenderer so it draws over whatever the scene added.
+        DebugOverlay::Build(world.GetEntityManager());
+        world.AddSystem(std::make_unique<DebugOverlaySystem>());
 
         world.AddSystem(std::make_unique<CameraSystem>());
         world.AddSystem(std::make_unique<ParticleSystem>());

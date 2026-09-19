@@ -20,6 +20,7 @@
 
 #include "Client-Server/Client.hpp"
 #include "Client-Server/InputDelayCalculator.hpp"
+#include "Client-Server/NetworkStats.hpp"
 
 #include "NetTFG_Engine.hpp"
 
@@ -172,6 +173,8 @@ public:
         networkRunning_.store(false);
         if (networkThread_.joinable())
             networkThread_.join();
+
+        NetworkStats::SetConnected(false);
 
         // Recover gameLogic_ (moved into prediction_ by SetupClient) before deleting prediction_, or the next SetupClient crashes on a null gameLogic_.
         if (prediction_) {
@@ -541,6 +544,8 @@ private:
         else if (type == PACKET_INPUT_DELAY) {
             InputDelayPacket packet = net_.ParseInputDelaySync(data, len);
             inputDelayCalc.UpdateRtt(packet.timestamp, TICKS_PER_SECOND);
+            NetworkStats::SetLatencyMs(inputDelayCalc.GetLastLatencyMs());
+            NetworkStats::SetConnected(true);
 
             prediction.UpdateCurrentFrame(inputDelayCalc.GetInputDelayFrames());
         }

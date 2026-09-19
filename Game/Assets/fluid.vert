@@ -63,16 +63,25 @@ vec3 GerstnerDisplace(vec2 posXY, out vec3 dPdx, out vec3 dPdy)
         float s = sin(phase);
         float c = cos(phase);
 
+        // Steepness (Q) factor: caps how far this wave pulls points toward
+        // its crest so that, even with all 4 waves' crests aligned, the
+        // combined horizontal pull can't exceed kMaxSteepness and fold the
+        // surface over itself. Without this, offset.x/y below grows with
+        // uWaveAmplitude unbounded while the underlying point spacing does
+        // not, so steep/choppy settings can self-intersect.
+        const float kMaxSteepness = 0.9;
+        float q = min(1.0, (kMaxSteepness / 4.0) / max(a * k, 1e-4));
+
         // Vertical bob plus a small horizontal pinch toward the wave crest —
         // the pinch is what gives Gerstner waves their sharper, choppier
         // crest shape instead of a plain sine's smooth round top.
         offset.z += a * s;
-        offset.x += -d.x * a * c;
-        offset.y += -d.y * a * c;
+        offset.x += q * d.x * a * c;
+        offset.y += q * d.y * a * c;
 
         float dS = a * k * c;
-        dPdx += vec3(-d.x * d.x * a * k * s, -d.x * d.y * a * k * s, d.x * dS);
-        dPdy += vec3(-d.x * d.y * a * k * s, -d.y * d.y * a * k * s, d.y * dS);
+        dPdx += vec3(-q * d.x * d.x * a * k * s, -q * d.x * d.y * a * k * s, d.x * dS);
+        dPdy += vec3(-q * d.x * d.y * a * k * s, -q * d.y * d.y * a * k * s, d.y * dS);
     }
 
     return offset;
@@ -88,11 +97,30 @@ void main()
     vUV           = aUV;
 
     // Same scale-stripping trick as ggx.vert — see that file for why.
-    mat3 modelMat = mat3(uModel);
-    mat3 rotOnly  = mat3(
-        modelMat[0] / length(modelMat[0]),
-        modelMat[1] / length(modelMat[1]),
-        modelMat[2] / length(modelMat[2])
+    mat3 modelMat   = mat3(uModel);
+    vec3 modelScale = vec3(length(modelMat[0]), length(modelMat[1]), length(modelMat[2]));
+    mat3 rotOnly    = mat3(
+        modelMat[0] / modelScale.x,
+        modelMat[1] / modelScale.y,
+        modelMat[2] / modelScale.z
+    );
+
+    // Unlike aNormal on a static mesh, the wave normal is generated here from
+    // local-space slopes, so it still needs the model's scale undone per
+    // axis, not just its rotation: a non-uniformly scaled plane (e.g. a wide
+    // (50,50,1) fluid surface) stretches the waves wider in world space
+    // without changing their height, so shading the stretched surface with
+    // rotOnly alone would use the pre-stretch (steeper) local slopes. This
+    // divides rotOnly by the same per-axis scale again, which is equivalent
+    // to R * S^-1 (the correct normal transform for an R*S model matrix with
+    // no shear) without calling mat3 inverse() and its precision cost at
+    // large uniform scale. aTangent doesn't need this: it's axis-aligned
+    // (local +X) on this quad mesh, so scale doesn't change its direction
+    // once normalized.
+    mat3 normalMat = mat3(
+        rotOnly[0] / modelScale.x,
+        rotOnly[1] / modelScale.y,
+        rotOnly[2] / modelScale.z
     );
 
     // Analytic normal of the displaced surface replaces aNormal; falls back
@@ -100,7 +128,7 @@ void main()
     // when uWaveAmplitude is 0.
     vec3 waveNormal = normalize(cross(dPdx, dPdy));
 
-    vec3 N = normalize(rotOnly * waveNormal);
+    vec3 N = normalize(normalMat * waveNormal);
     vec3 T = normalize(rotOnly * aTangent.xyz);
     T      = normalize(T - dot(T, N) * N);
     vec3 B = cross(N, T) * aTangent.w;

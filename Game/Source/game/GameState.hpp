@@ -52,4 +52,7 @@ struct AsteroidShooterGameState {
     bool hWallsWarning[2 * MAP_SIZE + 1][2 * MAP_SIZE];
     bool vWallsWarning[2 * MAP_SIZE][2 * MAP_SIZE + 1];
     bool cWallsWarning[MAP_SIZE][MAP_SIZE][4];
+
+    // Pre-match freeze countdown, in ticks; see MatchStartTimer/MatchStartSystem.
+    int startCountdownTicks;
 };

@@ -1,0 +1,14 @@
+<Project>
+  <!--
+    MSBuild auto-imports this file (walking up from each .vcxproj's folder)
+    before Microsoft.Cpp.Default.props, which is exactly when vcpkg reads
+    VcpkgEnableManifest. This is the standard way to make "Use Vcpkg
+    Manifest" stick project-wide without checking it by hand in each
+    project's Properties > vcpkg page — a setting Setup-Windows.bat would
+    otherwise wipe out every time it reruns premake5 and regenerates the
+    .vcxproj files from scratch.
+  -->
+  <PropertyGroup>
+    <VcpkgEnableManifest>true</VcpkgEnableManifest>
+  </PropertyGroup>
+</Project>

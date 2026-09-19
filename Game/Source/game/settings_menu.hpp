@@ -509,6 +509,18 @@ private:
                 if (OpenGLWindow* window = ClientWindow::GetWindow())
                     window->setWindowMode(mode);
             });
+
+        // Activarla vuelve a atar el framerate al refresco del monitor,
+        // por encima del pacer propio del "Limite de FPS" (ver renderLoop());
+        // se deja apagada por defecto para que ese limite mande siempre.
+        AddToggle(em, baseLayer, TAB_CALIDAD, row++, "VSync",
+            []() { return RenderSettings::instance().getVsyncEnabled(); },
+            [](bool v)
+            {
+                RenderSettings::instance().setVsyncEnabled(v);
+                if (OpenGLWindow* window = ClientWindow::GetWindow())
+                    window->setVSync(v);
+            });
     }
 
     // SONIDO: cada slider lee/escribe directamente el volumen en bruto del
@@ -612,6 +624,12 @@ private:
     static void BuildAdvancedTab(EntityManager& em, SettingsPanelData* data, int baseLayer)
     {
         int row = 0;
+
+        // Puramente runtime, sin reinit: DebugOverlaySystem lee el flag cada
+        // frame directamente de RenderSettings.
+        AddToggle(em, baseLayer, TAB_AVANZADO, row++, "Modo Debug (FPS / latencia)",
+            []() { return RenderSettings::instance().getDebugModeEnabled(); },
+            [](bool v) { RenderSettings::instance().setDebugModeEnabled(v); });
 
         AddTierChoice(em, data, baseLayer, TAB_AVANZADO, row++, "Cantidad de luces",
             { 64, 128, 256, 512, 1024 },

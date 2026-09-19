@@ -20,6 +20,12 @@ public:
     void       setWindowMode(WindowMode mode);
     WindowMode getWindowMode() const;
 
+    // glfwSwapInterval(1)/(0). Reasserted after setWindowMode() too, since
+    // glfwSetWindowMonitor can recreate the swap chain (e.g. toggling
+    // exclusive fullscreen) and silently reset the driver's interval.
+    void setVSync(bool enabled);
+    bool getVSync() const { return vsyncEnabled; }
+
     int getWidth() const;          // framebuffer size (physical pixels) � use for glViewport
     int getHeight() const;
     int getLogicalWidth() const;   // window size (logical pixels) � use for UI hit-testing
@@ -50,6 +56,8 @@ private:
     int windowedY = 0;
     int windowedWidth = 0;
     int windowedHeight = 0;
+
+    bool vsyncEnabled = false;
 };
 
 #endif // OPENGLWINDOW_HPP

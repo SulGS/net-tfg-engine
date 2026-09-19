@@ -197,6 +197,9 @@ public:
         device = newDevice;
         context = newContext;
 
+        // New context, same reasoning as initializeOpenAL() — see there.
+        alDistanceModel(AL_INVERSE_DISTANCE_CLAMPED);
+
         currentDeviceName = deviceName;
 
         musicVolume = savedMusicVolume; // restore BEFORE initMusicSource so AL_GAIN is correct
@@ -588,6 +591,13 @@ private:
             return false;
         }
 
+        // Explicit, matching what initializeSource()'s REFERENCE_DISTANCE/
+        // MAX_DISTANCE/ROLLOFF_FACTOR assume. This happens to already be the
+        // OpenAL spec default for a freshly created context, so this call
+        // isn't fixing a live bug — it's removing the dependency on that
+        // implicit default being correct on every implementation.
+        alDistanceModel(AL_INVERSE_DISTANCE_CLAMPED);
+
         Debug::Info("AudioSystem") << "OpenAL initialized on device: " << currentDeviceName << "\n";
         return true;
     }
@@ -642,7 +652,14 @@ private:
             glm::angleAxis(glm::radians(deg.y), glm::vec3(0, 1, 0)) *
             glm::angleAxis(glm::radians(deg.z), glm::vec3(0, 0, 1));
 
-        glm::vec3 fwdEngine = rot * glm::vec3(0, 1, 0);
+        // Rest-forward is local +X, not +Y: gameplay code (InputSystem's
+        // fwdX=cos(rot.z), fwdY=sin(rot.z), and the thruster mount at local
+        // x=-1.8 in RenderSystems.hpp) treats +X as "where the ship is
+        // facing" at rotation 0. Using +Y here (as if forward pointed
+        // "north" at rest) put every 3D cue 90 degrees off from what the
+        // player sees — a sound dead ahead panned as if it were off to the
+        // side, for every rotation angle.
+        glm::vec3 fwdEngine = rot * glm::vec3(1, 0, 0);
         glm::vec3 upEngine = rot * glm::vec3(0, 0, 1);
 
         auto toAL = [](glm::vec3 v) -> glm::vec3 {

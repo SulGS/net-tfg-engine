@@ -9,11 +9,48 @@
 #include <functional>
 #include <future>
 #include <algorithm>
+#include <thread>
+#include <chrono>
+
+#if defined(_WIN32)
+#include <windows.h>
+#include <timeapi.h>
+#pragma comment(lib, "winmm.lib")
+
+// RAII wrapper around timeBeginPeriod/timeEndPeriod. Windows' default
+// scheduler/timer tick is ~15.6ms, so std::this_thread::sleep_until/
+// sleep_for can wake up to that much late; requesting 1ms resolution for
+// the guard's lifetime (paired with the spin-wait tail in renderLoop()
+// below) is what actually gets frame pacing down to sub-millisecond
+// accuracy instead of e.g. a 240 FPS target only ever reaching ~65 FPS.
+class HighResTimerGuard {
+public:
+    HighResTimerGuard() { timeBeginPeriod(1); }
+    ~HighResTimerGuard() { timeEndPeriod(1); }
+    HighResTimerGuard(const HighResTimerGuard&) = delete;
+    HighResTimerGuard& operator=(const HighResTimerGuard&) = delete;
+};
+#else
+// No-op elsewhere: clock_nanosleep(CLOCK_MONOTONIC) on Linux is already
+// precise without needing a system timer resolution bump.
+class HighResTimerGuard {
+public:
+    HighResTimerGuard() = default;
+    HighResTimerGuard(const HighResTimerGuard&) = delete;
+    HighResTimerGuard& operator=(const HighResTimerGuard&) = delete;
+};
+#endif
 
 // Target render FPS now lives in RenderSettings (RenderSettings::instance().getTargetFPS()),
 // adjustable at runtime from the settings menu instead of being fixed at compile time.
 inline int CurrentTargetFPS() { return std::max(1, RenderSettings::instance().getTargetFPS()); }
-inline int CurrentMsPerTick() { return 1000 / CurrentTargetFPS(); }
+
+// Microsecond-precision tick period. Millisecond granularity (1000/FPS,
+// truncated to an int) is too coarse above ~60 FPS: 144 and 165 both floor
+// to 6ms/tick, so the loop actually ran at ~166 FPS for either choice,
+// and 144 itself was ~167 FPS instead of 144. Microseconds keep the
+// rounding error under ~0.05% across the whole FPS-limit dropdown.
+inline long long CurrentTickPeriodUs() { return 1000000LL / CurrentTargetFPS(); }
 
 class ClientWindow {
 
@@ -41,7 +78,15 @@ class ClientWindow {
     // Set by renderLoop() when the OS window is asked to close, without touching threadRunning/the GL context, so shutdown can release ECS GL resources before the context is destroyed.
     static std::atomic<bool> closeRequested;
 
+    // Smoothed real (measured) frame rate of the render loop, refreshed every
+    // iteration; read by the debug overlay. Separate from CurrentTargetFPS(),
+    // which is the configured cap, not what's actually being achieved.
+    static std::atomic<float> currentFps;
+
 public:
+
+    // Real, measured FPS (exponential moving average), not the configured target.
+    static float GetCurrentFPS() { return currentFps.load(std::memory_order_relaxed); }
 
     std::mutex gStateMutex;
     GameStateBlob PreviousServerState;
@@ -87,11 +132,17 @@ public:
             closeRequested = false;
             renderThread = std::thread([width, height, title]() {
                 renderThreadId = std::this_thread::get_id();
+
+                // Scoped to the whole thread body so it releases even if
+                // renderLoop() were to exit early.
+                HighResTimerGuard highResTimer;
+
                 window = new OpenGLWindow(width, height, title);
                 Input::Init(window->getWindow());
 
-                // Apply a window mode saved from a previous session.
+                // Apply window mode and VSync saved from a previous session.
                 window->setWindowMode(RenderSettings::instance().getWindowMode());
+                window->setVSync(RenderSettings::instance().getVsyncEnabled());
 
                 renderLoop();
 
@@ -220,8 +271,8 @@ public:
 
 private:
     static void renderLoop() {
-        auto nextTick = std::chrono::high_resolution_clock::now();
         auto frameStart = std::chrono::high_resolution_clock::now();
+        auto previousFrameStart = frameStart;
 
         int tickCount = 0;
         std::vector<long long> tickDurations;
@@ -229,6 +280,19 @@ private:
 
         while (threadRunning) {
             frameStart = std::chrono::high_resolution_clock::now();
+
+            // Real measured FPS for the debug overlay: EMA over actual
+            // iteration time, not the configured target used elsewhere.
+            {
+                float frameMs = std::chrono::duration<float, std::milli>(frameStart - previousFrameStart).count();
+                previousFrameStart = frameStart;
+                if (frameMs > 0.01f) {
+                    float instFps = 1000.0f / frameMs;
+                    float prev = currentFps.load(std::memory_order_relaxed);
+                    float smoothed = (prev <= 0.0f) ? instFps : (prev * 0.9f + instFps * 0.1f);
+                    currentFps.store(smoothed, std::memory_order_relaxed);
+                }
+            }
 
             window->pollEvents();
 
@@ -257,6 +321,24 @@ private:
                 }
 
                 instance->gStateMutex.lock();
+
+                // Both start at frame=-1 (set in the constructor) and only
+                // become real once TickClient() completes at least once on
+                // the game/network thread (setLocalState/setServerState).
+                // Interpolating before that blends actual gameplay state
+                // toward these blank, zeroed placeholders -- e.g. a ship
+                // rendered at (0,0) instead of its spawn point -- and then
+                // visibly snaps to the correct state the instant real data
+                // arrives. Skip interpolating and rendering this instance
+                // until both have ticked at least once; Init() still runs
+                // unconditionally above so the scene exists to render into.
+                bool hasRealState = instance->CurrentLocalState.frame != -1
+                    && instance->CurrentServerState.frame != -1;
+
+                if (!hasRealState) {
+                    instance->gStateMutex.unlock();
+                    continue;
+                }
 
                 auto now = std::chrono::steady_clock::now();
 
@@ -342,8 +424,33 @@ private:
 
             Input::Update();
 
-            nextTick += std::chrono::milliseconds(CurrentMsPerTick());
-            std::this_thread::sleep_until(nextTick);
+            // Deadline computed fresh off this frame's own start, not an
+            // accumulated running total: a single slow frame (asset load,
+            // OS scheduling hitch, a target-FPS change mid-session) only
+            // costs that one frame instead of leaving the schedule
+            // permanently behind "now" -- which is what an accumulated
+            // nextTick did, since sleep_until on an already-past time
+            // returns instantly and the deficit could never be repaid,
+            // making the FPS limit effectively disappear once VSync (which
+            // was independently blocking swapBuffers) stopped masking it.
+            auto frameDeadline = frameStart + std::chrono::microseconds(CurrentTickPeriodUs());
+
+            // Hybrid wait: sleep_until() alone wakes late by however coarse
+            // the OS scheduler/timer is -- observed ~11-12ms of pure
+            // overshoot even with timeBeginPeriod(1) above, which is most
+            // of the whole budget at a high target FPS (e.g. 240 FPS wants
+            // a 4.17ms period) and a large fraction even at a low one (30
+            // FPS's 33.3ms). Sleep for the bulk of the wait, cheaply, then
+            // spin the last stretch so the actual wake time is bounded by
+            // this thread checking the clock, not by the scheduler.
+            constexpr auto kSpinMargin = std::chrono::microseconds(2000);
+            auto nowBeforeWait = std::chrono::high_resolution_clock::now();
+            if (frameDeadline - nowBeforeWait > kSpinMargin) {
+                std::this_thread::sleep_until(frameDeadline - kSpinMargin);
+            }
+            while (std::chrono::high_resolution_clock::now() < frameDeadline) {
+                std::this_thread::yield();
+            }
         }
     }
 };
@@ -356,5 +463,6 @@ bool ClientWindow::threadRunning = false;
 std::vector<std::function<void()>> ClientWindow::pendingTasks;
 std::atomic<bool> ClientWindow::closeRequested{ false };
 std::thread::id ClientWindow::renderThreadId;
+std::atomic<float> ClientWindow::currentFps{ 0.0f };
 
 #endif //NETCODE_CLIENT_WINDOW_H

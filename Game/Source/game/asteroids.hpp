@@ -38,6 +38,8 @@
 
 
 
+// Pre-match freeze: see MatchStartTimer/MatchStartSystem in LogicSystems.hpp.
+inline constexpr int MATCH_START_COUNTDOWN_TICKS = 10 * TICKS_PER_SECOND;
 
 // Returns the world-space centre of tile (cx, cy).
 // Matches the formula used in InitECSLogic / InitECSRenderer.
@@ -206,6 +208,77 @@ public:
                 tileId->warning = s.tilesWarning[cx][cy];
             }
         }
+
+        // Sync wall enabled + warning state from blob into logic ECS. This
+        // was missing entirely (only the renderer's GameState_To_ECSWorld
+        // had it) — ArenaSystem never runs client-side, so without this the
+        // client's local LaserWallID entities stay frozen at their
+        // InitECSLogic defaults (interior walls start disabled). Client-side
+        // prediction's Synchronize()->SimulateFrame()->ECSWorld_To_GameState
+        // round-trip (see ClientPredictionNetcode) then re-serialized those
+        // stale, always-off values back into the snapshot chain that
+        // OnServerDeltasUpdate builds latestServerState from — every
+        // reconciliation corrupted the very state it had just correctly
+        // patched from the network, one tick after applying it. The old
+        // always-send-the-full-grid-every-tick wire format re-overwrote the
+        // damage before it could be observed; the sparse delta format
+        // doesn't touch fields that didn't change, so the corruption stuck.
+        {
+            auto wallQuery = world.GetEntityManager().CreateQuery<LaserWallID>();
+            for (auto [entity, lwid] : wallQuery)
+            {
+                if (world.GetEntityManager().GetComponent<CenterSpoke>(entity) != nullptr) continue;
+
+                int cx = lwid->cellId / y_size;
+                int cy = lwid->cellId % y_size;
+
+                switch (lwid->dir)
+                {
+                case CellCardinalDirection::Down:
+                    lwid->enabled = s.vWalls[2 * cx][2 * cy];
+                    lwid->warning = s.vWallsWarning[2 * cx][2 * cy];
+                    break;
+                case CellCardinalDirection::Up:
+                    lwid->enabled = s.vWalls[2 * cx][2 * cy + 2];
+                    lwid->warning = s.vWallsWarning[2 * cx][2 * cy + 2];
+                    break;
+                case CellCardinalDirection::Left:
+                    lwid->enabled = s.hWalls[2 * cx][2 * cy];
+                    lwid->warning = s.hWallsWarning[2 * cx][2 * cy];
+                    break;
+                case CellCardinalDirection::Right:
+                    lwid->enabled = s.hWalls[2 * cx + 2][2 * cy];
+                    lwid->warning = s.hWallsWarning[2 * cx + 2][2 * cy];
+                    break;
+                default: break;
+                }
+            }
+
+            auto spokeQuery = world.GetEntityManager().CreateQuery<LaserWallID, CenterSpoke>();
+            for (auto [entity, lwid, spoke] : spokeQuery)
+            {
+                int cx = lwid->cellId / y_size;
+                int cy = lwid->cellId % y_size;
+                int dirIdx = 0;
+                switch (lwid->dir)
+                {
+                case CellCardinalDirection::Down:  dirIdx = 0; break;
+                case CellCardinalDirection::Up:    dirIdx = 1; break;
+                case CellCardinalDirection::Left:  dirIdx = 2; break;
+                case CellCardinalDirection::Right: dirIdx = 3; break;
+                default: break;
+                }
+                lwid->enabled = s.cWalls[cx][cy][dirIdx];
+                lwid->warning = s.cWallsWarning[cx][cy][dirIdx];
+            }
+        }
+
+        // Match-start countdown
+        {
+            auto timerQuery = world.GetEntityManager().CreateQuery<MatchStartTimer>();
+            for (auto [entity, timer] : timerQuery)
+                timer->ticksRemaining = s.startCountdownTicks;
+        }
     }
 
     void ECSWorld_To_GameState(GameStateBlob& state) override {
@@ -320,6 +393,13 @@ public:
             }
         }
 
+        // Match-start countdown
+        {
+            auto timerQuery = world.GetEntityManager().CreateQuery<MatchStartTimer>();
+            for (auto [entity, timer] : timerQuery)
+                s.startCountdownTicks = timer->ticksRemaining;
+        }
+
         state.len = sizeof(AsteroidShooterGameState);
     }
 
@@ -359,6 +439,8 @@ public:
         }
         s->bulletCount = 0;
 
+        s->startCountdownTicks = MATCH_START_COUNTDOWN_TICKS;
+
         state.len = sizeof(AsteroidShooterGameState);
 
         world.GetEntityManager().RegisterComponentType<SpaceShip>();
@@ -369,9 +451,13 @@ public:
         world.GetEntityManager().RegisterComponentType<LaserWallID>();
         world.GetEntityManager().RegisterComponentType<SpectatorState>();
 		world.GetEntityManager().RegisterComponentType<ExitButtonChecker>();
+		world.GetEntityManager().RegisterComponentType<MatchStartTimer>();
 
 		Entity exitCheckerEntity = world.GetEntityManager().CreateEntity();
         world.GetEntityManager().AddComponent<ExitButtonChecker>(exitCheckerEntity, ExitButtonChecker{});
+
+		Entity matchStartEntity = world.GetEntityManager().CreateEntity();
+        world.GetEntityManager().AddComponent<MatchStartTimer>(matchStartEntity, MatchStartTimer{ MATCH_START_COUNTDOWN_TICKS });
 
 
         for (int i = 0; i < NUM_PLAYERS; i++)
@@ -385,7 +471,16 @@ public:
 
             if (isServer)
             {
-                BoxCollider2D* collider = world.GetEntityManager().AddComponent<BoxCollider2D>(player, BoxCollider2D{ glm::vec2(1.5f, 3.0f) });
+                // Half-extents matched to the rendered ship_low.glb (raw mesh
+                // bounds X:[-0.359,0.357] Y:[-0.5,0.5], scaled x5 in the
+                // renderer -> ~1.8 nose-to-tail, ~2.5 wingtip-to-wingtip;
+                // corroborated by the thruster mount at local x=-1.8 in
+                // RenderSystems.hpp's LinkThrusterToShipSystem). The old
+                // (1.5, 3.0) was ~17% short along the ship's length (nose/
+                // tail could visually overlap a wall or bullet with no hit)
+                // and ~20% wide across the wingspan (could die to a wall
+                // that still looked clear of the wingtips).
+                BoxCollider2D* collider = world.GetEntityManager().AddComponent<BoxCollider2D>(player, BoxCollider2D{ glm::vec2(1.8f, 2.5f) });
                 collider->layer = CollisionLayer::PLAYER;
                 collider->collidesWith = CollisionLayer::BULLET | CollisionLayer::WALL;
             }
@@ -469,9 +564,14 @@ public:
                 const float midX = ((px - x_size) * 40.0f - 40.0f + (px + 1 - x_size) * 40.0f - 40.0f) / 2.0f;
                 const float midY = (py - y_size) * 40.0f - 40.0f;
 
-                for (int cx = 0; cx < x_size; cx++)
+                // An interior boundary matches TWO (cx,cy) combinations below
+                // (the cell on each side); edgeBuilt keeps only the first so
+                // each physical edge becomes exactly one entity instead of
+                // two independently-toggled ones at the same position.
+                bool edgeBuilt = false;
+                for (int cx = 0; cx < x_size && !edgeBuilt; cx++)
                 {
-                    for (int cy = 0; cy < y_size; cy++)
+                    for (int cy = 0; cy < y_size && !edgeBuilt; cy++)
                     {
                         if (px < 2 * cx || px >= 2 * cx + 2) continue;
                         if (py != 2 * cy && py != 2 * cy + 2) continue;
@@ -485,6 +585,7 @@ public:
                             glm::vec3(midX, midY, 0.0f),
                             glm::vec3(0.0f, 90.0f, 0.0f),
                             onBorder });
+                        edgeBuilt = true;
                     }
                 }
             }
@@ -498,9 +599,10 @@ public:
                 const float midX = (px - x_size) * 40.0f - 40.0f;
                 const float midY = ((py - y_size) * 40.0f - 40.0f + (py + 1 - y_size) * 40.0f - 40.0f) / 2.0f;
 
-                for (int cx = 0; cx < x_size; cx++)
+                bool edgeBuilt = false; // same reasoning as the loop above
+                for (int cx = 0; cx < x_size && !edgeBuilt; cx++)
                 {
-                    for (int cy = 0; cy < y_size; cy++)
+                    for (int cy = 0; cy < y_size && !edgeBuilt; cy++)
                     {
                         if (py < 2 * cy || py >= 2 * cy + 2) continue;
                         if (px != 2 * cx && px != 2 * cx + 2) continue;
@@ -514,6 +616,7 @@ public:
                             glm::vec3(midX, midY, 0.0f),
                             glm::vec3(90.0f, 0.0f, 0.0f),
                             onBorder });
+                        edgeBuilt = true;
                     }
                 }
             }
@@ -639,6 +742,12 @@ public:
         }
 
 
+        if (isServer)
+        {
+            // Must run before InputSystem/ArenaSystem so both see this
+            // tick's already-decremented value, not last tick's.
+            world.AddSystem(std::make_unique<MatchStartSystem>());
+        }
         world.AddSystem(std::make_unique<InputSystem>());
         if (isServer)
         {
@@ -875,6 +984,13 @@ public:
                 lwid->warning = s.cWallsWarning[cx][cy][dirIdx];
             }
         }
+
+        // Match-start countdown
+        {
+            auto timerQuery = em.CreateQuery<MatchStartTimer>();
+            for (auto [entity, timer] : timerQuery)
+                timer->ticksRemaining = s.startCountdownTicks;
+        }
     }
 
     void InitECSRenderer(const GameStateBlob& state, OpenGLWindow* window) override {
@@ -899,6 +1015,11 @@ public:
 		world.GetEntityManager().RegisterComponentType<ExitButtonChecker>();
 		world.GetEntityManager().RegisterComponentType<ThrusterSound>();
 		world.GetEntityManager().RegisterComponentType<FluidSurface>();
+		world.GetEntityManager().RegisterComponentType<GameStatusText>();
+		world.GetEntityManager().RegisterComponentType<MatchStartTimer>();
+
+		Entity matchStartEntity = world.GetEntityManager().CreateEntity();
+        world.GetEntityManager().AddComponent<MatchStartTimer>(matchStartEntity, MatchStartTimer{ MATCH_START_COUNTDOWN_TICKS });
 
         // Sun
         Entity sunEntity = world.GetEntityManager().CreateEntity();
@@ -1014,6 +1135,10 @@ public:
         text->fontSize = 32.0f;
         text->SetColor(1.0f, 1.0f, 1.0f, 1.0f);
         text->SetFont("default");
+        // Tags this as the game's own status label, distinct from the
+        // DebugOverlay's UIText, so RenderSystems.hpp's UIText queries
+        // (REMAINING/YOU DIED/WINS) don't also reposition the debug HUD.
+        world.GetEntityManager().AddComponent<GameStatusText>(healthText, GameStatusText{});
 
 		// Exit button
 		Entity exitButton = world.GetEntityManager().CreateEntity();
@@ -1169,8 +1294,11 @@ public:
             {
                 const float midX = ((px - x_size) * 40.0f - 40.0f + (px + 1 - x_size) * 40.0f - 40.0f) / 2.0f;
                 const float midY = (py - y_size) * 40.0f - 40.0f;
-                for (int cx = 0; cx < x_size; ++cx)
-                    for (int cy = 0; cy < y_size; ++cy)
+                // Interior boundary: keep only the first of the two matching
+                // (cx,cy) — see the matching comment in InitECSLogic.
+                bool edgeBuilt = false;
+                for (int cx = 0; cx < x_size && !edgeBuilt; ++cx)
+                    for (int cy = 0; cy < y_size && !edgeBuilt; ++cy)
                     {
                         if (px < 2 * cx || px >= 2 * cx + 2) continue;
                         if (py != 2 * cy && py != 2 * cy + 2) continue;
@@ -1180,6 +1308,7 @@ public:
                         walls.push_back({ cx, cy, dir,
                             glm::vec3(midX, midY, 0.0f),
                             glm::vec3(0.0f, 90.0f, 0.0f), onBorder });
+                        edgeBuilt = true;
                     }
             }
 
@@ -1188,8 +1317,9 @@ public:
             {
                 const float midX = (px - x_size) * 40.0f - 40.0f;
                 const float midY = ((py - y_size) * 40.0f - 40.0f + (py + 1 - y_size) * 40.0f - 40.0f) / 2.0f;
-                for (int cx = 0; cx < x_size; ++cx)
-                    for (int cy = 0; cy < y_size; ++cy)
+                bool edgeBuilt = false; // same reasoning as the loop above
+                for (int cx = 0; cx < x_size && !edgeBuilt; ++cx)
+                    for (int cy = 0; cy < y_size && !edgeBuilt; ++cy)
                     {
                         if (py < 2 * cy || py >= 2 * cy + 2) continue;
                         if (px != 2 * cx && px != 2 * cx + 2) continue;
@@ -1199,6 +1329,7 @@ public:
                         walls.push_back({ cx, cy, dir,
                             glm::vec3(midX, midY, 0.0f),
                             glm::vec3(90.0f, 0.0f, 0.0f), onBorder });
+                        edgeBuilt = true;
                     }
             }
 
@@ -1266,6 +1397,9 @@ public:
         // Render systems
         world.AddSystem(std::make_unique<CameraFollowSystem>());
         world.AddSystem(std::make_unique<OnDeathRenderSystem>());
+        // After both of the above: overrides GameStatusText with the
+        // countdown while the pre-match freeze is active, otherwise a no-op.
+        world.AddSystem(std::make_unique<MatchStartCountdownRenderSystem>());
         world.AddSystem(std::make_unique<ChargingBulletRenderSystem>());
         world.AddSystem(std::make_unique<LinkThrusterToShipSystem>());
         world.AddSystem(std::make_unique<LaserWallRenderSystem>());
@@ -1362,6 +1496,8 @@ public:
         std::memcpy(rend.vWallsWarning, currServer.vWallsWarning, sizeof(currServer.vWallsWarning));
         std::memcpy(rend.cWallsWarning, currServer.cWallsWarning, sizeof(currServer.cWallsWarning));
         std::memcpy(rend.tilesWarning, currServer.tilesWarning, sizeof(currServer.tilesWarning));
+
+        rend.startCountdownTicks = currServer.startCountdownTicks;
     }
 
     ~AsteroidShooterGameRenderer() override {

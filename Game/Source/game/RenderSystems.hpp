@@ -95,8 +95,8 @@ public:
             // Update UI for the alive winner (dead players are handled by OnDeathRenderSystem)
             if (localAlive)
             {
-                auto textQuery = entityManager.CreateQuery<UIElement, UIText>();
-                for (auto [entity, element, text] : textQuery)
+                auto textQuery = entityManager.CreateQuery<UIElement, UIText, GameStatusText>();
+                for (auto [entity, element, text, statusTag] : textQuery)
                 {
                     element->anchor = UIAnchor::TOP_CENTER;
                     element->position = glm::vec2(0.0f, 20.0f);
@@ -137,8 +137,8 @@ public:
             for (auto [e2, pt2, pl2, sh2] : playerQuery)
                 if (sh2->isAlive) aliveCount++;
 
-            auto textQuery = entityManager.CreateQuery<UIElement, UIText>();
-            for (auto [entity, element, text] : textQuery)
+            auto textQuery = entityManager.CreateQuery<UIElement, UIText, GameStatusText>();
+            for (auto [entity, element, text, statusTag] : textQuery)
             {
                 element->anchor = UIAnchor::TOP_LEFT;
                 element->position = glm::vec2(0.0f, 0.0f);
@@ -233,6 +233,38 @@ public:
             camTrans->setPosition(newCamPos);
             cam->setTarget(targetPos);
             cam->markViewDirty();
+        }
+    }
+};
+
+// Overrides the shared GameStatusText label with a centred countdown while
+// the pre-match freeze (MatchStartTimer, see LogicSystems.hpp) is active.
+// Must be added AFTER CameraFollowSystem so it wins the frame's last write;
+// once the countdown reaches 0 it does nothing, leaving that system's
+// REMAINING/health text uncontested from then on.
+class MatchStartCountdownRenderSystem : public ISystem
+{
+public:
+    void Update(EntityManager& entityManager, std::vector<EventEntry>& events,
+        bool isServer, float deltaTime) override
+    {
+        int ticksRemaining = 0;
+        {
+            auto timerQuery = entityManager.CreateQuery<MatchStartTimer>();
+            for (auto [entity, timer] : timerQuery) ticksRemaining = timer->ticksRemaining;
+        }
+        if (ticksRemaining <= 0) return;
+
+        int secondsRemaining = (ticksRemaining + TICKS_PER_SECOND - 1) / TICKS_PER_SECOND;
+
+        auto textQuery = entityManager.CreateQuery<UIElement, UIText, GameStatusText>();
+        for (auto [entity, element, text, statusTag] : textQuery)
+        {
+            element->anchor = UIAnchor::TOP_CENTER;
+            element->position = glm::vec2(0.0f, 20.0f);
+            element->size = glm::vec2(350.0f, 80.0f);
+            element->pivot = glm::vec2(0.5f);
+            text->text = std::to_string(secondsRemaining);
         }
     }
 };
@@ -338,8 +370,8 @@ public:
                     element->isVisible = true;
                 }
 
-                auto textQuery = entityManager.CreateQuery<UIElement, UIText>();
-                for (auto [uiEntity, element, text] : textQuery)
+                auto textQuery = entityManager.CreateQuery<UIElement, UIText, GameStatusText>();
+                for (auto [uiEntity, element, text, statusTag] : textQuery)
                 {
                     element->anchor = UIAnchor::TOP_CENTER;
                     element->position = glm::vec2(0.0f, 20.0f);
@@ -686,16 +718,15 @@ public:
             for (auto [entity, lwID, mesh] : laserWallQuery)
             {
                 bool isSpoke = entityManager.GetComponent<CenterSpoke>(entity) != nullptr;
-                bool ownerActive = activeTileIds.count(lwID->cellId) > 0;
-
-                if (!ownerActive)
-                {
-                    mesh->enabled = false;
-                    continue;
-                }
 
                 if (isSpoke)
                 {
+                    // Single-owner: no neighbour concept, only its own cell matters.
+                    if (!activeTileIds.count(lwID->cellId))
+                    {
+                        mesh->enabled = false;
+                        continue;
+                    }
                     if (lwID->warning && !lwID->enabled)
                         mesh->enabled = warningBlinkActive;
                     else
@@ -703,23 +734,17 @@ public:
                     continue;
                 }
 
-                // Non-spoke walls
-                int cx = lwID->cellId / y_size;
-                int cy = lwID->cellId % y_size;
-                int nx = cx, ny = cy;
-                switch (lwID->dir)
+                // Shared edge: dedup means one entity per boundary, stored
+                // under whichever of its two cells happened to be visited
+                // first when the wall was built, so visibility has to be
+                // judged symmetrically — see ClassifyWallEdge.
+                WallEdgeState edgeState = ClassifyWallEdge(lwID->cellId, lwID->dir, activeTileIds);
+
+                if (edgeState == WallEdgeState::Dead)
                 {
-                case CellCardinalDirection::Left:  nx--; break;
-                case CellCardinalDirection::Right: nx++; break;
-                case CellCardinalDirection::Down:  ny--; break;
-                case CellCardinalDirection::Up:    ny++; break;
-                default: break;
+                    mesh->enabled = false;
                 }
-
-                bool neighbourInactive = nx < 0 || nx >= x_size || ny < 0 || ny >= y_size
-                    || !activeTileIds.count(nx * y_size + ny);
-
-                if (neighbourInactive)
+                else if (edgeState == WallEdgeState::SoleBorder)
                 {
                     mesh->enabled = true;
                 }

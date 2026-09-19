@@ -63,6 +63,17 @@ public:
     void       setWindowMode(WindowMode v) { m_windowMode = v; }
     WindowMode getWindowMode() const { return m_windowMode; }
 
+    // RUNTIME — WINDOW: same as above; OpenGLWindow applies it via
+    // setVSync(). Off by default so the targetFPS pacer above is the only
+    // frame cap unless the player opts back into vsync.
+    void setVsyncEnabled(bool v) { m_vsyncEnabled = v; }
+    bool getVsyncEnabled() const { return m_vsyncEnabled; }
+
+    // RUNTIME — DEBUG: shows an FPS/network-latency overlay. Not part of
+    // applyPreset(): purely a developer/player toggle, unrelated to quality.
+    void setDebugModeEnabled(bool v) { m_debugModeEnabled = v; }
+    bool getDebugModeEnabled() const { return m_debugModeEnabled; }
+
     // INIT-TIME SETTINGS
     void setMaxLights(int v) { m_maxLights = v; }
     int  getMaxLights()      const { return m_maxLights; }
@@ -230,6 +241,8 @@ public:
             {
                 if (i >= 0 && i <= 2) setWindowMode(static_cast<WindowMode>(i));
             }
+            else if (k == "vsync")                setVsyncEnabled(b);
+            else if (k == "debugMode")            setDebugModeEnabled(b);
             else if (k == "maxLights")            setMaxLights(i);
             else if (k == "maxShadowLights")      setMaxShadowLights(i);
             else if (k == "msaaSamples")          setMsaaSamples(i);
@@ -292,6 +305,8 @@ public:
 
         f << "targetFPS " << m_targetFPS << "\n";
         f << "windowMode " << static_cast<int>(m_windowMode) << "\n";
+        f << "vsync " << (m_vsyncEnabled ? 1 : 0) << "\n";
+        f << "debugMode " << (m_debugModeEnabled ? 1 : 0) << "\n";
 
         f << "maxLights " << m_maxLights << "\n";
         f << "maxShadowLights " << m_maxShadowLights << "\n";
@@ -568,6 +583,10 @@ private:
 
     // Window
     WindowMode m_windowMode = WindowMode::Windowed;
+    bool       m_vsyncEnabled = false;
+
+    // Debug overlay (FPS / network latency)
+    bool m_debugModeEnabled = false;
 
     // Init-time
     int   m_maxLights = 512;
