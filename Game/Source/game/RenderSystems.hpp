@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include <unordered_set>
 #include <algorithm>
+#include <cmath>
 
 #include "netcode/netcode_common.hpp"
 #include "Utils/Input.hpp"
@@ -11,6 +12,7 @@
 #include "ecs/UI/UIElement.hpp"
 #include "Components.hpp"
 #include "GameState.hpp"
+#include "Explosion.hpp"
 #include "NetTFG_Engine.hpp"
 
 // Returns the playerId of the sole surviving player, or -1 if the game is
@@ -293,16 +295,7 @@ public:
                     jdC->notExecuted = false;
 
 
-                    for (auto effect : ParticlePresets::MakeExplosion()) 
-                    {
-						Entity e = entityManager.CreateEntity();
-						Transform* t = entityManager.AddComponent<Transform>(e, Transform{});
-						t->setPosition(playerTransform->getPosition());
-						t->setScale(glm::vec3(2.0f, 2.0f,2.0f));
-						entityManager.AddComponent<ParticleEmitterComponent>(e, effect);
-						entityManager.AddComponent<ExplosionPlayerID>(e, ExplosionPlayerID{ play->playerId });
-                    }
-
+                    SpawnShipExplosion(entityManager, playerTransform->getPosition(), play->playerId);
 
                     Entity audioEntity = entityManager.CreateEntity();
 					Transform* audioTransform = entityManager.AddComponent<Transform>(audioEntity, Transform{});

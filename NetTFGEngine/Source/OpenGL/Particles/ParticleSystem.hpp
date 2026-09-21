@@ -1,4 +1,4 @@
-﻿#ifndef PARTICLE_SYSTEM_HPP
+#ifndef PARTICLE_SYSTEM_HPP
 #define PARTICLE_SYSTEM_HPP
 
 #include "ecs/ecs.hpp"
@@ -7,38 +7,64 @@
 #include "OpenGL/OpenGLIncludes.hpp"
 #include <glm/glm.hpp>
 #include <random>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
-// ECS system: simulates ParticleEmitterComponents on the CPU, uploads live particles to a shared SSBO, and issues one instanced draw call per blend mode. Draw() runs inside RenderSystem after ShadingPass but before BloomPass so emissive particles feed through bloom.
+// ECS system: simulates ParticleEmitterComponents on the CPU, uploads live particles to a shared SSBO, and issues one instanced draw call per batch (texture x blend mode). Draw() runs inside RenderSystem after ShadingPass but before BloomPass so emissive particles feed through bloom.
 class ParticleSystem : public ISystem {
 public:
     // Call once after the OpenGL context is ready.
     void Init();
 
-    // Simulate all emitters and fill the staging buffer; must be called before Draw().
+    // Simulate all emitters and fill the staging buffers; must be called before Draw().
     void Update(EntityManager& entityManager,
         std::vector<EventEntry>& events,
         bool isServer,
         float deltaTime) override;
 
-    // Upload staging data and issue billboard draw calls; call from RenderSystem after ShadingPass while the HDR FBO is still bound.
+    // Upload staging data and issue billboard draw calls; call from RenderSystem after ShadingPass while the HDR FBO is still bound. Order: distortion, alpha-blended, additive. Distortion batches refract a copy of the framebuffer taken at the start of this call, so it must contain the finished scene.
     void Draw(const glm::mat4& view, const glm::mat4& projection);
 
     ~ParticleSystem();
 
 private:
-    GLuint m_shader = 0;
-    GLuint m_quadVAO = 0;  // empty VAO — positions built in vert shader
-    GLuint m_ssbo = 0;  // resized on demand, reused each frame
-    int    m_ssboCapacity = 0;  // current GPUParticle capacity of m_ssbo
+    // Everything that forces a separate draw call: which sheet is bound, how it is combined, and which blend/shader is used.
+    struct BatchKey {
+        GLuint tex = 0;          // 0 = procedural disc
+        int    alphaMode = 0;    // 0 procedural, else (FlipbookAlpha + 1)
+        bool   additive = true;
+        bool   distortion = false;
+
+        bool operator==(const BatchKey& o) const {
+            return tex == o.tex && alphaMode == o.alphaMode
+                && additive == o.additive && distortion == o.distortion;
+        }
+    };
+    struct Batch {
+        BatchKey                 key;
+        std::vector<GPUParticle> data;   // rebuilt every Update
+    };
+
+    GLuint m_shader = 0;       // colour sprites (procedural / flipbook)
+    GLuint m_distShader = 0;   // screen-space distortion sprites
+    GLuint m_quadVAO = 0;      // empty VAO — positions built in vert shader
+    GLuint m_ssbo = 0;         // resized on demand, reused each frame
+    int    m_ssboCapacity = 0; // current GPUParticle capacity of m_ssbo
 
     // Cached uniform locations (set once in Init after shader compilation)
-    GLint m_uView = -1;
-    GLint m_uProjection = -1;
+    GLint m_uView = -1, m_uProjection = -1;
+    GLint m_uTex = -1, m_uAlphaMode = -1;
+    GLint m_dView = -1, m_dProjection = -1, m_dScene = -1, m_dViewport = -1;
 
-    // Frame-local staging buffers, one per blend mode, so we issue at most two draw calls per frame.
-    std::vector<GPUParticle> m_stagingAdditive;  // additiveBlend == true
-    std::vector<GPUParticle> m_stagingAlpha;     // additiveBlend == false
+    std::vector<Batch> m_batches;
+
+    // Sprite sheets requested by emitters, loaded lazily through the AssetManager. 0 = load failed (emitter falls back to the procedural disc).
+    std::unordered_map<std::string, GLuint> m_textures;
+
+    // Copy of the HDR scene used as the refraction source by distortion batches.
+    GLuint m_sceneTex = 0;
+    int    m_sceneW = 0, m_sceneH = 0;
 
     // RNG — seeded once and shared across emitters; mt19937 for quality/determinism, ready for a future worker thread.
     std::mt19937                          m_rng{ std::random_device{}() };
@@ -71,11 +97,14 @@ private:
     // e.maxParticles. Safe to call multiple times.
     void EnsurePool(ParticleEmitterComponent& e);
 
+    Batch& GetBatch(const BatchKey& key);
+    GLuint GetTexture(const std::string& name);
+    void   CopySceneColor(int w, int h);
+
     void EnsureSSBOCapacity(int needed);
-    // Upload `src` to the SSBO and draw instanced with the given blend mode.
-    void FlushStagingBuffer(std::vector<GPUParticle>& src,
-        bool additive);
-    void CompileShader();
+    // Upload the batch to the SSBO and draw it instanced (blend function must already be set).
+    void FlushBatch(const Batch& batch);
+    void CompileShaders();
     void InitQuadVAO();
 };
 

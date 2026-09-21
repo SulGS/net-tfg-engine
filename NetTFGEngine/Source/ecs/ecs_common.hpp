@@ -6,6 +6,7 @@
 #include "OpenGL/Mesh.hpp"
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <algorithm>
 #include <cmath>
 
 class Transform : public IComponent {
@@ -233,6 +234,28 @@ public:
         return viewDirty;
     }
 
+    // Called by CameraSystem: offsets position/target sideways and rolls `up` according to the current trauma, then decays it.
+    void applyShake(glm::vec3& position, glm::vec3& tgt, glm::vec3& upVec, float dt) {
+        if (shakeTrauma <= 0.0f) return;
+
+        shakeTime += dt;
+        const float s = shakeTrauma * shakeTrauma;
+
+        const glm::vec3 forward = glm::normalize(tgt - position);
+        const glm::vec3 right = glm::normalize(glm::cross(forward, upVec));
+        const glm::vec3 camUp = glm::cross(right, forward);
+
+        const float t = shakeTime * shakeFrequency;
+        const glm::vec3 offset = (right * ShakeNoise(t, 1) + camUp * ShakeNoise(t, 2)) * (s * shakeMaxOffset);
+        position += offset;
+        tgt += offset;
+
+        const float roll = glm::radians(ShakeNoise(t, 3) * s * shakeMaxRollDeg);
+        upVec = glm::vec3(glm::rotate(glm::mat4(1.0f), roll, forward) * glm::vec4(upVec, 0.0f));
+
+        shakeTrauma = std::max(0.0f, shakeTrauma - shakeDecay * dt);
+    }
+
     float getFov() const { return fov; }
     float getAspectRatio() const { return aspectRatio; }
     float getNearPlane() const { return nearPlane; }
@@ -241,6 +264,16 @@ public:
 
 	bool getIsResized() const { return isResized; }
 	void setIsResized(bool resized) { isResized = resized; }
+
+    // --- Shake (trauma model) -------------------------------------------------
+    // Trauma in [0,1] is added by impacts/explosions and decays on its own. The displayed shake is trauma^2 (so small hits are subtle and big ones violent), driven by smooth noise. CameraSystem applies it on top of the Transform each frame without modifying the Transform, so gameplay code that repositions the camera keeps working.
+    void  addTrauma(float amount) { shakeTrauma = std::min(1.0f, shakeTrauma + amount); }
+    float getTrauma() const { return shakeTrauma; }
+
+    float shakeMaxOffset = 0.5f;     // world units at trauma = 1
+    float shakeMaxRollDeg = 2.0f;    // degrees at trauma = 1
+    float shakeFrequency = 24.0f;    // noise samples per second
+    float shakeDecay = 1.4f;         // trauma lost per second
 
 private:
 
@@ -261,6 +294,22 @@ private:
 
     bool projectionDirty;
     bool viewDirty;
+
+    float shakeTrauma = 0.0f;
+    float shakeTime = 0.0f;
+
+    // Smooth 1-D value noise in [-1,1]; `seed` decorrelates the axes.
+    static float ShakeNoise(float t, int seed) {
+        auto lattice = [seed](int k) {
+            unsigned x = static_cast<unsigned>(k) * 374761393u + static_cast<unsigned>(seed) * 668265263u;
+            x = (x ^ (x >> 13)) * 1274126177u;
+            return static_cast<float>((x ^ (x >> 16)) & 0xFFFFu) / 32767.5f - 1.0f;
+        };
+        const int   i = static_cast<int>(std::floor(t));
+        float       f = t - static_cast<float>(i);
+        f = f * f * (3.0f - 2.0f * f);
+        return lattice(i) + (lattice(i + 1) - lattice(i)) * f;
+    }
 
     void updateProjectionMatrix() {
         if (projectionType == ProjectionType::PERSPECTIVE) {
@@ -302,6 +351,8 @@ public:
                 glm::vec3 position = transform->getPosition();
                 glm::vec3 target = camera->getTarget();
                 glm::vec3 up = camera->getUp();
+
+                camera->applyShake(position, target, up, deltaTime);
 
                 glm::mat4 viewMatrix = glm::lookAt(position, target, up);
                 camera->setViewMatrix(viewMatrix);

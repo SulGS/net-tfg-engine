@@ -23,6 +23,7 @@
 #include "Components.hpp"
 #include "LogicSystems.hpp"
 #include "RenderSystems.hpp"
+#include "Explosion.hpp"
 #include "Events.hpp"
 #include "EventHandlers.hpp"
 #include "Deltas.hpp"
@@ -1010,7 +1011,8 @@ public:
         world.GetEntityManager().RegisterComponentType<ThrusterOwner>();
         world.GetEntityManager().RegisterComponentType<SpectatorState>();
 		world.GetEntityManager().RegisterComponentType<JustDeathChecker>();
-		world.GetEntityManager().RegisterComponentType<ExplosionPlayerID>();
+		RegisterExplosionComponents(world.GetEntityManager());
+		PreloadExplosionAssets(world.GetEntityManager());
 		world.GetEntityManager().RegisterComponentType<LinkAudioToBullet>();
 		world.GetEntityManager().RegisterComponentType<ExitButtonChecker>();
 		world.GetEntityManager().RegisterComponentType<ThrusterSound>();
@@ -1397,6 +1399,7 @@ public:
         // Render systems
         world.AddSystem(std::make_unique<CameraFollowSystem>());
         world.AddSystem(std::make_unique<OnDeathRenderSystem>());
+        world.AddSystem(std::make_unique<ExplosionEffectsSystem>());
         // After both of the above: overrides GameStatusText with the
         // countdown while the pre-match freeze is active, otherwise a no-op.
         world.AddSystem(std::make_unique<MatchStartCountdownRenderSystem>());
