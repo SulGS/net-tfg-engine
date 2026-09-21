@@ -140,11 +140,17 @@ public:
                 window = new OpenGLWindow(width, height, title);
                 Input::Init(window->getWindow());
 
+                // Engine-level GL resources that don't belong to any scene: compile the default surface shader now, with the context just created, instead of on the first mesh.
+                Mesh::InitDefaultMaterial();
+
                 // Apply window mode and VSync saved from a previous session.
                 window->setWindowMode(RenderSettings::instance().getWindowMode());
                 window->setVSync(RenderSettings::instance().getVsyncEnabled());
 
                 renderLoop();
+
+                // While the GL context still exists (deleting the window destroys it).
+                Mesh::ReleaseDefaultMaterial();
 
                 delete window;
                 window = nullptr;

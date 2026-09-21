@@ -1,4 +1,5 @@
 ﻿#include "Mesh.hpp"
+#include "Render pipeline/DefaultShader.hpp"
 #include "Utils/Debug/Debug.hpp"
 
 GLuint CreateFallback1x1(uint8_t r, uint8_t g, uint8_t b, uint8_t a)
@@ -13,9 +14,38 @@ GLuint CreateFallback1x1(uint8_t r, uint8_t g, uint8_t b, uint8_t a)
     return tex;
 }
 
+// The default material lives here rather than in a Mesh member so that all default meshes share one, and it is released explicitly (ReleaseDefaultMaterial) while the GL context is still alive: destroying it at static-destruction time would call glDeleteProgram with no context.
+static std::shared_ptr<Material>& defaultMaterialSlot()
+{
+    static std::shared_ptr<Material> slot;
+    return slot;
+}
+
+void Mesh::InitDefaultMaterial()
+{
+    auto& slot = defaultMaterialSlot();
+    if (slot) return;
+
+    DefaultShader::Register();
+    slot = std::make_shared<Material>(DefaultShader::VertexKey, DefaultShader::FragmentKey);
+    Debug::Info("Mesh") << "Default shader ready\n";
+}
+
+void Mesh::ReleaseDefaultMaterial()
+{
+    defaultMaterialSlot().reset();
+}
+
+std::shared_ptr<Material> Mesh::DefaultMaterial()
+{
+    // Normally built at engine startup; this covers a mesh created before that.
+    if (!defaultMaterialSlot()) InitDefaultMaterial();
+    return defaultMaterialSlot();
+}
+
 Mesh::Mesh(const std::string& meshName,
     std::shared_ptr<Material> mat)
-    : material(std::move(mat))
+    : material(mat ? std::move(mat) : DefaultMaterial())
 {
 	this->meshName = meshName;
 
@@ -53,34 +83,56 @@ void Mesh::bindMaterial(const glm::mat4& model,
 
 void Mesh::draw() const
 {
-    if (!buffer) return;
+    if (!buffer || !material) return;
+
+    // Which of the PBR texture slots this material's shader actually uses. The GLSL
+    // compiler strips every sampler a shader doesn't read, so e.g. a procedural
+    // surface (lava, water) has none of them: for those, binding a texture and
+    // setting the uniform would be wasted work — and, without this check, a
+    // "uniform not found" warning per slot per frame.
+    const bool useAlbedo    = material->hasUniform("uAlbedoTex");
+    const bool useNormal    = material->hasUniform("uNormalTex");
+    const bool useMR        = material->hasUniform("uMRTex");
+    const bool useOcclusion = material->hasUniform("uOcclusionTex");
+    const bool useEmissive  = material->hasUniform("uEmissiveTex");
+
     glBindVertexArray(buffer->VAO);
     for (const auto& sm : buffer->subMeshes)
     {
-        // Unit 0 � albedo (fallback: white)
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, sm.diffuseTex ? sm.diffuseTex : m_fallbackWhite);
-        material->setInt("uAlbedoTex", 0);
+        // Unit 0 - albedo (fallback: white)
+        if (useAlbedo) {
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, sm.diffuseTex ? sm.diffuseTex : m_fallbackWhite);
+            material->setIntIfPresent("uAlbedoTex", 0);
+        }
 
-        // Unit 1 � normal map (fallback: flat normal 0.5, 0.5, 1.0)
-        glActiveTexture(GL_TEXTURE1);
-        glBindTexture(GL_TEXTURE_2D, sm.normalTex ? sm.normalTex : m_fallbackNormal);
-        material->setInt("uNormalTex", 1);
+        // Unit 1 - normal map (fallback: flat normal 0.5, 0.5, 1.0)
+        if (useNormal) {
+            glActiveTexture(GL_TEXTURE1);
+            glBindTexture(GL_TEXTURE_2D, sm.normalTex ? sm.normalTex : m_fallbackNormal);
+            material->setIntIfPresent("uNormalTex", 1);
+        }
 
-        // Unit 2 � metallic/roughness (fallback: non-metal, full rough)
-        glActiveTexture(GL_TEXTURE2);
-        glBindTexture(GL_TEXTURE_2D, sm.mrTex ? sm.mrTex : m_fallbackMR);
-        material->setInt("uMRTex", 2);
+        // Unit 2 - metallic/roughness (fallback: non-metal, full rough)
+        if (useMR) {
+            glActiveTexture(GL_TEXTURE2);
+            glBindTexture(GL_TEXTURE_2D, sm.mrTex ? sm.mrTex : m_fallbackMR);
+            material->setIntIfPresent("uMRTex", 2);
+        }
 
-        // Unit 3 � occlusion (fallback: full white = no occlusion)
-        glActiveTexture(GL_TEXTURE3);
-        glBindTexture(GL_TEXTURE_2D, sm.occlusionTex ? sm.occlusionTex : m_fallbackWhite);
-        material->setInt("uOcclusionTex", 3);
+        // Unit 3 - occlusion (fallback: full white = no occlusion)
+        if (useOcclusion) {
+            glActiveTexture(GL_TEXTURE3);
+            glBindTexture(GL_TEXTURE_2D, sm.occlusionTex ? sm.occlusionTex : m_fallbackWhite);
+            material->setIntIfPresent("uOcclusionTex", 3);
+        }
 
-        // Unit 4 � emissive (fallback: black = no emission)
-        glActiveTexture(GL_TEXTURE4);
-        glBindTexture(GL_TEXTURE_2D, sm.emissiveTex ? sm.emissiveTex : m_fallbackBlack);
-        material->setInt("uEmissiveTex", 4);
+        // Unit 4 - emissive (fallback: black = no emission)
+        if (useEmissive) {
+            glActiveTexture(GL_TEXTURE4);
+            glBindTexture(GL_TEXTURE_2D, sm.emissiveTex ? sm.emissiveTex : m_fallbackBlack);
+            material->setIntIfPresent("uEmissiveTex", 4);
+        }
 
         glDrawElements(GL_TRIANGLES, sm.indexCount, GL_UNSIGNED_INT,
             (void*)(size_t)(sm.indexOffset * sizeof(uint32_t)));

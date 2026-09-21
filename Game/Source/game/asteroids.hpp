@@ -40,7 +40,7 @@
 
 
 // Pre-match freeze: see MatchStartTimer/MatchStartSystem in LogicSystems.hpp.
-inline constexpr int MATCH_START_COUNTDOWN_TICKS = 10 * TICKS_PER_SECOND;
+inline constexpr int MATCH_START_COUNTDOWN_TICKS = 20 * TICKS_PER_SECOND;
 
 // Returns the world-space centre of tile (cx, cy).
 // Matches the formula used in InitECSLogic / InitECSRenderer.
@@ -902,12 +902,15 @@ public:
                 Entity newBullet = em.CreateEntity();
                 Transform* t = em.AddComponent<Transform>(newBullet, Transform{});
                 t->setPosition(glm::vec3(b.posX, b.posY, 0.0f));
-
-                auto bulletMat = std::make_shared<Material>("generic.vert", "generic.frag");
-                bulletMat->setVec3("uColor", glm::vec3(1.0f, 1.0f, 0.0f));
+                // The bolt is stretched along its local +X: face the direction of flight
+                // (constant for the bullet's whole life, so it's set once, here).
+                t->setRotation(glm::vec3(0.0f, 0.0f, glm::degrees(std::atan2(b.velY, b.velX))));
+                t->setScale(LASER_BOLT_SCALE);
 
                 em.AddComponent<ECSBullet>(newBullet, ECSBullet{ b.id, b.velX, b.velY, b.ownerId, b.lifetime });
-                em.AddComponent<MeshComponent>(newBullet, MeshComponent(new Mesh("bullet.glb", bulletMat)));
+                em.AddComponent<BulletVisual>(newBullet, BulletVisual{});
+                AddLaserBoltMesh(em, newBullet, b.id);
+                AddLaserBoltLight(em, newBullet);
 
                 Entity bulletSound = em.CreateEntity();
                 Transform* st = em.AddComponent<Transform>(bulletSound, Transform{});
@@ -1017,6 +1020,8 @@ public:
 		world.GetEntityManager().RegisterComponentType<ExitButtonChecker>();
 		world.GetEntityManager().RegisterComponentType<ThrusterSound>();
 		world.GetEntityManager().RegisterComponentType<FluidSurface>();
+		world.GetEntityManager().RegisterComponentType<LaserWallVisual>();
+		world.GetEntityManager().RegisterComponentType<BulletVisual>();
 		world.GetEntityManager().RegisterComponentType<GameStatusText>();
 		world.GetEntityManager().RegisterComponentType<MatchStartTimer>();
 
@@ -1044,8 +1049,7 @@ public:
                 player, Playable{ i, MakeZeroInputBlob(), (i == playerId) });
             world.GetEntityManager().AddComponent<SpaceShip>(player, SpaceShip{ 1, -1, 0, true });
             world.GetEntityManager().AddComponent<MeshComponent>(
-                player, MeshComponent(new Mesh("ship_low.glb",
-                    std::make_shared<Material>("ggx.vert", "ggx.frag"))));
+                player, MeshComponent(new Mesh("ship_low.glb")));
 
 			world.GetEntityManager().AddComponent<JustDeathChecker>(player, JustDeathChecker{});
 
@@ -1120,7 +1124,12 @@ public:
         Transform* camTrans = world.GetEntityManager().AddComponent<Transform>(camera, Transform{});
         camTrans->setPosition(glm::vec3(0.0f, 0.0f, 18.0f));
         Camera* camSettings = world.GetEntityManager().AddComponent<Camera>(camera, Camera{});
-        camSettings->setPerspective(45.0f, window->getAspectRatio(), 0.001f, 1000.0f);
+        // Near plane matters far more than it looks: depth is 32F with the standard
+        // (non-reversed) mapping, so at 0.001 the z-buffer resolves only ~0.1 world
+        // units at 40 away and ~1 unit at 150 — surfaces that close z-fight (the
+        // lasers against the pillars, for one). The camera never gets within
+        // several units of anything, so 0.5 is safe and ~500x more precise.
+        camSettings->setPerspective(45.0f, window->getAspectRatio(), 0.5f, 1000.0f);
         camSettings->setTarget(glm::vec3(0.0f, 0.0f, 0.0f));
         camSettings->setUp(glm::vec3(0.0f, 1.0f, 0.0f));
 
@@ -1196,17 +1205,6 @@ public:
             };
 		
 
-        // Point light
-        Entity light = world.GetEntityManager().CreateEntity();
-        Transform* tlight = world.GetEntityManager().AddComponent<Transform>(light, Transform{});
-        tlight->setPosition(glm::vec3(0.0f, 0.0f, 15.0f));
-        PointLightComponent* lightComp =
-            world.GetEntityManager().AddComponent<PointLightComponent>(light, PointLightComponent{});
-        lightComp->color = glm::vec3(0.302f, 0.651f, 1.0f);
-        lightComp->intensity = 1000.0f;
-        lightComp->radius = 100.0f;
-        lightComp->castShadows = true;
-
         // Lava floor
         Entity lavaFloor = world.GetEntityManager().CreateEntity();
         Transform* lavaTrans = world.GetEntityManager().AddComponent<Transform>(lavaFloor, Transform{});
@@ -1216,7 +1214,11 @@ public:
 
         auto lavaMat = std::make_shared<Material>("fluid.vert", "lava.frag");
         // Molten swell — noticeably alive, still slower/heavier than water's chop.
-        lavaMat->setFloat("uWaveAmplitude", 0.45f);
+        // Amplitude is in the mesh's local units (the floor is scaled x5 below): 0.14 is
+        // ~2.9 world units of swell, peak to peak. It was 0.45 while fluid.vert put most of
+        // the displacement along the plane instead of up (see the note there), which
+        // happened to give about the same height; with the axes right, 0.45 would be ~9.4.
+        lavaMat->setFloat("uWaveAmplitude", 0.14f);
         lavaMat->setFloat("uWaveSpeed", 0.7f);
         lavaMat->setFloat("uWaveScale", 4.0f);
         lavaMat->setVec3("uRockColor", glm::vec3(0.05f, 0.03f, 0.03f));
@@ -1244,8 +1246,7 @@ public:
                     (y - y_size / 2.0f) * 80.0f, -4.0f));
                 t->setScale(glm::vec3(1.0f));
                 em.AddComponent<TileID>(e, TileID{ cellId });
-                em.AddComponent<MeshComponent>(e, MeshComponent(
-                    new Mesh("tile.glb", std::make_shared<Material>("ggx.vert", "ggx.frag"))));
+                em.AddComponent<MeshComponent>(e, MeshComponent(new Mesh("tile.glb")));
             }
 
         // Pillars
@@ -1284,8 +1285,7 @@ public:
                         }
                 }
                 em.AddComponent<PillarID>(e, pid);
-                em.AddComponent<MeshComponent>(e, MeshComponent(
-                    new Mesh("pilar.glb", std::make_shared<Material>("ggx.vert", "ggx.frag"))));
+                em.AddComponent<MeshComponent>(e, MeshComponent(new Mesh("pilar.glb")));
             }
 
         // Walls
@@ -1335,6 +1335,34 @@ public:
                     }
             }
 
+        // Beam mesh + the scale it was designed for: local Z spans +-20 world units, so
+        // each end lands exactly on a pillar axis (pillars are 40 apart). The tube is
+        // radius 2 in the middle and narrows over the last 8 units to 0.9 at each end,
+        // so the ends hide inside the pillar's column (radius ~1.3) instead of wrapping
+        // around it. Its profile is baked into laser_beam.glb in world units at this
+        // scale: change the scale and the taper scales with it.
+        // Only the visual entities use this scale; the logic-side wall entities keep theirs.
+        const char* const laserBeamMesh = "laser_beam.glb";
+        const glm::vec3   laserBeamScale(2.0f, 2.0f, 20.0f);
+
+        // One Material per wall/spoke: each carries its own power/warning/flash
+        // uniforms (driven by LaserWallRenderSystem). The compiled program is
+        // shared through ShaderLoader's cache, only the uniform state is per wall.
+        // seed desyncs the noise so neighbouring beams don't animate in lockstep.
+        // The meshes are drawn additively (MeshComponent::additive), so the
+        // colours below are light being ADDED to the scene, not a surface colour.
+        auto makeLaserWallMaterial = [](const glm::vec3& pos)
+            {
+                auto mat = std::make_shared<Material>("laser_wall.vert", "laser_wall.frag");
+                mat->setVec3("uBeamColor", glm::vec3(1.0f, 0.07f, 0.04f));
+                mat->setVec3("uWarnColor", glm::vec3(1.0f, 0.5f, 0.04f));
+                mat->setVec3("uHotColor", glm::vec3(1.0f, 0.7f, 0.55f));
+                mat->setFloat("uGlowStrength", 1.6f);
+                mat->setFloat("uCoreStrength", 3.0f);
+                mat->setFloat("uSeed", pos.x * 0.173f + pos.y * 0.291f);
+                return mat;
+            };
+
         for (auto& w : walls)
         {
             const int cellId = w.cellX * y_size + w.cellY;
@@ -1342,14 +1370,15 @@ public:
             Transform* t = em.AddComponent<Transform>(e, Transform{});
             t->setPosition(w.pos);
             t->setRotation(w.rot);
-            t->setScale(glm::vec3(2.0f, 2.0f, 19.0f));
+            t->setScale(laserBeamScale);
             LaserWallID lwid(cellId, w.dir);
             lwid.enabled = w.onBorder;
             em.AddComponent<LaserWallID>(e, lwid);
+            em.AddComponent<LaserWallVisual>(e, LaserWallVisual{});
             MeshComponent* mc = em.AddComponent<MeshComponent>(e,
-                MeshComponent(new Mesh("laser_wall.glb",
-                    std::make_shared<Material>("ggx.vert", "ggx.frag"))));
+                MeshComponent(new Mesh(laserBeamMesh, makeLaserWallMaterial(w.pos))));
             mc->castShadows = false;
+            mc->additive = true;
         }
 
         // Center spokes
@@ -1366,15 +1395,16 @@ public:
                         Transform* t = em.AddComponent<Transform>(e, Transform{});
                         t->setPosition(pos);
                         t->setRotation(rot);
-                        t->setScale(glm::vec3(2.0f, 2.0f, 19.0f));
+                        t->setScale(laserBeamScale);
                         LaserWallID lwid(cellId, dir);
                         lwid.enabled = false;
                         em.AddComponent<LaserWallID>(e, lwid);
                         em.AddComponent<CenterSpoke>(e, CenterSpoke{});
+                        em.AddComponent<LaserWallVisual>(e, LaserWallVisual{});
                         MeshComponent* mc = em.AddComponent<MeshComponent>(e,
-                            MeshComponent(new Mesh("laser_wall.glb",
-                                std::make_shared<Material>("ggx.vert", "ggx.frag"))));
+                            MeshComponent(new Mesh(laserBeamMesh, makeLaserWallMaterial(pos))));
                         mc->castShadows = false;
+                        mc->additive = true;
                     };
 
                 const float edgeYdown = (2 * cy - y_size) * 40.0f - 40.0f;
@@ -1404,6 +1434,7 @@ public:
         // countdown while the pre-match freeze is active, otherwise a no-op.
         world.AddSystem(std::make_unique<MatchStartCountdownRenderSystem>());
         world.AddSystem(std::make_unique<ChargingBulletRenderSystem>());
+        world.AddSystem(std::make_unique<BulletRenderSystem>());
         world.AddSystem(std::make_unique<LinkThrusterToShipSystem>());
         world.AddSystem(std::make_unique<LaserWallRenderSystem>());
 		world.AddSystem(std::make_unique<UpdateListenerTransformSystem>());

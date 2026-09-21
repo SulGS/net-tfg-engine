@@ -17,12 +17,7 @@
 #include <vector>
 #include <utility>
 
-// Horizontal alignment for the generic text helper
-enum class UITextAlign {
-    LEFT,
-    CENTER,
-    RIGHT
-};
+// UITextAlign (horizontal text alignment) lives in UIText.hpp: UIText carries it, and the generic text helper below takes it too.
 
 class UIRenderSystem : public ISystem {
 public:

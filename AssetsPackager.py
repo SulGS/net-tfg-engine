@@ -139,6 +139,16 @@ def main(asset_root, output_dir):
                 size
             ))
 
+        # Bin table, after the entries: the numbering used above, by bin name.
+        # The ids alone don't say which bin is which, and the engine numbering
+        # bins in the order a game happens to load them only matches this
+        # numbering by luck (it did with two scenes; a third broke it).
+        out.write(struct.pack("<I", len(bin_ids)))
+        for bin_name, bin_id in bin_ids.items():
+            raw_name = bin_name.encode("utf-8")
+            out.write(struct.pack("<I H", bin_id, len(raw_name)))
+            out.write(raw_name)
+
 
 
     print(f"Packed {len(asset_index)} assets")

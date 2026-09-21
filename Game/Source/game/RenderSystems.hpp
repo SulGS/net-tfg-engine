@@ -33,6 +33,88 @@ inline int GetWinnerId(EntityManager& entityManager)
     return (total >= 2 && aliveCount == 1) ? winnerId : -1;
 }
 
+// ---------------------------------------------------------------------------
+// Laser shot + charge-up visuals
+//
+// Both are volumetric glows raymarched inside a "canvas" mesh, drawn additively
+// (MeshComponent::additive). The canvas is a UNIT SPHERE (charge.glb) that the
+// entity's scale stretches into the volume the effect needs: a long ellipsoid for
+// the bolt, a sphere for the charge orb. See glow_volume.vert.
+// ---------------------------------------------------------------------------
+inline constexpr const char* GLOW_VOLUME_MESH = "charge.glb";
+
+// Bolt canvas: local +X is the direction of flight (the bullet is rotated about Z
+// to face its velocity). The head sits ~0.7 ahead of the bullet's position, i.e.
+// on its 2x2 collision box, and the tail trails ~7 units behind it — a bit more
+// than the 5 units a bullet travels per tick, so the streak always covers the
+// distance covered since the last tick.
+inline const glm::vec3 LASER_BOLT_SCALE(7.0f, 1.7f, 1.7f);
+
+// The light a bolt casts on what it flies over (tiles, pillars, ships). It is one of
+// the very few point lights in the scene, so it does the visible work. A bolt flies
+// ~4 above the tiles: with these values the floor right under it gets ~3x its
+// albedo, ~10 units away ~0.4x, and nothing beyond the radius.
+inline constexpr float LASER_BOLT_LIGHT_INTENSITY = 150.0f;
+inline constexpr float LASER_BOLT_LIGHT_RADIUS = 40.0f;
+inline const glm::vec3 LASER_BOLT_LIGHT_COLOR(1.0f, 0.6f, 0.2f);
+
+// Charge orb: radius of the canvas sphere (the visible glow is smaller than this)
+// and how far ahead of the ship's centre it forms — its nose.
+inline constexpr float CHARGE_ORB_RADIUS = 4.2f;
+inline constexpr float CHARGE_MUZZLE_OFFSET = 2.0f;
+
+// Adds the laser bolt's mesh to a bullet entity. One Material per bolt: each
+// carries its own age/fade uniforms (BulletRenderSystem); the compiled program is
+// shared through ShaderLoader's cache. The colours are light being ADDED to the
+// scene, not a surface colour.
+inline MeshComponent* AddLaserBoltMesh(EntityManager& em, Entity bullet, int bulletId)
+{
+    auto mat = std::make_shared<Material>("glow_volume.vert", "laser_bolt.frag");
+    mat->setVec3("uColor", glm::vec3(1.0f, 0.55f, 0.08f));
+    mat->setVec3("uHotColor", glm::vec3(1.0f, 0.92f, 0.6f));
+    mat->setFloat("uGlowStrength", 1.8f);
+    mat->setFloat("uCoreStrength", 3.2f);
+    mat->setFloat("uSeed", bulletId * 2.7f); // desyncs the tail noise between bolts
+
+    MeshComponent* mc = em.AddComponent<MeshComponent>(bullet,
+        MeshComponent(new Mesh(GLOW_VOLUME_MESH, mat)));
+    mc->castShadows = false;
+    mc->additive = true;
+    return mc;
+}
+
+// Adds the bolt's point light to a bullet entity. It follows the entity's Transform;
+// BulletRenderSystem scales its intensity every frame with the bolt's age and fade,
+// so it starts at 0 here. It casts no shadows on purpose: the shadow cube-map slots
+// are few (8) and expensive, and PointLightComponent defaults to casting them.
+inline PointLightComponent* AddLaserBoltLight(EntityManager& em, Entity bullet)
+{
+    PointLightComponent* light =
+        em.AddComponent<PointLightComponent>(bullet, PointLightComponent{});
+    light->color = LASER_BOLT_LIGHT_COLOR;
+    light->intensity = 0.0f;
+    light->radius = LASER_BOLT_LIGHT_RADIUS;
+    light->castShadows = false;
+    return light;
+}
+
+// Same for the charge-up orb of a ship (seed = its player id).
+inline MeshComponent* AddChargeOrbMesh(EntityManager& em, Entity orb, int playerId)
+{
+    auto mat = std::make_shared<Material>("glow_volume.vert", "laser_charge.frag");
+    mat->setVec3("uColor", glm::vec3(1.0f, 0.55f, 0.08f));
+    mat->setVec3("uHotColor", glm::vec3(1.0f, 0.92f, 0.6f));
+    mat->setFloat("uGlowStrength", 1.8f);
+    mat->setFloat("uCoreStrength", 3.2f);
+    mat->setFloat("uSeed", playerId * 3.1f);
+
+    MeshComponent* mc = em.AddComponent<MeshComponent>(orb,
+        MeshComponent(new Mesh(GLOW_VOLUME_MESH, mat)));
+    mc->castShadows = false;
+    mc->additive = true;
+    return mc;
+}
+
 class CameraFollowSystem : public ISystem
 {
 public:
@@ -385,8 +467,40 @@ public:
     }
 };
 
+// The charge-up before a shot (laser_charge.frag): an orb of energy that forms at
+// the ship's muzzle for as long as the ship is charging, with a shell of sparks
+// that contracts into a white-hot core. Created when the charge starts, destroyed
+// when it ends (the bolt itself is BulletRenderSystem's job).
 class ChargingBulletRenderSystem : public ISystem
 {
+    const float CHARGING_BULLET_FRAMES = 5; // = CHARGE_SHOOT_FRAMES in InputSystem
+    float time = 0.0f; // render-side clock for the shader ("uTime")
+
+    // Puts the orb on the ship's nose and pushes the charge state to its shader.
+    void UpdateOrb(Transform* orbTransform, MeshComponent* orbMesh,
+        Transform* shipTransform, const SpaceShip* ship) const
+    {
+        // Same heading the bullet will be fired along (see InputServerSystem).
+        const float yaw = glm::radians(shipTransform->getRotation().z);
+        const glm::vec3 shipPos = shipTransform->getPosition();
+        orbTransform->setPosition(glm::vec3(
+            shipPos.x + std::cos(yaw) * CHARGE_MUZZLE_OFFSET,
+            shipPos.y + std::sin(yaw) * CHARGE_MUZZLE_OFFSET,
+            0.0f));
+
+        // 0.2 on the first frame of the charge, 1.0 on the last.
+        const float progress = std::clamp(
+            (CHARGING_BULLET_FRAMES - ship->remainingShootFrames + 1) / CHARGING_BULLET_FRAMES,
+            0.0f, 1.0f);
+
+        if (!orbMesh->mesh) return;
+        if (Material* mat = orbMesh->mesh->getMaterial())
+        {
+            mat->setFloat("uTime", time);
+            mat->setFloat("uProgress", progress);
+        }
+    }
+
 public:
     void Update(
         EntityManager& entityManager,
@@ -395,13 +509,13 @@ public:
         float deltaTime
     ) override
     {
+        time += deltaTime;
+
         auto playerQuery =
             entityManager.CreateQuery<Transform, Playable, SpaceShip>();
 
         auto effectQuery =
             entityManager.CreateQuery<Transform, ChargingShootEffect, MeshComponent>();
-
-        const float CHARGING_BULLET_FRAMES = 5;
 
         for (auto [playerEntity, playerTransform, play, ship] : playerQuery)
         {
@@ -419,19 +533,7 @@ public:
                     }
                     else
                     {
-                        effectTransform->setPosition(
-                            glm::vec3(
-                                playerTransform->getPosition().x,
-                                playerTransform->getPosition().y,
-                                0.0f
-                            )
-                        );
-
-                        float scale = (CHARGING_BULLET_FRAMES - ship->remainingShootFrames + 1) * 1.5f;
-
-                        effectTransform->setScale(
-                            glm::vec3(scale, scale, 1.0f)
-                        );
+                        UpdateOrb(effectTransform, mesh, playerTransform, ship);
                     }
                 }
             }
@@ -443,20 +545,8 @@ public:
                 Transform* effectTransform =
                     entityManager.AddComponent<Transform>(effectEntity, Transform{});
 
-                effectTransform->setPosition(
-                    glm::vec3(
-                        playerTransform->getPosition().x,
-                        playerTransform->getPosition().y,
-                        0.0f
-                    )
-                );
-
-                float scale =
-                    (CHARGING_BULLET_FRAMES - ship->remainingShootFrames + 1) * 1.5f;
-
-                effectTransform->setScale(
-                    glm::vec3(scale, scale, 1.0f)
-                );
+                // Constant size: the charge builds through the shader, not the scale.
+                effectTransform->setScale(glm::vec3(CHARGE_ORB_RADIUS));
 
                 ChargingShootEffect* effectComponent =
                     entityManager.AddComponent<ChargingShootEffect>(
@@ -466,15 +556,57 @@ public:
 
                 effectComponent->entity = play->playerId;
 
-                auto shootingMat =
-                    std::make_shared<Material>("generic.vert", "generic.frag");
+                MeshComponent* orbMesh =
+                    AddChargeOrbMesh(entityManager, effectEntity, play->playerId);
 
-                shootingMat->setVec3("uColor", glm::vec3(1.0f, 1.0f, 0.0f));
+                UpdateOrb(effectTransform, orbMesh, playerTransform, ship);
+            }
+        }
+    }
+};
 
-                entityManager.AddComponent<MeshComponent>(
-                    effectEntity,
-                    MeshComponent(new Mesh("charge.glb", shootingMat))
-                );
+// Per-frame state of the laser bolts: the uniforms of laser_bolt.frag (a render-side
+// clock, the bolt's age for the spawn flash and ramp-in, and how close it is to
+// expiring, so it dissipates instead of vanishing) and the intensity of its point
+// light, which follows the same age/fade. Purely visual — nothing here is synced or
+// predicted. The bolt's position and heading are set when its entity is created.
+class BulletRenderSystem : public ISystem
+{
+    const float FADE_TICKS = 6.0f; // the bolt dissipates over the last N ticks of its lifetime
+    // The bolt is born at the ship's centre, where a full-strength light would blow
+    // out the hull for a frame or two, so the light swells in over this long instead.
+    const float LIGHT_RAMP_SECONDS = 0.08f;
+    float time = 0.0f;
+
+public:
+    void Update(
+        EntityManager& entityManager,
+        std::vector<EventEntry>& events,
+        bool isServer,
+        float deltaTime
+    ) override
+    {
+        time += deltaTime;
+
+        auto bulletQuery = entityManager.CreateQuery<ECSBullet, MeshComponent, BulletVisual>();
+        for (auto [entity, bullet, mesh, visual] : bulletQuery)
+        {
+            visual->age += deltaTime;
+
+            const float fade = std::clamp(bullet->lifetime / FADE_TICKS, 0.0f, 1.0f);
+
+            if (PointLightComponent* light = entityManager.GetComponent<PointLightComponent>(entity))
+            {
+                const float ramp = std::clamp(visual->age / LIGHT_RAMP_SECONDS, 0.0f, 1.0f);
+                light->intensity = LASER_BOLT_LIGHT_INTENSITY * ramp * ramp * (3.0f - 2.0f * ramp) * fade;
+            }
+
+            if (!mesh->mesh) continue;
+            if (Material* mat = mesh->mesh->getMaterial())
+            {
+                mat->setFloat("uTime", time);
+                mat->setFloat("uAge", visual->age);
+                mat->setFloat("uFade", fade);
             }
         }
     }
@@ -649,11 +781,58 @@ public:
     }
 };
 
+// Drives tile/wall/spoke/pillar visibility from the replicated state, and the
+// per-wall beam animation (laser_wall.frag): each wall eases toward "solid",
+// "warning" or "off" through a LaserWallVisual instead of popping in and out.
+// Purely a render-side effect — nothing here is synced or predicted.
 class LaserWallRenderSystem : public ISystem
 {
-    float warningTimer = 0.0f;
-    const float WARNING_BLINK_INTERVAL = 0.25f;
-    bool warningBlinkActive = false; // flips every WARNING_BLINK_INTERVAL, used for all warning walls/spokes
+    // Quick to energise so the wall still reads as a snap; slower to die so the
+    // beam visibly collapses instead of vanishing.
+    const float POWER_RISE_TIME = 0.20f;
+    const float POWER_FALL_TIME = 0.30f;
+    const float WARNING_BLEND_TIME = 0.15f;  // fade to/from the amber look
+    const float WARNING_POWER = 0.5f;        // width/brightness of the amber preview beam
+    const float WARNING_RAMP_TIME = 3.0f;    // = WARNING_THRESHOLD in LogicSystems.hpp; how long the stutter takes to go from mostly-off to mostly-on
+    const float FLASH_DECAY_TIME = 0.35f;
+
+    float time = 0.0f; // render-side clock for the beam shader ("uTime")
+
+    static float MoveToward(float current, float target, float maxDelta)
+    {
+        if (current < target) return std::min(current + maxDelta, target);
+        return std::max(current - maxDelta, target);
+    }
+
+    // Eases one wall/spoke toward what the replicated state says (solid /
+    // warning / off), toggles its mesh, and pushes the result to the shader.
+    void AnimateWall(MeshComponent* mesh, LaserWallVisual* vis, bool solid, bool warning, float deltaTime)
+    {
+        // Just energised: white-hot burst that decays.
+        if (solid && !vis->wasSolid) vis->flash = 1.0f;
+        vis->wasSolid = solid;
+        vis->flash = std::max(0.0f, vis->flash - deltaTime / FLASH_DECAY_TIME);
+
+        const float targetPower = solid ? 1.0f : (warning ? WARNING_POWER : 0.0f);
+        const float riseFall = (targetPower > vis->power) ? POWER_RISE_TIME : POWER_FALL_TIME;
+        vis->power = MoveToward(vis->power, targetPower, deltaTime / riseFall);
+
+        vis->warning = MoveToward(vis->warning, warning ? 1.0f : 0.0f, deltaTime / WARNING_BLEND_TIME);
+        vis->warnTime = warning ? vis->warnTime + deltaTime : 0.0f;
+
+        // Fully faded out: stop drawing it altogether (also skips the uniform uploads).
+        mesh->enabled = vis->power > 0.002f;
+        if (!mesh->enabled || !mesh->mesh) return;
+
+        if (Material* mat = mesh->mesh->getMaterial())
+        {
+            mat->setFloat("uTime", time);
+            mat->setFloat("uIntensity", vis->power);
+            mat->setFloat("uWarning", vis->warning);
+            mat->setFloat("uWarnTension", std::min(vis->warnTime / WARNING_RAMP_TIME, 1.0f));
+            mat->setFloat("uFlash", vis->flash);
+        }
+    }
 
 public:
     void Update(
@@ -666,13 +845,7 @@ public:
         const int x_size = 5;
         const int y_size = 5;
 
-        // Advance warning blink timer
-        warningTimer += deltaTime;
-        if (warningTimer >= WARNING_BLINK_INTERVAL)
-        {
-            warningTimer -= WARNING_BLINK_INTERVAL;
-            warningBlinkActive = !warningBlinkActive;
-        }
+        time += deltaTime;
 
         // Build active tile set
         std::unordered_set<int> activeTileIds;
@@ -707,48 +880,46 @@ public:
 
         // Walls and spokes
         {
-            auto laserWallQuery = entityManager.CreateQuery<LaserWallID, MeshComponent>();
-            for (auto [entity, lwID, mesh] : laserWallQuery)
+            auto laserWallQuery = entityManager.CreateQuery<LaserWallID, MeshComponent, LaserWallVisual>();
+            for (auto [entity, lwID, mesh, visual] : laserWallQuery)
             {
                 bool isSpoke = entityManager.GetComponent<CenterSpoke>(entity) != nullptr;
+
+                // solid = beam should be energised; warning = about to be
+                // (disabled but flagged). Same rules as before, only the
+                // result now feeds the animation instead of mesh->enabled.
+                bool solid = false;
+                bool warning = false;
 
                 if (isSpoke)
                 {
                     // Single-owner: no neighbour concept, only its own cell matters.
-                    if (!activeTileIds.count(lwID->cellId))
+                    if (activeTileIds.count(lwID->cellId))
                     {
-                        mesh->enabled = false;
-                        continue;
+                        solid = lwID->enabled;
+                        warning = lwID->warning && !lwID->enabled;
                     }
-                    if (lwID->warning && !lwID->enabled)
-                        mesh->enabled = warningBlinkActive;
-                    else
-                        mesh->enabled = lwID->enabled;
-                    continue;
-                }
-
-                // Shared edge: dedup means one entity per boundary, stored
-                // under whichever of its two cells happened to be visited
-                // first when the wall was built, so visibility has to be
-                // judged symmetrically — see ClassifyWallEdge.
-                WallEdgeState edgeState = ClassifyWallEdge(lwID->cellId, lwID->dir, activeTileIds);
-
-                if (edgeState == WallEdgeState::Dead)
-                {
-                    mesh->enabled = false;
-                }
-                else if (edgeState == WallEdgeState::SoleBorder)
-                {
-                    mesh->enabled = true;
-                }
-                else if (lwID->warning && !lwID->enabled)
-                {
-                    mesh->enabled = warningBlinkActive;
                 }
                 else
                 {
-                    mesh->enabled = lwID->enabled;
+                    // Shared edge: dedup means one entity per boundary, stored
+                    // under whichever of its two cells happened to be visited
+                    // first when the wall was built, so visibility has to be
+                    // judged symmetrically — see ClassifyWallEdge.
+                    WallEdgeState edgeState = ClassifyWallEdge(lwID->cellId, lwID->dir, activeTileIds);
+
+                    if (edgeState == WallEdgeState::SoleBorder)
+                    {
+                        solid = true;
+                    }
+                    else if (edgeState == WallEdgeState::Interior)
+                    {
+                        solid = lwID->enabled;
+                        warning = lwID->warning && !lwID->enabled;
+                    }
                 }
+
+                AnimateWall(mesh, visual, solid, warning, deltaTime);
             }
         }
 

@@ -1,6 +1,6 @@
 #version 430 core
 
-// Pairs with fluid.vert. Reuses ggx.frag's SSBO/UBO layout, texture units and
+// Pairs with fluid.vert. Reuses the engine's default shader's (DefaultShader.hpp) SSBO/UBO layout, texture units and
 // BRDF/shadow code verbatim (GLSL here has no #include, so it's duplicated
 // rather than shared) so water lights and shadows exactly like every other
 // surface in the scene — only the "material" section at the bottom differs:
@@ -23,15 +23,9 @@ layout(location = 0) out vec4 FragColor;
 // -------------------------------------------------------
 // Texture units
 // -------------------------------------------------------
-// Mesh::draw() always binds+sets these 5 regardless of the material (see
-// Mesh.cpp), even though water has no texture maps — declared but unused so
-// Material::getLocation() finds a real location instead of warning every
-// single frame.
-uniform sampler2D      uAlbedoTex;         // unit 0
-uniform sampler2D      uNormalTex;         // unit 1
-uniform sampler2D      uMRTex;             // unit 2
-uniform sampler2D      uOcclusionTex;      // unit 3
-uniform sampler2D      uEmissiveTex;       // unit 4
+// Units 0-4 are the PBR texture maps (albedo, normal, metal/rough, occlusion,
+// emissive); water has none, so it doesn't declare them. Mesh::draw() checks which
+// of them a shader has and only binds those.
 uniform samplerCubeArray uShadowCubeArray; // unit 5 — point light cubemap array
 uniform sampler2DShadow  uDirShadowMap;    // unit 6 — directional light shadow map (hardware PCF)
 
@@ -86,7 +80,7 @@ layout(std140, binding = 2) uniform DirLightBlock {
 const float PI = 3.14159265358979;
 
 // -------------------------------------------------------
-// GGX / Cook-Torrance BRDF — identical to ggx.frag
+// GGX / Cook-Torrance BRDF — identical to the engine's default shader (DefaultShader.hpp)
 // -------------------------------------------------------
 float D_GGX(float NdotH, float alpha)
 {
@@ -130,7 +124,7 @@ vec3 CookTorranceBRDF(vec3 N, vec3 V, vec3 L,
 }
 
 // -------------------------------------------------------
-// Poisson sphere — 32 samples for PCSS (identical to ggx.frag)
+// Poisson sphere — 32 samples for PCSS (identical to the engine's default shader (DefaultShader.hpp))
 // -------------------------------------------------------
 const vec3 kPoissonSphere[32] = vec3[](
     vec3( 0.286,  0.928,  0.238), vec3(-0.612,  0.529, -0.588),
@@ -319,7 +313,7 @@ vec3 CalcDirLight(vec3 N, vec3 V,
 }
 
 // -------------------------------------------------------
-// Procedural surface — this is the only part that differs from ggx.frag
+// Procedural surface — this is the only part that differs from the default shader
 // -------------------------------------------------------
 
 float hash21(vec2 p)

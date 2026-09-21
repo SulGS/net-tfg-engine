@@ -151,6 +151,9 @@ void RenderSystem::Update(EntityManager& entityManager,
 
     ShadingPass(meshQuery, view, projection, cameraPos);
 
+    // Before the particles so their distortion pass (which copies the scene) sees the beams too.
+    AdditivePass(meshQuery, view, projection, cameraPos);
+
     if (m_particleSystem)
         m_particleSystem->Draw(view, projection);
 

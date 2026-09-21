@@ -1,5 +1,28 @@
 #include "ShaderLoader.hpp"
 
+void ShaderLoader::registerBuiltIn(const std::string& key, const char* source)
+{
+    builtIns()[key] = source;
+}
+
+bool ShaderLoader::fetchSource(const std::string& key, std::string& code, bool& fromAsset)
+{
+    auto& registered = builtIns();
+    auto it = registered.find(key);
+    if (it != registered.end()) {
+        code = it->second;
+        fromAsset = false;
+        return true;
+    }
+
+    auto asset = AssetManager::instance().loadAsset<ShaderSource>(key);
+    if (!asset) return false;
+
+    code = asset->code;
+    fromAsset = true;
+    return true;
+}
+
 // Cached create — the only path Material should use
 GLuint ShaderLoader::createProgram(const std::string& vertexAssetKey,
     const std::string& fragmentAssetKey)
@@ -16,25 +39,26 @@ GLuint ShaderLoader::createProgram(const std::string& vertexAssetKey,
         return it->second.program;
     }
 
-    // Cache miss � load sources from AssetManager
-    auto vertSrc = AssetManager::instance().loadAsset<ShaderSource>(vertexAssetKey);
-    if (!vertSrc) {
+    // Cache miss - get the sources (engine built-ins or game assets)
+    std::string vertCode, fragCode;
+    bool vertFromAsset = false, fragFromAsset = false;
+
+    if (!fetchSource(vertexAssetKey, vertCode, vertFromAsset)) {
         Debug::Error("ShaderLoader") << "Failed to load vertex shader asset: " << vertexAssetKey << "\n";
         return 0;
     }
 
-    auto fragSrc = AssetManager::instance().loadAsset<ShaderSource>(fragmentAssetKey);
-    if (!fragSrc) {
-        AssetManager::instance().unloadAsset<ShaderSource>(vertexAssetKey);
+    if (!fetchSource(fragmentAssetKey, fragCode, fragFromAsset)) {
+        if (vertFromAsset) AssetManager::instance().unloadAsset<ShaderSource>(vertexAssetKey);
         Debug::Error("ShaderLoader") << "Failed to load fragment shader asset: " << fragmentAssetKey << "\n";
         return 0;
     }
 
-    GLuint program = compileAndLink(vertSrc->code, fragSrc->code);
+    GLuint program = compileAndLink(vertCode, fragCode);
 
-    // Sources are CPU-only text � release them immediately
-    AssetManager::instance().unloadAsset<ShaderSource>(vertexAssetKey);
-    AssetManager::instance().unloadAsset<ShaderSource>(fragmentAssetKey);
+    // Sources are CPU-only text - release the asset references immediately
+    if (vertFromAsset) AssetManager::instance().unloadAsset<ShaderSource>(vertexAssetKey);
+    if (fragFromAsset) AssetManager::instance().unloadAsset<ShaderSource>(fragmentAssetKey);
 
     if (!program) return 0;
 

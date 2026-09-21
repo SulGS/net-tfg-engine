@@ -358,6 +358,27 @@ private:
 
         assetIndex = std::move(idx);
 
+        // Bin table, written by AssetsPackager.py after the entries: the packer's numbering of the bins, by name. Every entry above points at a bin by that number, but loadBin() would hand out slots in the order the game happens to load bins — which only matches by luck (it did with menu + online_level; a third scene, loaded second, took the slot the packer gave to online_level, and its own assets pointed past the end). So reserve each slot by name here; loadBin() then loads into it. An index without the table (older packer) just keeps the load-order behaviour.
+        uint32_t binCount = 0;
+        if (f.read(reinterpret_cast<char*>(&binCount), sizeof(binCount)))
+        {
+            for (uint32_t i = 0; i < binCount; ++i)
+            {
+                uint32_t binId = 0;
+                uint16_t nameLen = 0;
+                if (!f.read(reinterpret_cast<char*>(&binId), sizeof(binId))) break;
+                if (!f.read(reinterpret_cast<char*>(&nameLen), sizeof(nameLen))) break;
+
+                std::string name(nameLen, '\0');
+                if (nameLen > 0 && !f.read(name.data(), nameLen)) break;
+
+                if (bins.size() <= binId) bins.resize(binId + 1);
+                bins[binId].name = name;
+                binNameToId[name] = binId;
+                Debug::Info("AssetManager") << "Reserved slot " << binId << " for bin: " << name << "\n";
+            }
+        }
+
         Debug::Info("AssetManager")
             << "Loaded asset index with " << numAssets << " entries\n";
 

@@ -78,16 +78,43 @@ void Material::bind(const glm::mat4& model,
     }
 }
 
+GLint Material::lookup(const std::string& name)
+{
+    if (!shaderProgram) return -1;
+
+    auto it = locationCache.find(name);
+    if (it != locationCache.end()) return it->second;
+
+    const GLint loc = glGetUniformLocation(shaderProgram, name.c_str());
+    locationCache.emplace(name, loc);
+    return loc;
+}
+
 GLint Material::getLocation(const std::string& name)
 {
-    auto it = uniforms.find(name);
-    if (it != uniforms.end()) return it->second.location;
-
-    GLint loc = glGetUniformLocation(shaderProgram, name.c_str());
-    if (loc == -1) {
-        Debug::Warning("Material") << "Uniform '" << name << "' not found in shader.\n";
+    const GLint loc = lookup(name);
+    if (loc == -1 && warnedMissing.insert(name).second) {
+        Debug::Warning("Material") << "Uniform '" << name << "' not found in shader '"
+            << fragmentAssetKey << "'.\n";
     }
     return loc;
+}
+
+bool Material::hasUniform(const std::string& name)
+{
+    return lookup(name) != -1;
+}
+
+void Material::setIntIfPresent(const std::string& name, int value)
+{
+    const GLint loc = lookup(name);
+    if (loc != -1) uniforms[name] = { loc, value };
+}
+
+void Material::setVec3IfPresent(const std::string& name, const glm::vec3& value)
+{
+    const GLint loc = lookup(name);
+    if (loc != -1) uniforms[name] = { loc, value };
 }
 
 void Material::uploadUniform(GLint location, const UniformValue& value)

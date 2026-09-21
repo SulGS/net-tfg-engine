@@ -1,4 +1,86 @@
-#version 430 core
+#pragma once
+// The engine's DEFAULT SURFACE SHADER: physically based shading (GGX / Cook-Torrance)
+// with point-light cube-map shadows (PCSS), a directional light with PCF shadows,
+// and the standard glTF PBR texture set. A Mesh built without a Material gets this
+// one (see Mesh::DefaultMaterial), and anything that wants to match the scene's
+// lighting exactly (lava.frag, water.frag) reuses its BRDF and shadow code.
+//
+// What it expects from the pipeline:
+//   vertex attributes  0 position, 1 normal, 2 uv, 3 tangent (xyz + bitangent sign)
+//   texture units      0 albedo, 1 normal, 2 metallic/roughness, 3 occlusion, 4 emissive
+//                      (bound by Mesh::draw) and 5 point shadow cube-map array,
+//                      6 directional shadow map (bound by RenderSystem::ShadingPass)
+//   buffers            SSBO 0 point lights, SSBO 1 point shadow data, UBO 2 directional light
+//   uniforms           set per frame by RenderSystem::ShadingPass (camera position, light and
+//                      shadow counts, shadow resolutions) and by Material::bind (model/view/projection)
+//
+// Why it is embedded in the engine instead of shipped as a game asset: the engine is a
+// static library, and this shader is part of it — it must not depend on which files a
+// game packs, and there is no loose file to read at runtime. The rest of the pipeline's
+// shaders (shadows, tonemap, bloom, FXAA) are embedded the same way, in
+// RenderSystem_Shaders.cpp.
+//
+// It is registered with ShaderLoader as a built-in under the keys below, so a Material can
+// also name it explicitly: Material(DefaultShader::VertexKey, DefaultShader::FragmentKey).
+// Mesh::InitDefaultMaterial() does the registration and compiles it once at startup.
+
+#include "OpenGL/ShaderLoader.hpp"
+
+namespace DefaultShader
+{
+    // The "engine/" prefix keeps these apart from game asset names.
+    inline constexpr const char* VertexKey = "engine/ggx.vert";
+    inline constexpr const char* FragmentKey = "engine/ggx.frag";
+
+    inline constexpr const char* VertexSource = R"GLSL(#version 430 core
+
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNormal;
+layout(location = 2) in vec2 aUV;
+layout(location = 3) in vec4 aTangent; // xyz = tangent, w = bitangent sign
+
+uniform mat4 uModel;
+uniform mat4 uView;
+uniform mat4 uProjection;
+
+out vec3 vWorldPos;
+out vec2 vUV;
+out vec3 vT;
+out vec3 vB;
+out vec3 vN;
+
+void main()
+{
+    vec4 worldPos = uModel * vec4(aPos, 1.0);
+    vWorldPos     = worldPos.xyz;
+    vUV           = aUV;
+
+    // Extract rotation-only from uModel by stripping scale from each column.
+    // Numerically stable at any uniform scale (e.g. 200): all values stay near
+    // 1.0, unlike transpose(inverse(uModel)) which produces values of 1/scale
+    // (0.005 at scale 200) causing precision loss in interpolated TBN varyings
+    // across large triangles - the root cause of the specular dot/ring artifact.
+    mat3 modelMat = mat3(uModel);
+    mat3 rotOnly  = mat3(
+        modelMat[0] / length(modelMat[0]),
+        modelMat[1] / length(modelMat[1]),
+        modelMat[2] / length(modelMat[2])
+    );
+
+    vec3 N = normalize(rotOnly * aNormal);
+    vec3 T = normalize(rotOnly * aTangent.xyz);
+    T      = normalize(T - dot(T, N) * N); // Gram-Schmidt re-orthogonalize
+    vec3 B = cross(N, T) * aTangent.w;     // w = bitangent handedness
+
+    vT = T;
+    vB = B;
+    vN = N;
+
+    gl_Position = uProjection * uView * worldPos;
+}
+)GLSL";
+
+    inline constexpr const char* FragmentSource = R"GLSL(#version 430 core
 
 // -------------------------------------------------------
 // Varyings from vertex shader
@@ -17,13 +99,13 @@ layout(location = 0) out vec4 FragColor;
 // -------------------------------------------------------
 // Texture units
 // -------------------------------------------------------
-uniform sampler2D      uAlbedoTex;         // unit 0 — baseColor  (sRGB)
-uniform sampler2D      uNormalTex;         // unit 1 — tangent-space normal
-uniform sampler2D      uMRTex;             // unit 2 — G=roughness, B=metallic
-uniform sampler2D      uOcclusionTex;      // unit 3 — R=AO
-uniform sampler2D      uEmissiveTex;       // unit 4 — emissive
-uniform samplerCubeArray uShadowCubeArray; // unit 5 — point light cubemap array
-uniform sampler2DShadow  uDirShadowMap;    // unit 6 — directional light shadow map (hardware PCF)
+uniform sampler2D      uAlbedoTex;         // unit 0 - baseColor  (sRGB)
+uniform sampler2D      uNormalTex;         // unit 1 - tangent-space normal
+uniform sampler2D      uMRTex;             // unit 2 - G=roughness, B=metallic
+uniform sampler2D      uOcclusionTex;      // unit 3 - R=AO
+uniform sampler2D      uEmissiveTex;       // unit 4 - emissive
+uniform samplerCubeArray uShadowCubeArray; // unit 5 - point light cubemap array
+uniform sampler2DShadow  uDirShadowMap;    // unit 6 - directional light shadow map (hardware PCF)
 
 // -------------------------------------------------------
 // Per-frame uniforms
@@ -56,8 +138,8 @@ layout(std430, binding = 1) readonly buffer ShadowBuf { ShadowData shadows[]; };
 
 // -------------------------------------------------------
 // Directional light UBO  (binding 2)
-//   colorEnabled.a == 0 → no directional light (skip term).
-//   lightSpaceMatrix transforms world → shadow NDC for the
+//   colorEnabled.a == 0 -> no directional light (skip term).
+//   lightSpaceMatrix transforms world -> shadow NDC for the
 //   ortho shadow map.
 // -------------------------------------------------------
 layout(std140, binding = 2) uniform DirLightBlock {
@@ -131,7 +213,7 @@ vec3 CookTorranceBRDF(vec3 N, vec3 V, vec3 L,
 }
 
 // -------------------------------------------------------
-// Poisson sphere — 32 samples for PCSS
+// Poisson sphere - 32 samples for PCSS
 // -------------------------------------------------------
 const vec3 kPoissonSphere[32] = vec3[](
     vec3( 0.286,  0.928,  0.238), vec3(-0.612,  0.529, -0.588),
@@ -153,7 +235,7 @@ const vec3 kPoissonSphere[32] = vec3[](
 );
 
 // -------------------------------------------------------
-// PCSS — point lights
+// PCSS - point lights
 // -------------------------------------------------------
 float ShadowPCSS(int shadowIdx, vec3 fragToLight,
                  float currentDist, float farPlane,
@@ -228,7 +310,7 @@ float GetShadowFactor(int lightBufIndex, vec3 lightPos,
 // Directional light PCF shadow
 //
 // The ortho projection maps the full depth range to NDC [0,1],
-// so the bias is already correctly scaled regardless of kFar —
+// so the bias is already correctly scaled regardless of kFar -
 // no division by kFar needed or correct here.
 //
 // texelSize uses uDirShadowRes (not uShadowRes) because the
@@ -259,7 +341,7 @@ float DirShadowPCF(vec3 worldPos, vec3 worldNormal)
     vec3 projCoords = lsPos.xyz / lsPos.w;
     projCoords      = projCoords * 0.5 + 0.5;
 
-    // Outside frustum → fully lit (border sampler handles this too,
+    // Outside frustum -> fully lit (border sampler handles this too,
     // but the explicit check avoids sampling altogether).
     if (projCoords.x < 0.0 || projCoords.x > 1.0 ||
         projCoords.y < 0.0 || projCoords.y > 1.0 ||
@@ -341,7 +423,7 @@ vec3 CalcDirLight(vec3 N, vec3 V,
     vec3 Li = uDirLightColorEnabled.rgb * uDirLightDirIntensity.w;
 
     // Pass the world-space normal so DirShadowPCF can compute its own
-    // NdotL for the bias — avoids recomputing it from the UBO direction.
+    // NdotL for the bias - avoids recomputing it from the UBO direction.
     float shadow = DirShadowPCF(vWorldPos, N);
 
     vec3 brdf = CookTorranceBRDF(N, V, L, albedo, F0, alpha, metallic);
@@ -372,4 +454,13 @@ void main()
     color += texture(uEmissiveTex, vUV).rgb;
 
     FragColor = vec4(color, 1.0);
+}
+)GLSL";
+
+    // Makes the sources available to ShaderLoader under VertexKey / FragmentKey.
+    inline void Register()
+    {
+        ShaderLoader::registerBuiltIn(VertexKey, VertexSource);
+        ShaderLoader::registerBuiltIn(FragmentKey, FragmentSource);
+    }
 }

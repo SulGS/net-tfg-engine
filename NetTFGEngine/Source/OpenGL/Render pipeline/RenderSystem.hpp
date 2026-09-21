@@ -44,7 +44,7 @@ struct GPUShadowData {
 using MeshQuery = decltype(
     std::declval<EntityManager>().CreateQuery<MeshComponent, Transform>());
 
-// Per-frame pipeline: GBufferPass → CollectLightsPass → ShadowPass → DirShadowPass → ShadingPass → BloomPass → TonemapPass → FXAAPass.
+// Per-frame pipeline: GBufferPass → CollectLightsPass → ShadowPass → DirShadowPass → ShadingPass → AdditivePass → particles → BloomPass → TonemapPass → FXAAPass.
 class RenderSystem : public ISystem {
 public:
 
@@ -175,6 +175,9 @@ private:
     void DirShadowPass(EntityManager::Query<MeshComponent, Transform>& meshQuery,
         const glm::vec3& cameraPos);
     void ShadingPass(EntityManager::Query<MeshComponent, Transform>& meshQuery,
+        const glm::mat4& view, const glm::mat4& projection,
+        const glm::vec3& cameraPos);
+    void AdditivePass(EntityManager::Query<MeshComponent, Transform>& meshQuery,
         const glm::mat4& view, const glm::mat4& projection,
         const glm::vec3& cameraPos);
     void BloomPass();

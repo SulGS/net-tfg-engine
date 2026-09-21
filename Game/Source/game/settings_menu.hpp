@@ -386,7 +386,8 @@ private:
         // (ver menu.hpp); aqui solo esta el de vuelta, en el pie.
         MakeText(em, glm::vec2(0.0f, TITLE_Y), glm::vec2(420.0f, 40.0f),
             baseLayer + 1, "Ajustes", 24.0f,
-            SettingsWidget::Vis::Always, 0);
+            SettingsWidget::Vis::Always, 0,
+            nullptr, glm::vec4(1.0f), UITextAlign::CENTER);
 
         static const char* tabNames[TAB_COUNT] =
         { "Calidad", "Sonido", "Sombras", "Imagen", "Efectos", "Avanzado" };
@@ -428,7 +429,8 @@ private:
             baseLayer + 1, "", 15.0f,
             SettingsWidget::Vis::Always, 0,
             [data]() { return data->statusMessage; },
-            glm::vec4(0.55f, 1.0f, 0.70f, 1.0f));
+            glm::vec4(0.55f, 1.0f, 0.70f, 1.0f),
+            UITextAlign::CENTER);
 
         MakeButton(em, glm::vec2(-270.0f, FOOTER_Y), glm::vec2(250.0f, 36.0f),
             baseLayer + 2, "Restaurar preset",
@@ -841,7 +843,8 @@ private:
         const std::string& initial, float fontSize,
         SettingsWidget::Vis vis, int tab,
         std::function<std::string()> read = nullptr,
-        glm::vec4 color = glm::vec4(1.0f))
+        glm::vec4 color = glm::vec4(1.0f),
+        UITextAlign align = UITextAlign::LEFT)
     {
         Entity e = em.CreateEntity();
 
@@ -853,9 +856,12 @@ private:
         el->isVisible = false;
         el->layer = layer;
 
+        // UIText draws from the left edge of its rectangle unless told otherwise, so
+        // anything that has to sit in the middle of `center` must ask for CENTER.
         UIText* txt = em.AddComponent<UIText>(e, UIText{});
         txt->text = initial;
         txt->fontSize = fontSize;
+        txt->align = align;
         txt->SetColor(color.r, color.g, color.b, color.a);
         txt->SetFont("default");
 
@@ -978,7 +984,7 @@ public:
         camSettings->setTarget(glm::vec3(0.0f, 0.0f, 0.0f));
         camSettings->setUp(glm::vec3(0.0f, 1.0f, 0.0f));
 
-        SettingsPanel::Build(em);
+        SettingsPanel::Build(em, 40 ,true);
         world.AddSystem(std::make_unique<SettingsPanelSystem>());
 
         // Esta escena no manda nada a la logica: los ajustes no son estado de

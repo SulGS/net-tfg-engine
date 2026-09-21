@@ -5,6 +5,13 @@
 #include <string>
 #include "OpenGL/OpenGLIncludes.hpp"
 
+// Horizontal alignment of text inside a rectangle
+enum class UITextAlign {
+    LEFT,
+    CENTER,
+    RIGHT
+};
+
 class UIText : public IComponent {
 public:
     UIText(const std::string& text = "", float fontSize = 24.0f)
@@ -18,7 +25,10 @@ public:
     float fontSize;
     glm::vec4 color;  // RGBA
     std::string fontName;
-    
+
+    // Where the text sits horizontally inside its UIElement's rectangle. LEFT (the default) starts at the rectangle's left edge; CENTER and RIGHT use the measured width of the text, so they stay put if the text changes.
+    UITextAlign align = UITextAlign::LEFT;
+
     void SetColor(float r, float g, float b, float a = 1.0f) {
         color = glm::vec4(r, g, b, a);
     }

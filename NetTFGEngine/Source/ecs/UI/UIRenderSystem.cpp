@@ -319,6 +319,13 @@ void UIRenderSystem::RenderUIText(const UIElement* element, const UIText* text) 
     // FreeType baseline: bearing.y is the distance from baseline to glyph top.
     float cursorX = pos.x;
 
+    // Horizontal alignment inside the element's rectangle (LEFT starts at its left edge). The width is measured the same way RenderTextInRect does, so both place text identically.
+    if (text->align != UITextAlign::LEFT) {
+        const float textWidth = MeasureTextWidth(text->text, fontName, text->fontSize);
+        const float spare = element->size.x - textWidth;
+        cursorX += (text->align == UITextAlign::CENTER) ? spare * 0.5f : spare;
+    }
+
     // Find the maximum bearing.y to establish a consistent baseline
     float maxBearingY = 0.0f;
     for (char c : text->text) {

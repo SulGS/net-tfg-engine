@@ -116,6 +116,19 @@ public:
 	LaserWallID(int c, CellCardinalDirection d) : cellId(c), dir(d), enabled(true), timer(0.0f), warning(false) {}
 };
 
+// Render-only animation state of one laser wall/spoke mesh (never synced or
+// predicted). LaserWallRenderSystem eases it toward what the replicated
+// LaserWallID says, so walls power up/down and stutter in the warning window
+// instead of popping in and out — see laser_wall.frag.
+class LaserWallVisual : public IComponent {
+public:
+	float power = 0.0f;     // 0 = off, 1 = fully energised beam
+	float warning = 0.0f;   // 0..1 blend towards the amber "about to energise" look
+	float warnTime = 0.0f;  // seconds spent in the current warning window
+	float flash = 0.0f;     // 1 the instant the beam energises, decays to 0
+	bool  wasSolid = false;
+};
+
 class PillarID : public IComponent {
 public:
 	std::vector<int> cellsIsIn; // List of cell IDs this pillar is part of (max 4)
@@ -187,6 +200,13 @@ public:
 
 	ECSBullet() : id(-1), velX(0), velY(0), ownerId(-1), lifetime(0) {}
 	ECSBullet(int i, float vx, float vy, int oid, int lt) : id(i), velX(vx), velY(vy), ownerId(oid), lifetime(lt) {}
+};
+
+// Render-only state of a bullet's mesh (never synced or predicted): its age
+// drives the spawn flash / ramp-in in laser_bolt.frag. See BulletRenderSystem.
+class BulletVisual : public IComponent {
+public:
+	float age = 0.0f; // seconds since the bullet's mesh appeared
 };
 
 class ChargingShootEffect : public IComponent {

@@ -3,6 +3,7 @@
 
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <variant>
 #include "OpenGLIncludes.hpp"
 #include "ShaderLoader.hpp"
@@ -33,6 +34,15 @@ public:
     void setVec4(const std::string& name, const glm::vec4& value);
     void setMat4(const std::string& name, const glm::mat4& value);
 
+    // For uniforms the ENGINE offers to every material (texture samplers, camera
+    // position, shadow state...): a shader is free not to use them, and the GLSL
+    // compiler strips any uniform it doesn't use, so a missing one is not an error.
+    // The setters above warn (once per name and material) because there a missing
+    // uniform is almost certainly a typo; these skip it silently instead.
+    bool hasUniform(const std::string& name);
+    void setIntIfPresent(const std::string& name, int value);
+    void setVec3IfPresent(const std::string& name, const glm::vec3& value);
+
     // Bind the shader and push all uniforms to the GPU.
     // Engine uniforms (model/view/projection) are passed in here so they
     // can be set every frame without the caller touching the uniform map.
@@ -60,8 +70,15 @@ private:
     };
     std::unordered_map<std::string, UniformEntry> uniforms;
 
-    // Look up (and cache) a uniform location by name.
-    // Returns -1 if the uniform doesn't exist in the shader.
+    // Uniform locations by name, misses (-1) included, so each name costs one
+    // glGetUniformLocation for the life of the material instead of one per call.
+    std::unordered_map<std::string, GLint> locationCache;
+    std::unordered_set<std::string> warnedMissing;
+
+    // Silent lookup through the cache. -1 if the uniform doesn't exist in the shader.
+    GLint lookup(const std::string& name);
+
+    // lookup() that warns, once per name, when the uniform is missing.
     GLint getLocation(const std::string& name);
 
     // Push a single UniformEntry to the GPU (dispatches on variant type)

@@ -15,7 +15,7 @@ void RenderSystem::GBufferPass(EntityManager::Query<MeshComponent, Transform>& m
     glUseProgram(m_gbufferShader);
 
     for (auto [entity, meshC, transform] : meshQuery) {
-        if (!meshC->enabled || !meshC->mesh) continue;
+        if (!meshC->enabled || !meshC->mesh || meshC->additive) continue;
 
         glm::mat4 model = transform->getModelMatrix();
         glUniformMatrix4fv(glGetUniformLocation(m_gbufferShader, "uModel"),
@@ -163,7 +163,7 @@ void RenderSystem::ShadowPass(EntityManager& em, EntityManager::Query<MeshCompon
             glUniform1i(glGetUniformLocation(m_shadowShader, "uCubeArrayLayer"), shadowIdx * 6);
 
             for (auto [me, meshC, xf] : meshQuery) {
-                if (!meshC->enabled || !meshC->mesh || !meshC->castShadows) continue;
+                if (!meshC->enabled || !meshC->mesh || !meshC->castShadows || meshC->additive) continue;
                 glUniformMatrix4fv(glGetUniformLocation(m_shadowShader, "uModel"),
                     1, GL_FALSE, glm::value_ptr(xf->getModelMatrix()));
                 meshC->mesh->drawDepthOnly(glm::mat4(1.0f), m_shadowShader);
@@ -248,7 +248,7 @@ void RenderSystem::DirShadowPass(EntityManager::Query<MeshComponent, Transform>&
         1, GL_FALSE, glm::value_ptr(lightSpace));
 
     for (auto [entity, meshC, xf] : meshQuery) {
-        if (!meshC->enabled || !meshC->mesh || !meshC->castShadows) continue;
+        if (!meshC->enabled || !meshC->mesh || !meshC->castShadows || meshC->additive) continue;
         glUniformMatrix4fv(glGetUniformLocation(m_dirShadowShader, "uModel"),
             1, GL_FALSE, glm::value_ptr(xf->getModelMatrix()));
         meshC->mesh->drawDepthOnly(glm::mat4(1.0f), m_dirShadowShader);
@@ -293,20 +293,24 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
     glBindTexture(GL_TEXTURE_2D, m_dirShadowTex);
 
     for (auto [entity, meshC, transform] : meshQuery) {
-        if (!meshC->enabled || !meshC->mesh) continue;
+        if (!meshC->enabled || !meshC->mesh || meshC->additive) continue; // additive ones: see AdditivePass
+
+        // Pipeline state offered to every material. A shader may not use some of it
+        // (an unlit one has no use for the shadow maps), so each is set only if the
+        // shader has it. Set BEFORE bind: Material::bind() is what uploads them, so
+        // afterwards they would only reach the GPU on the next frame.
+        if (Material* mat = meshC->mesh->getMaterial()) {
+            mat->setVec3IfPresent("uCameraPos", cameraPos);
+            mat->setIntIfPresent("uShadowCubeArray", 5);
+            mat->setIntIfPresent("uDirShadowMap", 6);
+            mat->setIntIfPresent("uShadowCount", m_shadowCount);
+            mat->setIntIfPresent("uLightCount", m_lightCount);
+            mat->setIntIfPresent("uShadowRes", m_shadowRes);
+            mat->setIntIfPresent("uDirShadowRes", rs.getDirShadowResolution());
+        }
 
         glm::mat4 model = transform->getModelMatrix();
         meshC->mesh->bindMaterial(model, view, projection);
-
-        if (Material* mat = meshC->mesh->getMaterial()) {
-            mat->setVec3("uCameraPos", cameraPos);
-            mat->setInt("uShadowCubeArray", 5);
-            mat->setInt("uDirShadowMap", 6);
-            mat->setInt("uShadowCount", m_shadowCount);
-            mat->setInt("uLightCount", m_lightCount);
-            mat->setInt("uShadowRes", m_shadowRes);
-            mat->setInt("uDirShadowRes", rs.getDirShadowResolution());
-        }
         meshC->mesh->draw();
     }
 
@@ -320,6 +324,63 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_LESS);
     glViewport(0, 0, m_screenW, m_screenH);
+}
+
+// Light-only meshes (MeshComponent::additive: laser beams, glows) summed on top
+// of the shaded scene. Runs after ShadingPass + ResolveMSAA, so it draws into the
+// single-sample HDR buffer against the resolved depth (same as the particles):
+// occluded by opaque geometry, but never writes depth, and (SRC_ALPHA, ONE)
+// makes the result independent of draw order. The output stays HDR, so the
+// bloom pass picks up the bright cores.
+//
+// Uses drawGeometryOnly(): these shaders are unlit and need no texture units, so
+// the per-submesh sampler uniforms Mesh::draw() would push are skipped.
+void RenderSystem::AdditivePass(EntityManager::Query<MeshComponent, Transform>& meshQuery,
+    const glm::mat4& view,
+    const glm::mat4& projection,
+    const glm::vec3& cameraPos)
+{
+    bool any = false;
+    for (auto [entity, meshC, transform] : meshQuery) {
+        if (meshC->enabled && meshC->mesh && meshC->additive) { any = true; break; }
+    }
+    if (!any) return;
+
+    // Blend state isn't guaranteed on entry (ParticleSystem::Draw disables
+    // it when done), so set what we need and put back what we found.
+    const GLboolean blendWasOn = glIsEnabled(GL_BLEND);
+    GLint srcRGB, dstRGB, srcA, dstA;
+    glGetIntegerv(GL_BLEND_SRC_RGB, &srcRGB);
+    glGetIntegerv(GL_BLEND_DST_RGB, &dstRGB);
+    glGetIntegerv(GL_BLEND_SRC_ALPHA, &srcA);
+    glGetIntegerv(GL_BLEND_DST_ALPHA, &dstA);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, m_hdrFBO);
+    GLenum drawBuf = GL_COLOR_ATTACHMENT0;
+    glDrawBuffers(1, &drawBuf);
+    glViewport(0, 0, m_screenW, m_screenH);
+
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_FALSE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+
+    for (auto [entity, meshC, transform] : meshQuery) {
+        if (!meshC->enabled || !meshC->mesh || !meshC->additive) continue;
+
+        // Set before bind: Material::bind() is what uploads the uniform map. Optional:
+        // an additive shader that never looks at the camera is fine too.
+        if (Material* mat = meshC->mesh->getMaterial())
+            mat->setVec3IfPresent("uCameraPos", cameraPos);
+
+        meshC->mesh->bindMaterial(transform->getModelMatrix(), view, projection);
+        meshC->mesh->drawGeometryOnly();
+    }
+
+    glDepthMask(GL_TRUE);
+    glBlendFuncSeparate(srcRGB, dstRGB, srcA, dstA);
+    if (!blendWasOn) glDisable(GL_BLEND);
 }
 
 void RenderSystem::TonemapPass()
