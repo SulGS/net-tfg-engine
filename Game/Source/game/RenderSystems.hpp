@@ -58,10 +58,11 @@ inline constexpr float LASER_BOLT_LIGHT_INTENSITY = 150.0f;
 inline constexpr float LASER_BOLT_LIGHT_RADIUS = 40.0f;
 inline const glm::vec3 LASER_BOLT_LIGHT_COLOR(1.0f, 0.6f, 0.2f);
 
-// Charge orb: radius of the canvas sphere (the visible glow is smaller than this)
-// and how far ahead of the ship's centre it forms — its nose.
+// Charge orb: radius of the canvas sphere (the visible glow is smaller than this).
+// How far ahead of the ship's centre it forms (its nose) is SHIP_MUZZLE_OFFSET
+// (Components.hpp), shared with InputServerSystem so the bolt picks up exactly
+// where the orb visually left off.
 inline constexpr float CHARGE_ORB_RADIUS = 4.2f;
-inline constexpr float CHARGE_MUZZLE_OFFSET = 2.0f;
 
 // Adds the laser bolt's mesh to a bullet entity. One Material per bolt: each
 // carries its own age/fade uniforms (BulletRenderSystem); the compiled program is
@@ -484,8 +485,8 @@ class ChargingBulletRenderSystem : public ISystem
         const float yaw = glm::radians(shipTransform->getRotation().z);
         const glm::vec3 shipPos = shipTransform->getPosition();
         orbTransform->setPosition(glm::vec3(
-            shipPos.x + std::cos(yaw) * CHARGE_MUZZLE_OFFSET,
-            shipPos.y + std::sin(yaw) * CHARGE_MUZZLE_OFFSET,
+            shipPos.x + std::cos(yaw) * SHIP_MUZZLE_OFFSET,
+            shipPos.y + std::sin(yaw) * SHIP_MUZZLE_OFFSET,
             0.0f));
 
         // 0.2 on the first frame of the charge, 1.0 on the last.
@@ -573,8 +574,8 @@ public:
 class BulletRenderSystem : public ISystem
 {
     const float FADE_TICKS = 6.0f; // the bolt dissipates over the last N ticks of its lifetime
-    // The bolt is born at the ship's centre, where a full-strength light would blow
-    // out the hull for a frame or two, so the light swells in over this long instead.
+    // The bolt is born right at the nose/hull edge, where a full-strength light
+    // would blow it out for a frame or two, so the light swells in over this long instead.
     const float LIGHT_RAMP_SECONDS = 0.08f;
     float time = 0.0f;
 

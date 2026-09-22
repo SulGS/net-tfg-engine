@@ -66,7 +66,24 @@ public:
         if (tickRate <= 0) return;
 
         float frameTimeMs = 1000.0f / tickRate;
-        m_lastInputDelayFrames = static_cast<int>(std::ceil(m_lastLatencyMs / frameTimeMs));
+
+        // Size the delay off the worst RTT sample in the window, not the
+        // average, plus a fixed safety margin. The server ticks on its own
+        // timer rather than waiting for input, so any packet slower than
+        // whatever the delay was sized for lands after its frame was
+        // already simulated and gets zero-filled — a held key silently
+        // "releases" for that one frame. Sizing off the mean guarantees
+        // this happens on every jitter spike above average; a shot's charge
+        // still plays out locally (that part is predicted, not networked),
+        // but the server never saw the SHOOT bit, so no bullet spawns.
+        uint32_t worstRttMs = 0;
+        for (uint32_t sample : m_rttSamples) {
+            if (sample > worstRttMs) worstRttMs = sample;
+        }
+        float worstLatencyMs = worstRttMs / 2.0f;
+
+        const int SAFETY_MARGIN_FRAMES = 2;
+        m_lastInputDelayFrames = static_cast<int>(std::ceil(worstLatencyMs / frameTimeMs)) + SAFETY_MARGIN_FRAMES;
     }
 };
 #pragma once

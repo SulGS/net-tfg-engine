@@ -18,6 +18,7 @@ class IECSGameLogic : public IGameLogic {
 protected:
 	EventProcessor* eventProcessor = nullptr;
 	DeltaProcessor* deltaProcessor = nullptr;
+	std::map<int, InputBlob> lastKnownInput;
 
 public:
     ECSWorld world;
@@ -36,16 +37,26 @@ public:
 		eventProcessor->ProcessEvents(events);
     }
 
-    virtual void ProcessInputs(std::map<int, InputEntry> inputs) 
+    virtual void ProcessInputs(std::map<int, InputEntry> inputs)
     {
         auto query = world.GetEntityManager().CreateQuery<Playable>();
         for (auto [entity, play] : query) {
             auto it = inputs.find(play->playerId);
             if (it != inputs.end()) {
                 play->input = it->second.input;
+                lastKnownInput[play->playerId] = it->second.input;
             }
             else {
-				play->input = MakeZeroInputBlob();
+                // No packet arrived for this player this frame (late/lost,
+                // or outrun by the server's fixed tick timer). Repeat their
+                // last known input instead of zero-filling: a zero-fill
+                // reads as the key being released for exactly this frame,
+                // which can swallow a still-held SHOOT press right as a
+                // charge finishes — the client's local prediction already
+                // played the charge, so nothing looks wrong until the
+                // bullet silently fails to spawn.
+                auto lastIt = lastKnownInput.find(play->playerId);
+                play->input = lastIt != lastKnownInput.end() ? lastIt->second : MakeZeroInputBlob();
             }
         }
     }
@@ -68,6 +79,7 @@ public:
 
     void Init(GameStateBlob& state) override {
         world.Reset();
+        lastKnownInput.clear();
 
         delete eventProcessor;
 		delete deltaProcessor;

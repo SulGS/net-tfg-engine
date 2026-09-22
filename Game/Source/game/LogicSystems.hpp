@@ -75,8 +75,6 @@ public:
                 if (ship->remainingShootFrames == 0) ship->isShooting = false;
             }
 
-            if (ship->isShooting) continue;
-
             bool notRotating = !(m & INPUT_LEFT) && !(m & INPUT_RIGHT);
 
             if (m & INPUT_LEFT)
@@ -139,7 +137,10 @@ public:
 
             transform->setPosition(transform->getPosition() + glm::vec3(ship->velX, ship->velY, 0.0f));
 
-            if ((m & INPUT_SHOOT) && ship->shootCooldown <= 0 && ship->isAlive)
+            // Charging no longer freezes the ship (see InputServerSystem for the
+            // muzzle-offset spawn that made that unnecessary) — just block
+            // starting a *new* charge while one's already running.
+            if ((m & INPUT_SHOOT) && !ship->isShooting && ship->shootCooldown <= 0 && ship->isAlive)
             {
                 ship->remainingShootFrames = CHARGE_SHOOT_FRAMES;
                 ship->isShooting = true;
@@ -1229,10 +1230,14 @@ public:
                         EventEntry spawnEvent;
                         spawnEvent.event.type = AsteroidEventMask::SPAWN_BULLET;
                         SpawnBulletEventData spawnData;
+                        // Spawn at the nose (SHIP_MUZZLE_OFFSET), not the ship's
+                        // centre, and using its *current* rotation/position at
+                        // the moment the charge finishes — this is now the same
+                        // point the charge-up orb has been visually sitting at.
                         spawnData.bulletId = id;
                         spawnData.ownerId = p;
-                        spawnData.posX = transform->getPosition().x;
-                        spawnData.posY = transform->getPosition().y;
+                        spawnData.posX = transform->getPosition().x + cos(radians) * SHIP_MUZZLE_OFFSET;
+                        spawnData.posY = transform->getPosition().y + sin(radians) * SHIP_MUZZLE_OFFSET;
                         spawnData.velX = bVelX;
                         spawnData.velY = bVelY;
                         std::memcpy(spawnEvent.event.data, &spawnData, sizeof(SpawnBulletEventData));

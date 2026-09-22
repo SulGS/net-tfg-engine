@@ -159,6 +159,12 @@ public:
 	ThrusterOwner(int se, bool isSm, bool isLeftE) : shipEntity(se), isSmoke(isSm), isLeftEngine(isLeftE) {}
 };
 
+// Muzzle offset (nose-ward, along heading) used both for where the charge-up
+// orb sits (RenderSystems.hpp) and where the actual bullet is spawned
+// (InputServerSystem) — kept in sync so the bolt continues exactly from
+// where the orb visually was, instead of the ship's center.
+inline constexpr float SHIP_MUZZLE_OFFSET = 2.0f;
+
 class SpaceShip : public IComponent {
 public:
 	int health;
