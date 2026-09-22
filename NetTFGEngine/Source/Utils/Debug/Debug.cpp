@@ -1,5 +1,6 @@
 #include "Debug.hpp"
 #include "LogRouter.hpp"
+#include "Utils/UserDataPath.hpp"
 
 static LogMessage CreateMessage(LogLevel level, const std::string& text, const std::string& channel) {
     LogMessage msg;
@@ -12,6 +13,7 @@ static LogMessage CreateMessage(LogLevel level, const std::string& text, const s
 }
 
 void Debug::Initialize(const std::string& productName, bool consoleOutput) {
+    UserDataPath::SetProductName(productName);
     LogRouter::Instance().SetProductName(productName);
     LogRouter::Instance().Start(consoleOutput);
 }

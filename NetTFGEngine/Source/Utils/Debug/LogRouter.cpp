@@ -1,5 +1,6 @@
 #include "LogRouter.hpp"
 #include "ConsoleOutput.hpp"
+#include "Utils/UserDataPath.hpp"
 #include <filesystem>
 #include <iostream>
 #include <chrono>
@@ -46,19 +47,13 @@ void LogRouter::Stop() {
 }
 
 void LogRouter::SetProductName(const std::string& name) {
-#ifdef _WIN32
-    char* localAppData = nullptr;
-    size_t len = 0;
-    _dupenv_s(&localAppData, &len, "LOCALAPPDATA");
-    if (!localAppData)
+    UserDataPath::SetProductName(name);
+    const std::filesystem::path logsDir = UserDataPath::LogsDirectory();
+    if (logsDir.empty())
         return;
-    std::string folder = std::string(localAppData) + "\\NetTFGEngine\\" + name + "\\logs\\";
-    free(localAppData);
-#else
-    std::string folder = std::string(getenv("HOME")) + "/.NetTFGEngine/" + name + "/logs/";
-#endif
 
-    std::filesystem::create_directories(folder);
+    std::filesystem::create_directories(logsDir);
+    const std::string folder = (logsDir / "").string();
 
     auto now = std::chrono::system_clock::now();
     auto time = std::chrono::system_clock::to_time_t(now);

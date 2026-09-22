@@ -25,6 +25,15 @@ rm -rf "$PROJECT_ROOT/vcpkg_installed/x64-linux"
 ln -s "$VCPKG_SAFE_ROOT/x64-linux" "$PROJECT_ROOT/vcpkg_installed/x64-linux"
 echo ">>> Symlink: vcpkg_installed/x64-linux -> $VCPKG_SAFE_ROOT/x64-linux"
 
+# AssetsPackager.py (post-build step) compresses assets with Zstd and needs this Python module
+if ! python3 -c "import zstandard" 2>/dev/null; then
+    echo ">>> Installing Python 'zstandard' module for the asset packager..."
+    python3 -m pip install --user zstandard || {
+        echo "!!! Could not install 'zstandard'. Install it manually (e.g. 'sudo apt install python3-zstandard') and rerun."
+        exit 1
+    }
+fi
+
 # Generate makefiles
 echo ">>> Generating makefiles..."
 Vendor/Binaries/Premake/Linux/premake5 --cc=clang --file=Build.lua gmake2

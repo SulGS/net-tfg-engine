@@ -46,7 +46,7 @@ OBJDIR = ../Binaries/Intermediates/linux-x86_64/Debug/GameServer
 DEFINES += -DDEBUG
 ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -g
 ALL_CXXFLAGS += $(CXXFLAGS) $(ALL_CPPFLAGS) -m64 -g -std=c++20
-LIBS += ../Binaries/linux-x86_64/Debug/Engine/libNetTFGEngine.a -lfreetype -lpng16 -lbrotlidec -lbrotlicommon -lbz2 -lz -lGameNetworkingSockets -lGLEW -lglfw3 -lopenal -lGL -lsoil2 -lssl -lcrypto -lpthread -ldl
+LIBS += ../Binaries/linux-x86_64/Debug/Engine/libNetTFGEngine.a -lfreetype -lpng16 -lbrotlidec -lbrotlicommon -lbz2 -lz -lzstd -lGameNetworkingSockets -lGLEW -lglfw3 -lopenal -lGL -lsoil2 -lssl -lcrypto -lpthread -ldl
 LDDEPS += ../Binaries/linux-x86_64/Debug/Engine/libNetTFGEngine.a
 ALL_LDFLAGS += $(LDFLAGS) -L../Binaries/linux-x86_64/Debug/Engine -L../vcpkg_installed/x64-linux/lib -L../vcpkg_installed/x64-linux/debug/lib -L/usr/lib64 -m64 -Wl,-rpath,'$$ORIGIN'
 
@@ -57,7 +57,7 @@ OBJDIR = ../Binaries/Intermediates/linux-x86_64/Release/GameServer
 DEFINES += -DRELEASE
 ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -g
 ALL_CXXFLAGS += $(CXXFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -g -std=c++20
-LIBS += ../Binaries/linux-x86_64/Release/Engine/libNetTFGEngine.a -lfreetype -lpng16 -lbrotlidec -lbrotlicommon -lbz2 -lz -lGameNetworkingSockets -lGLEW -lglfw3 -lopenal -lGL -lsoil2 -lssl -lcrypto -lpthread -ldl
+LIBS += ../Binaries/linux-x86_64/Release/Engine/libNetTFGEngine.a -lfreetype -lpng16 -lbrotlidec -lbrotlicommon -lbz2 -lz -lzstd -lGameNetworkingSockets -lGLEW -lglfw3 -lopenal -lGL -lsoil2 -lssl -lcrypto -lpthread -ldl
 LDDEPS += ../Binaries/linux-x86_64/Release/Engine/libNetTFGEngine.a
 ALL_LDFLAGS += $(LDFLAGS) -L../Binaries/linux-x86_64/Release/Engine -L../vcpkg_installed/x64-linux/lib -L/usr/lib64 -m64 -Wl,-rpath,'$$ORIGIN'
 
@@ -68,7 +68,7 @@ OBJDIR = ../Binaries/Intermediates/linux-x86_64/Dist/GameServer
 DEFINES += -DDIST
 ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -O2
 ALL_CXXFLAGS += $(CXXFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -std=c++20
-LIBS += ../Binaries/linux-x86_64/Dist/Engine/libNetTFGEngine.a -lfreetype -lpng16 -lbrotlidec -lbrotlicommon -lbz2 -lz -lGameNetworkingSockets -lGLEW -lglfw3 -lopenal -lGL -lsoil2 -lssl -lcrypto -lpthread -ldl
+LIBS += ../Binaries/linux-x86_64/Dist/Engine/libNetTFGEngine.a -lfreetype -lpng16 -lbrotlidec -lbrotlicommon -lbz2 -lz -lzstd -lGameNetworkingSockets -lGLEW -lglfw3 -lopenal -lGL -lsoil2 -lssl -lcrypto -lpthread -ldl
 LDDEPS += ../Binaries/linux-x86_64/Dist/Engine/libNetTFGEngine.a
 ALL_LDFLAGS += $(LDFLAGS) -L../Binaries/linux-x86_64/Dist/Engine -L../vcpkg_installed/x64-linux/lib -L/usr/lib64 -m64 -Wl,-rpath,'$$ORIGIN'
 

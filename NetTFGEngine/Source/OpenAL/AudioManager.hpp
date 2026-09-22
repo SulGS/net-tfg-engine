@@ -4,6 +4,7 @@
 #include "AudioSystem.hpp"
 #include "ecs/ecs.hpp"
 #include "Utils/Debug/Debug.hpp"
+#include "Utils/UserDataPath.hpp"
 
 #include <thread>
 #include <mutex>
@@ -140,7 +141,7 @@ public:
     // from the settings menu's footer alongside RenderSettings; loaded once,
     // right after the audio thread creates its AudioSystem (Start() above).
     static bool SaveAudioSettings() {
-        std::ofstream f("audio_settings.cfg");
+        std::ofstream f(UserDataPath::File("audio_settings.cfg"));
         if (!f.is_open()) return false;
 
         f << "master " << GetChannelVolume(AudioChannel::MASTER) << "\n";
@@ -153,7 +154,7 @@ public:
     }
 
     static bool LoadAudioSettings() {
-        std::ifstream f("audio_settings.cfg");
+        std::ifstream f(UserDataPath::File("audio_settings.cfg"));
         if (!f.is_open()) return false;
 
         std::string key;

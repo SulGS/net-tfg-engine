@@ -41,6 +41,7 @@ project "GameServer"
          "brotlicommon",
          "bz2",
          "z",
+         "zstd",
          "GameNetworkingSockets",
          "GLEW",
          "glfw3",

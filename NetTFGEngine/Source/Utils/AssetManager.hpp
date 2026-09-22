@@ -16,13 +16,15 @@
 
 #include <AL/al.h>
 #include <openssl/evp.h>
+#include <zstd.h>
 
 using AssetID = uint64_t;
 
 struct AssetLocation {
     uint64_t offset;
-    uint64_t size;
-    uint32_t binId; // which loaded bin
+    uint64_t size;    // bytes stored in the bin (a Zstd frame)
+    uint64_t rawSize; // bytes once decompressed
+    uint32_t binId;   // which loaded bin
 };
 
 struct BinData {
@@ -109,15 +111,19 @@ public:
         }
 
         uint32_t version = *reinterpret_cast<const uint32_t*>(ptr + 4);
-        if (version != 1) {
-            Debug::Error("AssetManager") << "Unsupported bin version\n";
+        if (version != BIN_VERSION) {
+            Debug::Error("AssetManager") << "Unsupported bin version " << version << " (expected " << BIN_VERSION << "): " << binFile << "\n";
             return false;
         }
 
         uint32_t entryCount = *reinterpret_cast<const uint32_t*>(ptr + 8);
 
-        // Each entry: id(8) + offset(8) + size(8)
-        bin.dataOffset = 12 + entryCount * (8 + 8 + 8);
+        // Each entry: id(8) + offset(8) + storedSize(8) + rawSize(8)
+        bin.dataOffset = 12 + static_cast<uint64_t>(entryCount) * (8 + 8 + 8 + 8);
+        if (bin.dataOffset > size) {
+            Debug::Error("AssetManager") << "Bin file truncated: " << binFile << "\n";
+            return false;
+        }
 
         if (existing != binNameToId.end()) {
             // Re-loading a previously unloaded bin: overwrite its reserved
@@ -203,7 +209,7 @@ public:
 
         Debug::Info("AssetManager") << "Loading asset: " << key
             << " as type " << typeid(Handle).name()
-            << ", size: " << loc.size << "\n";
+            << ", size: " << loc.rawSize << " (" << loc.size << " compressed)\n";
 
         if (loc.binId >= bins.size() || bins[loc.binId].data.empty())
         {
@@ -277,12 +283,22 @@ public:
         std::function<void(Handle)> destroyer)
     {
         loaders[typeid(Handle)] = [loader](const AssetLocation& loc, const BinData& bin) {
-            return std::any(
-                loader(
-                    bin.data.data() + bin.dataOffset + loc.offset,
-                    static_cast<size_t>(loc.size)
-                )
-            );
+            const uint64_t available = bin.data.size() - bin.dataOffset;
+            if (loc.offset > available || loc.size > available - loc.offset) {
+                Debug::Error("AssetManager") << "Asset lies outside its bin: " << bin.name << "\n";
+                return std::any();
+            }
+
+            const uint8_t* stored = bin.data.data() + bin.dataOffset + loc.offset;
+
+            // Decompress into a scratch buffer that only lives for the loader call (loaders copy what they need: GL upload, AL buffer, string, glTF parse).
+            std::vector<uint8_t> raw;
+            if (!decompress(stored, static_cast<size_t>(loc.size), static_cast<size_t>(loc.rawSize), raw))
+            {
+                Debug::Error("AssetManager") << "Zstd decompression failed in bin: " << bin.name << "\n";
+                return std::any(); // loadAsset() reports an empty handle
+            }
+            return std::any(loader(raw.data(), raw.size()));
             };
 
         destroyers[typeid(Handle)] = [destroyer](std::any h) {
@@ -313,6 +329,16 @@ private:
         loadFromBuildRoot();
     }
 
+    static constexpr uint32_t BIN_VERSION = 3;
+    static constexpr uint32_t IDX_VERSION = 3;
+
+    static bool decompress(const uint8_t* src, size_t srcSize, size_t rawSize, std::vector<uint8_t>& out)
+    {
+        out.resize(rawSize);
+        size_t written = ZSTD_decompress(out.data(), out.size(), src, srcSize);
+        return !ZSTD_isError(written) && written == rawSize;
+    }
+
     static AssetID hashAsset(const std::string& path)
     {
         std::string normalized = path;
@@ -338,6 +364,16 @@ private:
             return false;
         }
 
+        char magic[4] = {};
+        uint32_t idxVersion = 0;
+        f.read(magic, sizeof(magic));
+        f.read(reinterpret_cast<char*>(&idxVersion), sizeof(idxVersion));
+        if (!f || std::memcmp(magic, "AIDX", 4) != 0 || idxVersion != IDX_VERSION)
+        {
+            Debug::Error("AssetManager") << "assets.idx has an unsupported format (expected version " << IDX_VERSION << "); repack the assets with AssetsPackager.py\n";
+            return false;
+        }
+
         uint32_t numAssets = 0;
         f.read(reinterpret_cast<char*>(&numAssets), sizeof(numAssets));
 
@@ -352,6 +388,7 @@ private:
             f.read(reinterpret_cast<char*>(&loc.binId), sizeof(loc.binId));
             f.read(reinterpret_cast<char*>(&loc.offset), sizeof(loc.offset));
             f.read(reinterpret_cast<char*>(&loc.size), sizeof(loc.size));
+            f.read(reinterpret_cast<char*>(&loc.rawSize), sizeof(loc.rawSize));
 
             idx[assetID] = loc;
         }

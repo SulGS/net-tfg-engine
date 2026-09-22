@@ -12,6 +12,7 @@
     "opengl",
     "soil2",
     "tinygltf",
-    "openssl"
+    "openssl",
+    "zstd"
   ]
 }

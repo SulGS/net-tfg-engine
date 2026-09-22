@@ -31,6 +31,7 @@ project "NetTFGEngine"
          "brotlicommon",
          "bz2",
          "z",
+         "zstd",
          "GameNetworkingSockets",
          "GLEW",
          "glfw3",

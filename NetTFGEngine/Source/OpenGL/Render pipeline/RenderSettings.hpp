@@ -9,6 +9,8 @@
 #include <utility>
 #include <cstdio>
 
+#include "Utils/UserDataPath.hpp"
+
 enum class QualityPreset
 {
     VeryLow,
@@ -188,7 +190,7 @@ public:
     // caller keeps whatever it had.
     bool loadSettings()
     {
-        std::ifstream f(SETTINGS_PATH);
+        std::ifstream f(settingsPath());
         if (!f.is_open())
             return false;
 
@@ -295,7 +297,7 @@ public:
 
     bool saveSettings() const
     {
-        std::ofstream f(SETTINGS_PATH);
+        std::ofstream f(settingsPath());
         if (!f.is_open())
             return false;
 
@@ -352,7 +354,7 @@ public:
 
     void savePreset() const
     {
-        std::ofstream f(CFG_PATH);
+        std::ofstream f(cfgPath());
         if (f.is_open())
             f << static_cast<int>(m_preset) << "\n";
     }
@@ -369,12 +371,13 @@ public:
     void resetToPreset()
     {
         applyPreset();
-        std::remove(SETTINGS_PATH);
+        std::remove(settingsPath().c_str());
     }
 
 private:
-    static constexpr const char* CFG_PATH = "render_quality.cfg";
-    static constexpr const char* SETTINGS_PATH = "render_settings.cfg";
+    // Resolved on every use (not cached) so they pick up the product name set by Debug::Initialize.
+    static std::string cfgPath()      { return UserDataPath::File("render_quality.cfg"); }
+    static std::string settingsPath() { return UserDataPath::File("render_settings.cfg"); }
 
     RenderSettings()
     {
@@ -389,7 +392,7 @@ private:
 
     static QualityPreset loadPresetFromFile()
     {
-        std::ifstream f(CFG_PATH);
+        std::ifstream f(cfgPath());
         if (!f.is_open())
             return QualityPreset::High;
 
