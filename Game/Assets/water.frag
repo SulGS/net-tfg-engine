@@ -1,10 +1,8 @@
 #version 430 core
 
-// Pairs with fluid.vert. Reuses the engine's default shader's (DefaultShader.hpp) SSBO/UBO layout, texture units and
-// BRDF/shadow code verbatim (GLSL here has no #include, so it's duplicated
-// rather than shared) so water lights and shadows exactly like every other
-// surface in the scene — only the "material" section at the bottom differs:
-// no texture maps, a procedurally animated normal instead.
+// Pairs with fluid.vert. Reuses DefaultShader.hpp's SSBO/UBO layout, texture units and BRDF/shadow code verbatim (no
+// #include in GLSL, so it's duplicated) so water lights/shadows like every other surface. Only the "material" section
+// differs: no texture maps, a procedurally animated normal instead.
 
 // -------------------------------------------------------
 // Varyings from vertex shader
@@ -20,12 +18,9 @@ in vec3 vN;
 // -------------------------------------------------------
 layout(location = 0) out vec4 FragColor;
 
-// -------------------------------------------------------
-// Texture units
-// -------------------------------------------------------
-// Units 0-4 are the PBR texture maps (albedo, normal, metal/rough, occlusion,
-// emissive); water has none, so it doesn't declare them. Mesh::draw() checks which
-// of them a shader has and only binds those.
+// ---- Texture units ----
+// Units 0-4 are the PBR maps (albedo, normal, metal/rough, occlusion, emissive); water has none, so it doesn't
+// declare them. Mesh::draw() only binds those a shader has.
 uniform samplerCubeArray uShadowCubeArray; // unit 5 — point light cubemap array
 uniform sampler2DShadow  uDirShadowMap;    // unit 6 — directional light shadow map (hardware PCF)
 
@@ -38,10 +33,7 @@ uniform int   uLightCount;
 uniform int   uShadowRes;
 uniform int   uDirShadowRes;
 
-// -------------------------------------------------------
-// Water look (set once per Material — see WaterMaterialFactory-style setup
-// wherever the mesh is created)
-// -------------------------------------------------------
+// ---- Water look (set once per Material, wherever the mesh is created) ----
 uniform float uTime;
 uniform vec3  uShallowColor;
 uniform vec3  uDeepColor;

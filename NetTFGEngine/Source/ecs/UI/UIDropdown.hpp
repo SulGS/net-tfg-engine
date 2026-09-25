@@ -15,14 +15,8 @@ enum class DropdownState {
     DISABLED
 };
 
-// Dropdown / combo box component.
-//
-// The element rect (UIElement::position/size) is the *header* only. The popup
-// list is drawn outside those bounds, so its geometry is computed here and the
-// systems use ContainsList()/GetItemIndexAtPoint() for hit testing instead of
-// UIElement::Contains().
-//
-// Rects are returned as glm::vec4(x, y, width, height).
+// Dropdown / combo box. UIElement::position/size is only the *header*; the popup list is drawn outside it, so hit
+// testing uses ContainsList()/GetItemIndexAtPoint() instead of UIElement::Contains(). Rects are vec4(x, y, w, h).
 class UIDropdown : public IComponent {
 public:
     UIDropdown(const std::string& placeholder = "Select...")

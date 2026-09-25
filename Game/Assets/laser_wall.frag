@@ -1,26 +1,8 @@
 #version 430 core
 
-// Emissive energy-beam look for the arena's laser walls and spokes. Pairs with
-// laser_wall.vert.
-//
-// Drawn by RenderSystem::AdditivePass (MeshComponent::additive): the output is
-// light ADDED on top of the scene with blend (SRC_ALPHA, ONE). So this shader is
-// never lit and never opaque — the tube mesh is only a canvas, and every
-// fragment that contributes nothing is simply invisible. The HDR output (core well above
-// 1.0) is what drives the bloom pass into a real glow.
-//
-// Layout of the look, outside in:
-//   - the profile falls smoothly to exactly 0 at the tube's silhouette, so no
-//     edge of the model is ever visible
-//   - a coloured halo, gaussian across the tube (what a beam of glowing
-//     particles looks like seen from the side)
-//   - a white-hot filament that wanders inside the tube, so it reads as an arc
-//     instead of a ruler-straight rod
-//   - energy shimmer running along the beam, slow bands, and rare mains dips
-//
-// uIntensity drives both brightness and WIDTH: the beam swells from a hairline
-// when it powers up and collapses to one when it dies.
-// uWarning / uWarnTension switch it to an amber, stuttering preview.
+// Emissive beam for the arena's laser walls/spokes (pairs with laser_wall.vert), drawn additively (SRC_ALPHA, ONE): never
+// lit or opaque, the tube is just a canvas and HDR output drives bloom. Look: profile fading to 0 at the silhouette, gaussian
+// halo, wandering white filament, shimmer. uIntensity drives brightness AND width; uWarning/uWarnTension = amber stutter preview.
 
 in vec3  vWorldPos;
 in vec3  vAxisW;
@@ -103,10 +85,8 @@ float fbm(vec2 p)
 
 void main()
 {
-    // ---- Cross-section coordinate ------------------------------------------
-    // The mesh normals tilt along the axis at the two rings, so they can't
-    // give the profile. Rebuild it: s = -1..1 across the tube as the camera
-    // sees it (0 = the line facing the camera, +-1 = the silhouette).
+    // ---- Cross-section coordinate ---- Mesh normals tilt at the rings, so rebuild the profile: s = -1..1 across
+    // the tube as the camera sees it (0 = line facing the camera, +-1 = silhouette).
     vec3  V       = normalize(uCameraPos - vWorldPos);
     vec3  A       = normalize(vAxisW);
     vec3  R       = normalize(vRadialW);
@@ -152,10 +132,8 @@ void main()
     // Slightly hotter at the ends, where the beam leaves its emitter.
     float ends = smoothstep(0.80, 1.0, abs(vEnd));
 
-    // ---- Warning look -------------------------------------------------------
-    // Irregular stutter instead of a square blink. The on-threshold falls as the
-    // window runs out, so it starts mostly dark and ends mostly lit — the beam
-    // "wants" to fire.
+    // ---- Warning look ---- Irregular stutter instead of a square blink. The on-threshold falls as the window
+    // runs out, so it starts mostly dark and ends mostly lit — the beam "wants" to fire.
     float stutterOn = smoothstep(0.0, 0.12,
         noise1(t * 11.0 + uSeed * 17.0) - mix(0.75, 0.25, uWarnTension));
     float stutter   = mix(1.0, 0.2 + 0.8 * stutterOn, uWarning);

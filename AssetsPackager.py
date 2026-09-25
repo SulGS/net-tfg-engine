@@ -12,12 +12,9 @@ try:
 except ImportError:
     sys.exit("AssetsPackager: the 'zstandard' Python package is required (pip install zstandard)")
 
-# Bin file:  "ASPK", u32 VERSION, u32 entryCount,
-#            entryCount x (u64 id, u64 offset, u64 storedSize, u64 rawSize), then the data blob.
-# Index file: "AIDX", u32 IDX_VERSION, u32 entryCount,
-#            entryCount x (u64 id, u32 binId, u64 offset, u64 storedSize, u64 rawSize),
-#            u32 binCount, binCount x (u32 binId, u16 nameLen, name).
-# Every asset is stored as a Zstd frame (storedSize = frame bytes, rawSize = decompressed bytes).
+# Bin: "ASPK", u32 VERSION, u32 count, count x (u64 id, u64 offset, u64 storedSize, u64 rawSize), then the data blob.
+# Index: "AIDX", u32 IDX_VERSION, u32 count, count x (u64 id, u32 binId, u64 offset, u64 storedSize, u64 rawSize),
+# u32 binCount, binCount x (u32 binId, u16 nameLen, name). Each asset is a Zstd frame (stored = frame, raw = decompressed).
 MAGIC = b"ASPK"
 VERSION = 3
 IDX_MAGIC = b"AIDX"
@@ -190,10 +187,8 @@ def main(asset_root, output_dir, level=DEFAULT_LEVEL, force=False):
                 raw_size
             ))
 
-        # Bin table, after the entries: the numbering used above, by bin name.
-        # The ids alone don't say which bin is which, and the engine numbering
-        # bins in the order a game happens to load them only matches this
-        # numbering by luck (it did with two scenes; a third broke it).
+        # Bin table after the entries: maps the numbering above to bin names. Ids alone don't identify bins, and the
+        # engine's load-order numbering only matched this one by luck (worked with two scenes, a third broke it).
         out.write(struct.pack("<I", len(bin_ids)))
         for bin_name, bin_id in bin_ids.items():
             raw_name = bin_name.encode("utf-8")

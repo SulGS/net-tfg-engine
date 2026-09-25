@@ -30,13 +30,8 @@ public:
 		Snapshot& snapshot = GetSnapshot(event.frame);
 		snapshot.events.push_back(event);
 
-		// If we've already predicted past this frame, that prediction ran
-		// without this event (it arrived late over the network) and every
-		// snapshot from here to currentFrame is now stale — re-simulate
-		// forward so the event actually takes effect instead of sitting
-		// unused in a bygone snapshot. Without this, a late event (e.g.
-		// DESTROY_TILE, DEATH) is silently dropped from the client's
-		// predicted state.
+		// Already predicted past this frame: that prediction ran without this late event and later snapshots are stale.
+		// Re-simulate forward so it takes effect; otherwise late events (e.g. DESTROY_TILE, DEATH) are silently dropped.
 		if (event.frame < currentFrame)
 		{
 			gameLogic->Synchronize(snapshot.state);

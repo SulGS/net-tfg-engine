@@ -15,14 +15,9 @@ enum class AudioChannel {
     COUNT // sentinel, keep last
 };
 
-// Lock-free on purpose: this used to be a plain unordered_map guarded by
-// AudioManager's audioMutex, but that mutex is also taken (in the opposite
-// order) by the audio thread while it holds the renderer's EntityManager
-// mutex (see AudioSystem::Update). A UI slider reading/writing a channel
-// volume from inside a render-thread system — itself running under that
-// same EntityManager mutex — could then deadlock against the audio thread.
-// Plain atomics sidestep the whole lock-ordering problem: no mutex, so
-// nothing to invert.
+// Lock-free on purpose: a mutex here was also taken (in the opposite order) by the audio thread while holding the
+// renderer's EntityManager mutex, so a UI volume slider running under that mutex could deadlock against it.
+// Plain atomics avoid the lock-ordering problem entirely.
 class AudioChannelManager {
 public:
     static AudioChannelManager& instance()

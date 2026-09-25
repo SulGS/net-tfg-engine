@@ -150,17 +150,9 @@ namespace ParticlePresets
         return e;
     }
 
-    // ---------------------------------------------------------------------------------------------------------------------------------
-    // Spaceship explosion
-    //
-    // Seven one-shot layers (flash, body, sparks, fine debris, secondary blasts, refraction ring; the body is a flipbook or a procedural fireball + soot pair) spawned together at the same position (use MakeExplosion()); poll each emitter.done before destroying.
-    // Vacuum physics: no gravity and no rising smoke column. What makes it read as a real blast:
-    //   - every layer decelerates quickly (drag) after the initial burst, like an expanding pressure front, while metal debris barely slows;
-    //   - colours are HDR (rgb well above 1) along a blackbody-like ramp, so bloom does the glow: white-blue core -> yellow -> orange -> deep red -> soot;
-    //   - the first fraction of a second plays in slow motion, so the front "hangs" before rushing outward;
-    //   - a screen-space distortion ring refracts the scene behind the blast front.
-    // Layers are tuned for an emitter Transform scale of 2; MakeExplosion(scale) rescales the speeds to match other scales.
-    // ---------------------------------------------------------------------------------------------------------------------------------
+    // ---- Spaceship explosion ---- Seven one-shot layers spawned together via MakeExplosion(); poll each emitter.done before
+    // destroying. Vacuum physics: drag-decelerated layers, HDR blackbody colours for bloom, slow-motion first instant and a
+    // distortion ring. Tuned for emitter Transform scale 2; MakeExplosion(scale) rescales speeds for other scales.
 
     // Sets a colour-over-lifetime ramp (max ParticleEmitterComponent::kMaxColorStops stops, sorted by t). rgb may exceed 1.
     inline void SetColorRamp(ParticleEmitterComponent& e, std::initializer_list<ColorStop> stops)

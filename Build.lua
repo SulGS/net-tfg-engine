@@ -10,8 +10,11 @@ workspace "TFG Project"
          "/EHsc",
          "/Zc:preprocessor",
          "/Zc:__cplusplus",
-         "/bigobj"
+         "/bigobj",
+         "/utf-8"  -- sources are UTF-8: keeps literals like "¿Estás?" intact (the UI decodes UTF-8)
       }
+      -- C4828 (invalid UTF-8 byte): only third-party headers trigger it (GameNetworkingSockets' steamtypes.h is Latin-1)
+      disablewarnings { "4828" }
    filter {}
 
 
@@ -34,6 +37,11 @@ group ""
 group "Game"
    include "Game/Build-GameClient.lua"
    include "Game/Build-GameServer.lua"
+group ""
+
+-- Include Matchmaking server (hands out GameServer instances to clients)
+group "Matchmaking"
+   include "Matchmaking/Build-Matchmaking.lua"
 group ""
 
 -- Linux build stub (Windows-only: triggers WSL2 build from Visual Studio)

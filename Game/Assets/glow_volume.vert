@@ -1,14 +1,8 @@
 #version 430 core
 
-// Shared vertex shader for the volumetric energy effects (laser_bolt.frag,
-// laser_charge.frag). The mesh is only a bounding canvas: a UNIT SPHERE (charge.glb)
-// that the entity's transform stretches into whatever volume the effect needs
-// (a long ellipsoid for a bolt, a sphere for the charge orb).
-//
-// The fragment shader raymarches the glow inside that volume in the mesh's LOCAL
-// space, where the canvas is always the unit sphere no matter how it is scaled or
-// rotated. So all it needs from here is the fragment's local position and the
-// camera's position in the same space.
+// Shared vertex shader for the volumetric glows (laser_bolt.frag, laser_charge.frag). The mesh is a UNIT SPHERE canvas
+// (charge.glb) stretched by the entity transform. The fragment shader raymarches in LOCAL space, where the canvas is
+// always the unit sphere, so it only needs the fragment's local position and the camera position in that space.
 
 layout(location = 0) in vec3 aPos;
 

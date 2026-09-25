@@ -1,9 +1,7 @@
 #version 430 core
 
-// Pairs with fluid.vert (set uWaveAmplitude low/slow for a gentle molten
-// swell instead of water's choppy waves). Reuses the engine's default shader's (DefaultShader.hpp) SSBO/UBO layout,
-// texture units and BRDF/shadow code verbatim — see water.frag's header
-// comment, same reasoning applies here.
+// Pairs with fluid.vert (low/slow uWaveAmplitude for a molten swell). Reuses DefaultShader.hpp's SSBO/UBO layout,
+// texture units and BRDF/shadow code verbatim — same reasoning as water.frag's header.
 
 in vec3 vWorldPos;
 in vec2 vUV;

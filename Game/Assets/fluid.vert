@@ -1,24 +1,8 @@
 #version 430 core
 
-// Shares the exact same attribute/uniform/varying interface as the engine default vertex shader (DefaultShader.hpp) (see
-// that file) so fluid materials plug into the same Forward+ pipeline and
-// ShadingPass() loop with zero engine-side changes. The only addition is a
-// Gerstner-wave displacement of aPos before the standard world-space /
-// TBN computation, so the default shader's lighting (DefaultShader.hpp) still gets a correct normal
-// for the displaced surface.
-//
-// Assumes the mesh is authored as a flat plane lying in local XZ with its rest
-// normal along local +Y — glTF's Y-up convention, which is what a plane lying on
-// the ground exports as from Blender. The waves run over the plane's two axes
-// (x, z) and rise along its normal (y). Displacement is applied in local space,
-// then carried into world space by uModel like any other vertex attribute, so
-// entity Transform (position/rotation/scale) still places/orients it exactly as
-// with any other mesh.
-//
-// (An earlier version assumed a plane in XY with a +Z normal. On a mesh like this
-// one that made the waves depend on x alone, sent most of the displacement
-// sideways along the plane instead of up, and pointed the shading normal along
-// the plane instead of away from it.)
+// Same interface as the engine default vertex shader (DefaultShader.hpp), plus a Gerstner-wave displacement of aPos
+// before the world-space/TBN computation so lighting gets a correct normal. Assumes a flat plane in local XZ with +Y
+// normal (glTF Y-up): waves run over (x, z) and rise along y, in local space, so uModel still places it like any mesh.
 
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec3 aNormal;
@@ -43,11 +27,9 @@ out vec3 vT;
 out vec3 vB;
 out vec3 vN;
 
-// Sum of 4 Gerstner waves over the plane, in the basis (u, v, h): u and v are the
-// two axes of the plane and h rises along its normal. Returns the offset in that
-// basis and, via dPdu/dPdv, the surface's partial derivatives (needed to build the
-// analytic normal — far cheaper and more stable than finite-differencing neighbour
-// vertices). main() maps (u, v, h) onto the mesh's (x, z, y).
+// Sum of 4 Gerstner waves in the plane basis (u, v, h) (h = along the normal). Returns the offset and, via dPdu/dPdv,
+// the partial derivatives for an analytic normal (cheaper and more stable than finite differences).
+// main() maps (u, v, h) onto the mesh's (x, z, y).
 vec3 GerstnerDisplace(vec2 planeUV, out vec3 dPdu, out vec3 dPdv)
 {
     const vec2  dirs[4]   = vec2[](vec2(1.0, 0.0), vec2(0.6, 0.8), vec2(-0.7, 0.5), vec2(-0.3, -0.9));
@@ -72,12 +54,8 @@ vec3 GerstnerDisplace(vec2 planeUV, out vec3 dPdu, out vec3 dPdv)
         float s = sin(phase);
         float c = cos(phase);
 
-        // Steepness (Q) factor: caps how far this wave pulls points toward
-        // its crest so that, even with all 4 waves' crests aligned, the
-        // combined horizontal pull can't exceed kMaxSteepness and fold the
-        // surface over itself. Without this, offset.x/y below grows with
-        // uWaveAmplitude unbounded while the underlying point spacing does
-        // not, so steep/choppy settings can self-intersect.
+        // Steepness (Q): caps each wave's pull toward its crest so that, even with all 4 crests aligned, the combined
+        // horizontal pull can't exceed kMaxSteepness and fold the surface over itself (self-intersection at high amplitude).
         const float kMaxSteepness = 0.9;
         float q = min(1.0, (kMaxSteepness / 4.0) / max(a * k, 1e-4));
 
@@ -117,28 +95,17 @@ void main()
         modelMat[2] / modelScale.z
     );
 
-    // Unlike aNormal on a static mesh, the wave normal is generated here from
-    // local-space slopes, so it still needs the model's scale undone per
-    // axis, not just its rotation: a non-uniformly scaled plane (e.g. a wide
-    // (50,1,50) fluid surface) stretches the waves wider in world space
-    // without changing their height, so shading the stretched surface with
-    // rotOnly alone would use the pre-stretch (steeper) local slopes. This
-    // divides rotOnly by the same per-axis scale again, which is equivalent
-    // to R * S^-1 (the correct normal transform for an R*S model matrix with
-    // no shear) without calling mat3 inverse() and its precision cost at
-    // large uniform scale. aTangent doesn't need this: it's axis-aligned
-    // (local +X) on this quad mesh, so scale doesn't change its direction
-    // once normalized.
+    // The wave normal comes from local-space slopes, so it needs the model's per-axis scale undone, not just its rotation
+    // (a (50,1,50) plane stretches waves wider but not taller). Dividing rotOnly by the scale again = R * S^-1, without
+    // inverse()'s precision cost. aTangent is axis-aligned (local +X) on this quad, so scale doesn't change its direction.
     mat3 normalMat = mat3(
         rotOnly[0] / modelScale.x,
         rotOnly[1] / modelScale.y,
         rotOnly[2] / modelScale.z
     );
 
-    // Analytic normal of the displaced surface replaces aNormal. The tangents are
-    // taken along the mesh's own x and z axes (the (u, v, h) derivatives mapped with
-    // .xzy) and crossed in that order so a flat surface gives +Y — the plane's rest
-    // normal — which is also what it falls back to when uWaveAmplitude is 0.
+    // Analytic normal of the displaced surface replaces aNormal: tangents along the mesh's x and z (derivatives mapped
+    // with .xzy), crossed so a flat surface gives +Y — the rest normal, also the result when uWaveAmplitude is 0.
     vec3 tangentX = dPdu.xzy;
     vec3 tangentZ = dPdv.xzy;
     vec3 waveNormal = normalize(cross(tangentZ, tangentX));

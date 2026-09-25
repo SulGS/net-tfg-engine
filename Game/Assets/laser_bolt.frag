@@ -1,20 +1,8 @@
 #version 430 core
 
-// The laser shot: a plasma bolt with a white-hot core, a coloured halo and a
-// turbulent tail. Pairs with glow_volume.vert; drawn additively by
-// RenderSystem::AdditivePass (MeshComponent::additive), so the output is light
-// added on top of the scene.
-//
-// The canvas is a unit sphere stretched by the entity transform into an ellipsoid
-// whose LOCAL +X is the direction of flight (the bullet is rotated about Z to face
-// its velocity). In local space x runs from -1 (far end of the tail) to +1 (front
-// of the canvas), and the head of the bolt sits just ahead of the middle, at
-// HEAD_X — that's where the collision box is, the tail trails behind it.
-//
-// The glow is raymarched through the sphere: a few samples of an analytic density
-// (a head blob, a tail that narrows and fades away from it, a thin white filament
-// along the axis) accumulated along the view ray. That is what makes it read as a
-// volume of plasma from any angle instead of a flat streak.
+// Laser shot: plasma bolt with white-hot core, coloured halo and turbulent tail. Pairs with glow_volume.vert, drawn
+// additively (AdditivePass). Canvas: unit sphere stretched along local +X (flight direction), x from -1 (tail end) to +1;
+// the head sits at HEAD_X (collision box). An analytic density (head, tail, filament) is raymarched to read as a volume.
 
 in vec3 vLocalPos;
 in vec3 vCamLocal;

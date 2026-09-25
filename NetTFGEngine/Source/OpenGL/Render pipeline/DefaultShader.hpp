@@ -1,28 +1,7 @@
 #pragma once
-// The engine's DEFAULT SURFACE SHADER: physically based shading (GGX / Cook-Torrance)
-// with point-light cube-map shadows (PCSS), a directional light with PCF shadows,
-// and the standard glTF PBR texture set. A Mesh built without a Material gets this
-// one (see Mesh::DefaultMaterial), and anything that wants to match the scene's
-// lighting exactly (lava.frag, water.frag) reuses its BRDF and shadow code.
-//
-// What it expects from the pipeline:
-//   vertex attributes  0 position, 1 normal, 2 uv, 3 tangent (xyz + bitangent sign)
-//   texture units      0 albedo, 1 normal, 2 metallic/roughness, 3 occlusion, 4 emissive
-//                      (bound by Mesh::draw) and 5 point shadow cube-map array,
-//                      6 directional shadow map (bound by RenderSystem::ShadingPass)
-//   buffers            SSBO 0 point lights, SSBO 1 point shadow data, UBO 2 directional light
-//   uniforms           set per frame by RenderSystem::ShadingPass (camera position, light and
-//                      shadow counts, shadow resolutions) and by Material::bind (model/view/projection)
-//
-// Why it is embedded in the engine instead of shipped as a game asset: the engine is a
-// static library, and this shader is part of it — it must not depend on which files a
-// game packs, and there is no loose file to read at runtime. The rest of the pipeline's
-// shaders (shadows, tonemap, bloom, FXAA) are embedded the same way, in
-// RenderSystem_Shaders.cpp.
-//
-// It is registered with ShaderLoader as a built-in under the keys below, so a Material can
-// also name it explicitly: Material(DefaultShader::VertexKey, DefaultShader::FragmentKey).
-// Mesh::InitDefaultMaterial() does the registration and compiles it once at startup.
+// Engine DEFAULT SURFACE SHADER: GGX/Cook-Torrance PBR, point-light cube shadows (PCSS), directional PCF shadows, glTF PBR
+// textures. Used by Meshes without a Material; reused by lava/water.frag. Embedded (static lib, no loose files) like
+// RenderSystem_Shaders.cpp; registered in ShaderLoader under the keys below by Mesh::InitDefaultMaterial().
 
 #include "OpenGL/ShaderLoader.hpp"
 
@@ -55,11 +34,8 @@ void main()
     vWorldPos     = worldPos.xyz;
     vUV           = aUV;
 
-    // Extract rotation-only from uModel by stripping scale from each column.
-    // Numerically stable at any uniform scale (e.g. 200): all values stay near
-    // 1.0, unlike transpose(inverse(uModel)) which produces values of 1/scale
-    // (0.005 at scale 200) causing precision loss in interpolated TBN varyings
-    // across large triangles - the root cause of the specular dot/ring artifact.
+    // Rotation-only from uModel by stripping each column's scale: stable at any uniform scale, unlike
+    // transpose(inverse(uModel)) whose 1/scale values lose precision in TBN varyings (the specular dot/ring artifact).
     mat3 modelMat = mat3(uModel);
     mat3 rotOnly  = mat3(
         modelMat[0] / length(modelMat[0]),
@@ -136,12 +112,9 @@ struct ShadowData {
 };
 layout(std430, binding = 1) readonly buffer ShadowBuf { ShadowData shadows[]; };
 
-// -------------------------------------------------------
-// Directional light UBO  (binding 2)
-//   colorEnabled.a == 0 -> no directional light (skip term).
-//   lightSpaceMatrix transforms world -> shadow NDC for the
-//   ortho shadow map.
-// -------------------------------------------------------
+// ---- Directional light UBO (binding 2) ----
+// colorEnabled.a == 0 -> no directional light (skip term).
+// lightSpaceMatrix transforms world -> shadow NDC for the ortho shadow map.
 layout(std140, binding = 2) uniform DirLightBlock {
     vec4 uDirLightDirIntensity;   // xyz = direction (world, toward scene), w = intensity
     vec4 uDirLightColorEnabled;   // rgb = color, a = 1.0 if light exists else 0.0
@@ -306,16 +279,9 @@ float GetShadowFactor(int lightBufIndex, vec3 lightPos,
     return 1.0;
 }
 
-// -------------------------------------------------------
-// Directional light PCF shadow
-//
-// The ortho projection maps the full depth range to NDC [0,1],
-// so the bias is already correctly scaled regardless of kFar -
-// no division by kFar needed or correct here.
-//
-// texelSize uses uDirShadowRes (not uShadowRes) because the
-// directional map has its own independent resolution setting.
-// -------------------------------------------------------
+// ---- Directional light PCF shadow ----
+// Ortho projection maps depth to NDC [0,1], so the bias is already scaled (no division by kFar).
+// texelSize uses uDirShadowRes, since the directional map has its own resolution setting.
 const vec2 kPoissonDisk[16] = vec2[](
     vec2(-0.94201624, -0.39906216),
     vec2( 0.94558609, -0.76890725),
@@ -348,11 +314,8 @@ float DirShadowPCF(vec3 worldPos, vec3 worldNormal)
         projCoords.z > 1.0)
         return 1.0;
 
-    // Normal-scaled bias in NDC space [0,1].
-    // Ortho projection already normalises depth regardless of kFar,
-    // so no further scaling is needed.
-    // mix(hi, lo, NdotL): grazing surfaces get a larger bias to avoid
-    // self-shadowing acne; surfaces facing the light directly need almost none.
+    // Normal-scaled bias in NDC [0,1] (ortho already normalises depth, no extra scaling). mix(hi, lo, NdotL):
+    // grazing surfaces get more bias to avoid acne; surfaces facing the light need almost none.
     vec3  L     = normalize(-uDirLightDirIntensity.xyz);
     float NdotL = clamp(dot(worldNormal, L), 0.0, 1.0);
     float bias  = mix(0.002, 0.0002, NdotL);

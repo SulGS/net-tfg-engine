@@ -43,11 +43,8 @@ public:
 class InputSystem : public ISystem {
 public:
     void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
-        // Pre-match freeze: no movement, rotation or shooting until the
-        // countdown reaches 0. Runs identically on client and server (this
-        // system isn't isServer-gated) since MatchStartTimer is synced —
-        // skipping here, not just gating the server's bullet spawn, keeps
-        // client-side prediction from drifting ahead during the freeze.
+        // Pre-match freeze: no movement/rotation/shooting until the countdown hits 0. Runs on client and server (MatchStartTimer
+        // is synced), so skipping here keeps client prediction from drifting ahead during the freeze.
         {
             auto timerQuery = entityManager.CreateQuery<MatchStartTimer>();
             for (auto [entity, timer] : timerQuery)
@@ -149,10 +146,8 @@ public:
     }
 };
 
-// Server-authoritative pre-match countdown. Ticks the single MatchStartTimer
-// entity down to 0; InputSystem and ArenaSystem both gate on it reading the
-// synced result (see the comment in InputSystem::Update), so this is the
-// only place that actually decrements it.
+// Server-authoritative pre-match countdown: the only place that decrements the MatchStartTimer entity.
+// InputSystem and ArenaSystem gate on the synced result (see InputSystem::Update).
 class MatchStartSystem : public ISystem {
 public:
     void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
@@ -218,16 +213,11 @@ private:
         return true;
     }
 
-    // NeighborCellId/OppositeDirection/ClassifyWallEdge now live in
-    // Components.hpp as free functions: RenderSystems.hpp's
-    // LaserWallRenderSystem needs the exact same edge classification, and
-    // duplicating it here would risk the two definitions drifting apart.
+    // NeighborCellId/OppositeDirection/ClassifyWallEdge live in Components.hpp: LaserWallRenderSystem needs the
+    // same edge classification, and duplicating it here would risk the two drifting apart.
 
-    // A shared edge is one LaserWallID entity, stored under one of its two
-    // bordering cells (see the wall-building loops in asteroids.hpp).
-    // FixInitialReachability wants to disable "cell X's wall in direction D"
-    // by that (cellId,dir) pair, but the entity might actually be stored
-    // under the NEIGHBOUR's (opposite) perspective — this checks both.
+    // A shared edge is one LaserWallID stored under one of its two cells. FixInitialReachability asks for
+    // "cell X's wall in direction D", but it may be stored from the NEIGHBOUR's (opposite) side — this checks both.
     Entity FindWallEntity(EntityManager& entityManager,
         const std::unordered_set<Entity>& spokeEntities,
         int cellId, CellCardinalDirection dir)
@@ -289,13 +279,9 @@ private:
             }
             else
             {
-                // Shared edge: a stale "enabled" carried over from the tick
-                // before its owning cell died would otherwise read as a live
-                // wall here even though ArenaSystem's Step 3 hasn't caught up
-                // yet this same tick (BuildWallMap runs before Step 3). Skip
-                // only if NEITHER bordering cell is active — checking just
-                // lwid->cellId would wrongly drop a SoleBorder wall whenever
-                // it happens to be stored under the dead side.
+                // Shared edge: a stale "enabled" from before its cell died would read as live (BuildWallMap runs before Step 3).
+                // Skip only if NEITHER bordering cell is active — checking just lwid->cellId would drop SoleBorder walls stored
+                // under the dead side.
                 if (ClassifyWallEdge(lwid->cellId, lwid->dir, activeTileSet) == WallEdgeState::Dead)
                     continue;
 
@@ -427,12 +413,8 @@ private:
             !downBlocked || !rightBlocked,
         };
 
-        // Subtiles: 0=UL, 1=UR, 2=DL, 3=DR.
-        // UL-UR and DL-DR are horizontally adjacent, split by the Down/Up
-        // spokes (hSpoke) — see makeSpoke: Down/Up run along the vertical
-        // centreline, so they block left/right crossing. UL-DL and UR-DR are
-        // vertically adjacent, split by the Left/Right spokes (vSpoke), which
-        // run along the horizontal centreline and block up/down crossing.
+        // Subtiles: 0=UL, 1=UR, 2=DL, 3=DR. UL-UR and DL-DR are split by the Down/Up spokes (hSpoke, vertical centreline,
+        // block left/right); UL-DL and UR-DR by the Left/Right spokes (vSpoke, horizontal centreline, block up/down).
         bool adj[4][4] = {
             { false, !hSpoke, !vSpoke, false   },
             {!hSpoke, false,  false,  !vSpoke  },
@@ -880,11 +862,8 @@ public:
 
                 bool inWarningWindow = (lwid->timer <= WARNING_THRESHOLD && lwid->timer > 0.0f);
 
-                // A wall whose owning or neighbouring cell is the tile currently
-                // scheduled for destruction is about to become a (instantly solid,
-                // un-toggleable) border wall the moment that tile disappears. Without
-                // this it would snap on with zero warning, unlike the falling tile
-                // itself which blinks for TILE_WARNING_THRESHOLD seconds first.
+                // A wall bordering the tile scheduled for destruction becomes a solid border wall when it disappears. Warn
+                // beforehand, like the tile's own TILE_WARNING_THRESHOLD blink, instead of snapping on with no warning.
                 if (!lwid->enabled && pendingDestroyTileId != -1 &&
                     (lwid->cellId == pendingDestroyTileId ||
                      NeighborCellId(lwid->cellId, lwid->dir) == pendingDestroyTileId))
@@ -941,10 +920,8 @@ public:
                 int cx = lwid->cellId / y_size;
                 int cy = lwid->cellId % y_size;
 
-                // ClassifyWallEdge looks at BOTH cells this edge borders, not
-                // just lwid->cellId: since dedup means only one entity exists
-                // per shared edge, the "still alive" side isn't necessarily
-                // the one it happens to be stored under.
+                // ClassifyWallEdge checks BOTH bordering cells: with one entity per shared edge, the surviving side
+                // isn't necessarily the one it's stored under.
                 WallEdgeState edgeState = ClassifyWallEdge(lwid->cellId, lwid->dir, activeCellIds);
 
                 if (edgeState == WallEdgeState::Dead)
@@ -1044,10 +1021,8 @@ public:
             auto spokeQuery = entityManager.CreateQuery<LaserWallID, CenterSpoke>();
             for (auto [entity, lwid, spoke] : spokeQuery)
             {
-                // Same reasoning as the border/interior walls above: a spoke
-                // whose own tile was destroyed must be forced off (and its
-                // collider with it) regardless of its timer, or it can be
-                // left mid-cycle with an active collider under a hidden mesh.
+                // Like the walls above: a spoke whose tile was destroyed is forced off (collider too) regardless of its
+                // timer, or it could be left mid-cycle with an active collider under a hidden mesh.
                 if (!activeCellIds.count(lwid->cellId))
                 {
                     if (lwid->enabled)
@@ -1230,10 +1205,8 @@ public:
                         EventEntry spawnEvent;
                         spawnEvent.event.type = AsteroidEventMask::SPAWN_BULLET;
                         SpawnBulletEventData spawnData;
-                        // Spawn at the nose (SHIP_MUZZLE_OFFSET), not the ship's
-                        // centre, and using its *current* rotation/position at
-                        // the moment the charge finishes — this is now the same
-                        // point the charge-up orb has been visually sitting at.
+                        // Spawn at the nose (SHIP_MUZZLE_OFFSET) with the ship's *current* rotation/position when the charge
+                        // finishes — the same point the charge-up orb was visually sitting at.
                         spawnData.bulletId = id;
                         spawnData.ownerId = p;
                         spawnData.posX = transform->getPosition().x + cos(radians) * SHIP_MUZZLE_OFFSET;

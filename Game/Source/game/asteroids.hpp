@@ -24,6 +24,7 @@
 #include "LogicSystems.hpp"
 #include "RenderSystems.hpp"
 #include "Explosion.hpp"
+#include "PauseMenu.hpp"
 #include "Events.hpp"
 #include "EventHandlers.hpp"
 #include "Deltas.hpp"
@@ -210,20 +211,9 @@ public:
             }
         }
 
-        // Sync wall enabled + warning state from blob into logic ECS. This
-        // was missing entirely (only the renderer's GameState_To_ECSWorld
-        // had it) — ArenaSystem never runs client-side, so without this the
-        // client's local LaserWallID entities stay frozen at their
-        // InitECSLogic defaults (interior walls start disabled). Client-side
-        // prediction's Synchronize()->SimulateFrame()->ECSWorld_To_GameState
-        // round-trip (see ClientPredictionNetcode) then re-serialized those
-        // stale, always-off values back into the snapshot chain that
-        // OnServerDeltasUpdate builds latestServerState from — every
-        // reconciliation corrupted the very state it had just correctly
-        // patched from the network, one tick after applying it. The old
-        // always-send-the-full-grid-every-tick wire format re-overwrote the
-        // damage before it could be observed; the sparse delta format
-        // doesn't touch fields that didn't change, so the corruption stuck.
+        // Sync wall enabled/warning from the blob into logic ECS. ArenaSystem never runs client-side, so without this the
+        // LaserWallIDs stay at their InitECSLogic defaults and prediction's ECSWorld_To_GameState round-trip writes those stale
+        // values back into the snapshot chain, corrupting each reconciliation (the sparse delta format no longer masks it).
         {
             auto wallQuery = world.GetEntityManager().CreateQuery<LaserWallID>();
             for (auto [entity, lwid] : wallQuery)
@@ -472,15 +462,9 @@ public:
 
             if (isServer)
             {
-                // Half-extents matched to the rendered ship_low.glb (raw mesh
-                // bounds X:[-0.359,0.357] Y:[-0.5,0.5], scaled x5 in the
-                // renderer -> ~1.8 nose-to-tail, ~2.5 wingtip-to-wingtip;
-                // corroborated by the thruster mount at local x=-1.8 in
-                // RenderSystems.hpp's LinkThrusterToShipSystem). The old
-                // (1.5, 3.0) was ~17% short along the ship's length (nose/
-                // tail could visually overlap a wall or bullet with no hit)
-                // and ~20% wide across the wingspan (could die to a wall
-                // that still looked clear of the wingtips).
+                // Half-extents matched to ship_low.glb (bounds X:[-0.359,0.357] Y:[-0.5,0.5], x5 in the renderer -> ~1.8 long,
+                // ~2.5 wingspan; matches the thruster mount at x=-1.8). The old (1.5, 3.0) was ~17% short and ~20% wide,
+                // causing missed hits at nose/tail and deaths to walls clear of the wingtips.
                 BoxCollider2D* collider = world.GetEntityManager().AddComponent<BoxCollider2D>(player, BoxCollider2D{ glm::vec2(1.8f, 2.5f) });
                 collider->layer = CollisionLayer::PLAYER;
                 collider->collidesWith = CollisionLayer::BULLET | CollisionLayer::WALL;
@@ -565,10 +549,8 @@ public:
                 const float midX = ((px - x_size) * 40.0f - 40.0f + (px + 1 - x_size) * 40.0f - 40.0f) / 2.0f;
                 const float midY = (py - y_size) * 40.0f - 40.0f;
 
-                // An interior boundary matches TWO (cx,cy) combinations below
-                // (the cell on each side); edgeBuilt keeps only the first so
-                // each physical edge becomes exactly one entity instead of
-                // two independently-toggled ones at the same position.
+                // An interior boundary matches TWO (cx,cy) combinations (one per side); edgeBuilt keeps only the first
+                // so each physical edge is exactly one entity, not two independently-toggled ones.
                 bool edgeBuilt = false;
                 for (int cx = 0; cx < x_size && !edgeBuilt; cx++)
                 {
@@ -1023,6 +1005,7 @@ public:
 		world.GetEntityManager().RegisterComponentType<LaserWallVisual>();
 		world.GetEntityManager().RegisterComponentType<BulletVisual>();
 		world.GetEntityManager().RegisterComponentType<GameStatusText>();
+		RegisterPauseMenuComponents(world.GetEntityManager());
 		world.GetEntityManager().RegisterComponentType<MatchStartTimer>();
 
 		Entity matchStartEntity = world.GetEntityManager().CreateEntity();
@@ -1124,11 +1107,8 @@ public:
         Transform* camTrans = world.GetEntityManager().AddComponent<Transform>(camera, Transform{});
         camTrans->setPosition(glm::vec3(0.0f, 0.0f, 18.0f));
         Camera* camSettings = world.GetEntityManager().AddComponent<Camera>(camera, Camera{});
-        // Near plane matters far more than it looks: depth is 32F with the standard
-        // (non-reversed) mapping, so at 0.001 the z-buffer resolves only ~0.1 world
-        // units at 40 away and ~1 unit at 150 — surfaces that close z-fight (the
-        // lasers against the pillars, for one). The camera never gets within
-        // several units of anything, so 0.5 is safe and ~500x more precise.
+        // Near plane matters: depth is 32F non-reversed, so at 0.001 the z-buffer resolves ~0.1 units at 40 away and ~1 at 150
+        // (lasers z-fighting pillars). The camera never gets within several units of anything, so 0.5 is safe and ~500x more precise.
         camSettings->setPerspective(45.0f, window->getAspectRatio(), 0.5f, 1000.0f);
         camSettings->setTarget(glm::vec3(0.0f, 0.0f, 0.0f));
         camSettings->setUp(glm::vec3(0.0f, 1.0f, 0.0f));
@@ -1169,6 +1149,9 @@ public:
 			exitBtnComp->isInteractable = false; // Prevent multiple clicks
 			exitChecker->exitPressed = true;
 		};
+
+		// Escape menu, sharing the Exit button's way back to the main menu.
+		BuildPauseMenu(world.GetEntityManager(), exitChecker);
 
         renderDataTransferToLogicCallback = [](IECSGameLogic* logic, IECSGameRenderer* renderer) {
                 if (!logic) {
@@ -1213,11 +1196,8 @@ public:
         lavaTrans->setScale(glm::vec3(5.0f, 5.0f, 5.0f));
 
         auto lavaMat = std::make_shared<Material>("fluid.vert", "lava.frag");
-        // Molten swell — noticeably alive, still slower/heavier than water's chop.
-        // Amplitude is in the mesh's local units (the floor is scaled x5 below): 0.14 is
-        // ~2.9 world units of swell, peak to peak. It was 0.45 while fluid.vert put most of
-        // the displacement along the plane instead of up (see the note there), which
-        // happened to give about the same height; with the axes right, 0.45 would be ~9.4.
+        // Molten swell: alive but slower/heavier than water. Amplitude is in local units (floor scaled x5): 0.14 = ~2.9 world
+        // units peak to peak. It was 0.45 when fluid.vert displaced mostly along the plane; with the axes fixed that'd be ~9.4.
         lavaMat->setFloat("uWaveAmplitude", 0.14f);
         lavaMat->setFloat("uWaveSpeed", 0.7f);
         lavaMat->setFloat("uWaveScale", 4.0f);
@@ -1335,22 +1315,15 @@ public:
                     }
             }
 
-        // Beam mesh + the scale it was designed for: local Z spans +-20 world units, so
-        // each end lands exactly on a pillar axis (pillars are 40 apart). The tube is
-        // radius 2 in the middle and narrows over the last 8 units to 0.9 at each end,
-        // so the ends hide inside the pillar's column (radius ~1.3) instead of wrapping
-        // around it. Its profile is baked into laser_beam.glb in world units at this
-        // scale: change the scale and the taper scales with it.
-        // Only the visual entities use this scale; the logic-side wall entities keep theirs.
+        // Beam mesh at its design scale: local Z spans +-20 world units so each end lands on a pillar axis (40 apart); radius 2,
+        // tapering over the last 8 units to 0.9 so the ends hide inside the pillar (radius ~1.3). The taper is baked into
+        // laser_beam.glb at this scale. Only the visual entities use it; logic-side wall entities keep theirs.
         const char* const laserBeamMesh = "laser_beam.glb";
         const glm::vec3   laserBeamScale(2.0f, 2.0f, 20.0f);
 
-        // One Material per wall/spoke: each carries its own power/warning/flash
-        // uniforms (driven by LaserWallRenderSystem). The compiled program is
-        // shared through ShaderLoader's cache, only the uniform state is per wall.
-        // seed desyncs the noise so neighbouring beams don't animate in lockstep.
-        // The meshes are drawn additively (MeshComponent::additive), so the
-        // colours below are light being ADDED to the scene, not a surface colour.
+        // One Material per wall/spoke (own power/warning/flash uniforms, driven by LaserWallRenderSystem); the program is
+        // shared via ShaderLoader's cache. seed desyncs the noise between neighbours. Drawn additively, so the colours
+        // below are light ADDED to the scene, not a surface colour.
         auto makeLaserWallMaterial = [](const glm::vec3& pos)
             {
                 auto mat = std::make_shared<Material>("laser_wall.vert", "laser_wall.frag");
@@ -1441,6 +1414,7 @@ public:
 		world.AddSystem(std::make_unique<ThrustersSoundSystem>());
         world.AddSystem(std::make_unique<FluidAnimationSystem>());
         world.AddSystem(std::make_unique<DestroyTimerSystem>());
+        world.AddSystem(std::make_unique<PauseMenuSystem>());
 
         AudioManager::PlayMusic("lava_sound.wav", true);
         AudioManager::SetMusicVolume(1.00f);

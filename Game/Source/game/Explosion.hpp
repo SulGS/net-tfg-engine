@@ -1,11 +1,6 @@
 #pragma once
-// Ship explosion: everything the player sees when a ship dies, in one place.
-//
-//   SpawnShipExplosion()      builds the effect (particle layers, blast lighting, camera shake)
-//   ExplosionEffectsSystem    animates the blast lights and removes them when they are done
-//   PreloadExplosionAssets()  loads the explosion sprite sheet up front so the first death does not stall
-//
-// Purely visual: it lives in the renderer world and never touches simulated game state.
+// Ship explosion, purely visual (renderer world only): SpawnShipExplosion() builds it (particles, lighting, camera shake),
+// ExplosionEffectsSystem animates/removes the blast lights, PreloadExplosionAssets() loads the sprite sheet up front.
 
 #include <algorithm>
 #include <cmath>
@@ -20,12 +15,9 @@
 #include "OpenGL/Particles/ParticlePresets.hpp"
 #include "Components.hpp"
 
-// One point light of the blast's lighting. It waits `delay` seconds, then follows an
-// envelope for `duration` seconds — intensity falling exponentially from
-// `peakIntensity`, colour cooling from `colorStart` to `colorEnd`, radius growing
-// from `radiusStart` to `radiusEnd` — and destroys itself. ExplosionEffectsSystem
-// drives it; SpawnShipExplosion builds the set of them (flash, fireball, secondary
-// blasts, embers) so the lighting follows the particle layers.
+// One blast point light: waits `delay`, then for `duration` its intensity falls exponentially from `peakIntensity`,
+// colour cools colorStart->colorEnd and radius grows radiusStart->radiusEnd; then it destroys itself.
+// Driven by ExplosionEffectsSystem; SpawnShipExplosion builds the set (flash, fireball, secondary, embers).
 class ExplosionLight : public IComponent {
 public:
 	float age = 0.0f;
@@ -115,11 +107,8 @@ inline void SpawnBlastLight(EntityManager& em, const glm::vec3& position, const 
 	em.AddComponent<ExplosionLight>(lightEntity, envelope);
 }
 
-// The blast's lighting, in stages that follow the particle layers (see MakeExplosion):
-//   flash      the detonation itself, white-hot, gone in ~0.15 s, reaches across the arena
-//   fireball   the burning gas, ~1.5 s, cooling from yellow-white to deep red
-//   secondary  the smaller blasts that go off across the wreck after the main one
-//   embers     the wreck glowing red-hot on the floor long after the fire is out
+// Blast lighting in stages following the particle layers: flash (white-hot, ~0.15 s, arena-wide), fireball (~1.5 s,
+// yellow-white to deep red), secondary (smaller blasts across the wreck), embers (red-hot wreck long after the fire).
 inline void SpawnBlastLighting(EntityManager& em, const glm::vec3& position, const ExplosionSettings& settings)
 {
 	static thread_local std::mt19937 rng{ std::random_device{}() };

@@ -119,13 +119,9 @@ public:
         if (audioSystem) audioSystem->SetMusicVolume(volume);
     }
 
-    // Deliberately NOT behind audioMutex: AudioChannelManager is its own
-    // lock-free singleton (see AudioChannels.hpp) precisely so a settings-UI
-    // slider — called from the render thread while it holds the renderer's
-    // EntityManager mutex — can never invert lock order against the audio
-    // thread, which takes audioMutex before that same EntityManager mutex
-    // in AudioSystem::Update(). That inversion used to deadlock the game as
-    // soon as the sound settings tab was opened.
+    // Deliberately NOT behind audioMutex: the audio thread takes audioMutex before the EntityManager mutex, while a settings
+    // slider calls this from the render thread holding that EntityManager mutex. That lock inversion used to deadlock as
+    // soon as the sound tab opened; AudioChannelManager is lock-free for this reason (see AudioChannels.hpp).
     static void SetChannelVolume(AudioChannel channel, float volume) {
         AudioChannelManager::instance().SetVolume(channel, volume);
     }

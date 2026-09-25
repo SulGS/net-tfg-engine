@@ -1,5 +1,6 @@
 #include "UIUpdateSystem.hpp"
 #include "Utils/Input.hpp"
+#include "Utils/Utf8.hpp"
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -130,11 +131,8 @@ void UIUpdateSystem::Update(EntityManager& entityManager, std::vector<EventEntry
     double refMouseY = mouseY * refScaleY;
     glm::vec2 refMouse(static_cast<float>(refMouseX), static_cast<float>(refMouseY));
 
-    // Press edge. Input::MousePressed() stays true while the button is held
-    // (PRESSED || HELD), so using it directly would toggle a dropdown once
-    // per frame during a single click. Input's own one-frame edge would be
-    // MousePressed() && !MouseHeld(), but comparing against the previous
-    // state also holds up if Update() runs more than once per Input::Update().
+    // Press edge: MousePressed() stays true while held, so it would toggle a dropdown every frame. Comparing against
+    // the previous state (vs Input's own edge) also holds if Update() runs more than once per Input::Update().
     bool mouseIsDown = IsMouseLeftDown();
     bool mouseJustPressed = mouseIsDown && !prevMouseDown;
 
@@ -509,16 +507,17 @@ size_t UIUpdateSystem::GetCursorPositionFromMouse(const UITextField* textField,
     std::string displayText = textField->GetDisplayText();
 
     // Calculate scale
-    const Character* refChar = fontManager->GetCharacter(textField->fontName, 'H');
-    if (!refChar) refChar = fontManager->GetCharacter(textField->fontName, 'A');
+    const Character* refChar = fontManager->GetCharacter(textField->fontName, U'H');
+    if (!refChar) refChar = fontManager->GetCharacter(textField->fontName, U'A');
     float loadedFontSize = refChar ? static_cast<float>(refChar->size.y) : 48.0f;
     float scale = textField->fontSize / loadedFontSize;
 
     // Calculate which character the mouse is closest to
     float currentX = 0.0f;
 
-    for (size_t i = 0; i < displayText.length(); i++) {
-        const Character* ch = fontManager->GetCharacter(textField->fontName, displayText[i]);
+    // Byte offsets, like cursorPosition: i is where the glyph starts, next where it ends.
+    for (size_t i = 0, next = 0; i < displayText.length(); i = next) {
+        const Character* ch = fontManager->GetCharacter(textField->fontName, Utf8::Next(displayText, next));
         if (!ch) continue;
 
         float charWidth = (ch->advance >> 6) * scale;
@@ -531,7 +530,7 @@ size_t UIUpdateSystem::GetCursorPositionFromMouse(const UITextField* textField,
         currentX += charWidth;
 
         if (xPos < currentX) {
-            return i + 1;
+            return next;
         }
     }
 

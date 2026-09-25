@@ -137,10 +137,8 @@ void OpenGLWindow::setWindowMode(WindowMode mode) {
     }
     }
 
-    // glfwSetWindowMonitor recreates the swap chain on some drivers
-    // (notably switching into/out of exclusive fullscreen), which can
-    // silently reset the swap interval back to the driver default. Re-assert
-    // whatever VSync was configured to so it doesn't flip back on/off.
+    // glfwSetWindowMonitor recreates the swap chain on some drivers (exclusive fullscreen switches), silently
+    // resetting the swap interval. Re-assert the configured VSync so it doesn't flip.
     glfwSwapInterval(vsyncEnabled ? 1 : 0);
 }
 
@@ -186,13 +184,9 @@ void OpenGLWindow::setVSync(bool enabled)
 
 void OpenGLWindow::setupOpenGL()
 {
-    // Default off: the FPS-limit setting has its own microsecond-precision
-    // pacer in ClientWindow::renderLoop(); leaving the driver's default
-    // swap interval (often 1 = vsync on) fights it and silently clamps
-    // actual frame rate to the monitor's refresh rate no matter what target
-    // FPS is picked (e.g. a 144Hz panel never showing 165/240 even though
-    // the pacer asks for it). ClientWindow::startRenderThread() applies the
-    // saved RenderSettings value right after construction.
+    // Default off: the FPS limit has its own microsecond pacer in ClientWindow::renderLoop(), and the driver default (often
+    // vsync on) would clamp to the monitor refresh rate whatever the target (e.g. 144Hz never reaching 165/240).
+    // ClientWindow::startRenderThread() applies the saved RenderSettings value right after construction.
     setVSync(false);
 
     glEnable(GL_DEPTH_TEST);

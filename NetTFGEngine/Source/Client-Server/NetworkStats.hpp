@@ -2,10 +2,8 @@
 
 #include <atomic>
 
-// Latest network latency, written by OnlineClient's network thread and read
-// by the render thread (debug overlay). Global instead of routed through the
-// active Client/scene because the overlay lives in IECSGameRenderer, which
-// has no reference back to the OnlineClient that owns InputDelayCalculator.
+// Latest network latency: written by OnlineClient's network thread, read by the render thread (debug overlay).
+// Global because the overlay lives in IECSGameRenderer, which has no reference back to the OnlineClient.
 namespace NetworkStats
 {
     inline std::atomic<float> g_lastLatencyMs{ 0.0f };

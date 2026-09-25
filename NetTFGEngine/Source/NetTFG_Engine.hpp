@@ -144,7 +144,7 @@ public:
 
         Debug::Info("NetTFG_Engine") << "Starting engine\n";
 
-        const auto TICK_DURATION = std::chrono::microseconds(1000000 / TICKS_PER_SECOND);
+        const int MAX_CATCHUP_TICKS = 3;
         auto nextTick = std::chrono::steady_clock::now();
 
         // IsCloseRequested() is deliberately distinct from isWindowThreadRunning(): the render thread stays alive until ClientCleanup() below has released every client's GL resources and calls stopRenderThread() itself.
@@ -195,6 +195,14 @@ public:
 
             // Fixed timestep - wait until next tick
             nextTick += TICK_DURATION;
+
+            // Resync instead of bursting after a long stall (e.g. DeactivateClient blocked in RunOnRenderThread while the new
+            // scene's Init runs): the burst ran an OnlineClient's prediction far ahead of the server, the next reconciliation
+            // rewound it, and the local player froze until the frame caught up again, then snapped.
+            const auto now = std::chrono::steady_clock::now();
+            if (now - nextTick > TICK_DURATION * MAX_CATCHUP_TICKS) {
+                nextTick = now;
+            }
             std::this_thread::sleep_until(nextTick);
         }
 

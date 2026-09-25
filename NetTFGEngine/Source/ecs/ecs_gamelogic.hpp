@@ -47,14 +47,9 @@ public:
                 lastKnownInput[play->playerId] = it->second.input;
             }
             else {
-                // No packet arrived for this player this frame (late/lost,
-                // or outrun by the server's fixed tick timer). Repeat their
-                // last known input instead of zero-filling: a zero-fill
-                // reads as the key being released for exactly this frame,
-                // which can swallow a still-held SHOOT press right as a
-                // charge finishes — the client's local prediction already
-                // played the charge, so nothing looks wrong until the
-                // bullet silently fails to spawn.
+                // No packet for this player this frame (late/lost/outrun by the tick timer): repeat their last input instead of
+                // zero-filling, which reads as a one-frame key release and can swallow a held SHOOT as a charge finishes
+                // (the client already predicted the charge, so the bullet silently fails to spawn).
                 auto lastIt = lastKnownInput.find(play->playerId);
                 play->input = lastIt != lastKnownInput.end() ? lastIt->second : MakeZeroInputBlob();
             }

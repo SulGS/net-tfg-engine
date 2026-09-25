@@ -1,16 +1,8 @@
 #version 430 core
 
-// The shot's charge-up: energy gathering into an orb at the ship's muzzle. Pairs
-// with glow_volume.vert; drawn additively by RenderSystem::AdditivePass
-// (MeshComponent::additive), so the output is light added on top of the scene.
-//
-// The canvas is a unit sphere (uniformly scaled here). The glow is raymarched
-// inside it — a few samples of an analytic density accumulated along the view
-// ray — so it reads as a ball of plasma from any angle:
-//   - a soft halo that fills the sphere
-//   - a white-hot core that tightens and brightens as the charge builds
-//   - a thin shell of sparks that CONTRACTS towards the centre, as if energy were
-//     being pulled in
+// Shot charge-up: energy gathering into an orb at the muzzle. Pairs with glow_volume.vert, drawn additively (AdditivePass).
+// An analytic density is raymarched inside the unit-sphere canvas: a soft halo, a white-hot core that tightens as the
+// charge builds, and a shell of sparks that CONTRACTS towards the centre.
 
 in vec3 vLocalPos;
 in vec3 vCamLocal;

@@ -21,15 +21,19 @@ public:
     ~FontManager();
 
     bool LoadFont(const std::string& fontName, const std::string& fontPath, unsigned int fontSize);
-    const Character* GetCharacter(const std::string& fontName, char c) const;
+    // Glyph for a Unicode codepoint; '?' when the font doesn't have it loaded. Text is UTF-8:
+    // walk it with Utf8::Next / Utf8::Decode, never byte by byte.
+    const Character* GetCharacter(const std::string& fontName, char32_t c) const;
+    // A plain char would sign-extend UTF-8 bytes into bogus codepoints; use U'x' literals.
+    const Character* GetCharacter(const std::string& fontName, char c) const = delete;
     bool HasFont(const std::string& fontName) const;
     glm::vec2 MeasureText(const std::string& fontName, const std::string& text, float scale = 1.0f) const;
 
 private:
     FT_Library ft;
-    std::map<std::string, std::map<char, Character>> fonts;
+    std::map<std::string, std::map<char32_t, Character>> fonts;
     
-    void GenerateCharacterTexture(FT_Face face, char c, std::map<char, Character>& characters);
+    void GenerateCharacterTexture(FT_Face face, char32_t c, std::map<char32_t, Character>& characters);
 };
 
 #endif // FONTMANAGER_HPP

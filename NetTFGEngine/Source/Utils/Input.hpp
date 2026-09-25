@@ -6,22 +6,9 @@
 #include <unordered_set>
 #include <cctype>
 
-// Frame loop:
-//
-//     while (running) {
-//         glfwPollEvents();   // GLFW callbacks record the events
-//         Input::Update();    // ages the states and publishes the deltas
-//         ... systems ...     // query Input here
-//     }
-//
-// Calling Update() before glfwPollEvents() also works; events are then seen
-// one frame later, but nothing is lost.
-//
-// Per-state meaning (a key or a mouse button):
-//   KeyTapped / MouseTapped   -> true for exactly one frame, the press
-//   KeyPressed / MousePressed -> true the whole time the input is down
-//   KeyHeld / MouseHeld       -> true while down, except the first frame
-//   KeyReleased / MouseReleased -> true for exactly one frame, the release
+// Frame loop: glfwPollEvents(); Input::Update(); then systems query Input (Update() first also works, one frame later).
+// KeyTapped/MouseTapped: one frame, the press. KeyPressed/MousePressed: whole time down. KeyHeld/MouseHeld: down,
+// except the first frame. KeyReleased/MouseReleased: one frame, the release.
 class Input {
 public:
     enum class KeyState { NONE, JUST_PRESSED, PRESSED, HELD, JUST_RELEASED, RELEASED };

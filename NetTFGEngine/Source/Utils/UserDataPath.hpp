@@ -5,10 +5,8 @@
 #include <string>
 #include <system_error>
 
-// Per-user writable storage (settings, logs). Everything lives under
-//   Windows: %LOCALAPPDATA%\NetTFGEngine\<product>\
-//   Linux:   $HOME/.NetTFGEngine/<product>/
-// so the game works when installed in a read-only location (e.g. Program Files).
+// Per-user writable storage (settings, logs): Windows %LOCALAPPDATA%\NetTFGEngine\<product>\, Linux
+// $HOME/.NetTFGEngine/<product>/, so the game works installed in a read-only location (e.g. Program Files).
 namespace UserDataPath
 {
     inline std::string& ProductNameStorage()

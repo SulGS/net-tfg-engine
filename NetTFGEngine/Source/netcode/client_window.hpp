@@ -17,12 +17,8 @@
 #include <timeapi.h>
 #pragma comment(lib, "winmm.lib")
 
-// RAII wrapper around timeBeginPeriod/timeEndPeriod. Windows' default
-// scheduler/timer tick is ~15.6ms, so std::this_thread::sleep_until/
-// sleep_for can wake up to that much late; requesting 1ms resolution for
-// the guard's lifetime (paired with the spin-wait tail in renderLoop()
-// below) is what actually gets frame pacing down to sub-millisecond
-// accuracy instead of e.g. a 240 FPS target only ever reaching ~65 FPS.
+// RAII timeBeginPeriod/timeEndPeriod. Windows' default ~15.6ms timer tick makes sleep_until/sleep_for wake late;
+// 1ms resolution (plus renderLoop()'s spin-wait) gets sub-ms pacing instead of e.g. 240 FPS reaching only ~65.
 class HighResTimerGuard {
 public:
     HighResTimerGuard() { timeBeginPeriod(1); }
@@ -45,11 +41,8 @@ public:
 // adjustable at runtime from the settings menu instead of being fixed at compile time.
 inline int CurrentTargetFPS() { return std::max(1, RenderSettings::instance().getTargetFPS()); }
 
-// Microsecond-precision tick period. Millisecond granularity (1000/FPS,
-// truncated to an int) is too coarse above ~60 FPS: 144 and 165 both floor
-// to 6ms/tick, so the loop actually ran at ~166 FPS for either choice,
-// and 144 itself was ~167 FPS instead of 144. Microseconds keep the
-// rounding error under ~0.05% across the whole FPS-limit dropdown.
+// Microsecond tick period: milliseconds are too coarse above ~60 FPS (144 and 165 both floor to 6ms, ~166 FPS).
+// Microseconds keep the rounding error under ~0.05% across the whole FPS-limit dropdown.
 inline long long CurrentTickPeriodUs() { return 1000000LL / CurrentTargetFPS(); }
 
 class ClientWindow {
@@ -212,7 +205,10 @@ public:
     void setLocalState(GameStateBlob state) {
         std::lock_guard<std::mutex> lock(gStateMutex);
 
-        if (state.frame > CurrentLocalState.frame) {
+        // != rather than >: only the game thread calls this, in order, so a lower frame is a reconciliation rewinding the
+        // prediction (currentFrame = lastConfirmed + framesAhead). Rejecting it froze the local player until the frame
+        // passed the old maximum again, then snapped.
+        if (state.frame != CurrentLocalState.frame) {
             PreviousLocalState = CurrentLocalState;
             previousLocalUpdate = lastLocalUpdate;
             CurrentLocalState = state;
@@ -318,10 +314,8 @@ private:
                 instances = activeInstances;
             }
 
-            // Iconified (Alt+Tab out of fullscreen): the framebuffer is 0x0, so
-            // there is nothing to present. The render callback still runs so
-            // ECS/audio state keeps advancing (it skips its draw systems when
-            // minimized); only the buffer swap is skipped.
+            // Iconified (Alt+Tab out of fullscreen): 0x0 framebuffer, nothing to present. The render callback still runs so
+            // ECS/audio keep advancing (it skips draw systems when minimized); only the swap is skipped.
             const bool minimized = window->isMinimized();
 
             for (ClientWindow* instance : instances) {
@@ -334,16 +328,9 @@ private:
 
                 instance->gStateMutex.lock();
 
-                // Both start at frame=-1 (set in the constructor) and only
-                // become real once TickClient() completes at least once on
-                // the game/network thread (setLocalState/setServerState).
-                // Interpolating before that blends actual gameplay state
-                // toward these blank, zeroed placeholders -- e.g. a ship
-                // rendered at (0,0) instead of its spawn point -- and then
-                // visibly snaps to the correct state the instant real data
-                // arrives. Skip interpolating and rendering this instance
-                // until both have ticked at least once; Init() still runs
-                // unconditionally above so the scene exists to render into.
+                // Both states start at frame=-1 until TickClient() completes once on the game thread. Interpolating before that
+                // blends toward zeroed placeholders (e.g. a ship at (0,0)) and then snaps. Skip interpolation and rendering until
+                // both have ticked; Init() still runs above so the scene exists.
                 bool hasRealState = instance->CurrentLocalState.frame != -1
                     && instance->CurrentServerState.frame != -1;
 
@@ -354,24 +341,24 @@ private:
 
                 auto now = std::chrono::steady_clock::now();
 
-                // Server: sweeps 0->1 over MS_PER_TICK after each new state arrives.
+                // Server: sweeps 0->1 over TICK_DURATION after each new state arrives.
                 // factor=0: render at prevServer. factor=1: render at currServer.
                 float serverInterpolationFactor = 0.0f;
                 if (instance->CurrentServerState.frame != instance->PreviousServerState.frame) {
                     auto elapsed = now - instance->lastStateUpdate;
                     float elapsedMs = std::chrono::duration<float, std::milli>(elapsed).count();
-                    serverInterpolationFactor = elapsedMs / static_cast<float>(MS_PER_TICK);
+                    serverInterpolationFactor = elapsedMs / (TICK_DURATION.count() / 1000.0f);
                     if (serverInterpolationFactor < 0.0f) serverInterpolationFactor = 0.0f;
                     if (serverInterpolationFactor > 1.0f) serverInterpolationFactor = 1.0f;
                 }
 
-                // Local: sweeps 0->1 over MS_PER_TICK after each new predicted state.
+                // Local: sweeps 0->1 over TICK_DURATION after each new predicted state.
                 // factor=0: render at prevLocal. factor=1: render at currLocal.
                 float localInterpolationFactor = 0.0f;
                 if (instance->CurrentLocalState.frame != instance->PreviousLocalState.frame) {
                     auto elapsed = now - instance->lastLocalUpdate;
                     float elapsedMs = std::chrono::duration<float, std::milli>(elapsed).count();
-                    localInterpolationFactor = elapsedMs / static_cast<float>(MS_PER_TICK);
+                    localInterpolationFactor = elapsedMs / (TICK_DURATION.count() / 1000.0f);
                     if (localInterpolationFactor < 0.0f) localInterpolationFactor = 0.0f;
                     if (localInterpolationFactor > 1.0f) localInterpolationFactor = 1.0f;
                 }
@@ -436,25 +423,14 @@ private:
 
             Input::Update();
 
-            // Deadline computed fresh off this frame's own start, not an
-            // accumulated running total: a single slow frame (asset load,
-            // OS scheduling hitch, a target-FPS change mid-session) only
-            // costs that one frame instead of leaving the schedule
-            // permanently behind "now" -- which is what an accumulated
-            // nextTick did, since sleep_until on an already-past time
-            // returns instantly and the deficit could never be repaid,
-            // making the FPS limit effectively disappear once VSync (which
-            // was independently blocking swapBuffers) stopped masking it.
+            // Deadline from this frame's own start, not an accumulated total: a slow frame only costs itself. An accumulated
+            // nextTick fell permanently behind "now" (sleep_until on a past time returns instantly), so the FPS limit
+            // effectively vanished once VSync stopped masking it.
             auto frameDeadline = frameStart + std::chrono::microseconds(CurrentTickPeriodUs());
 
-            // Hybrid wait: sleep_until() alone wakes late by however coarse
-            // the OS scheduler/timer is -- observed ~11-12ms of pure
-            // overshoot even with timeBeginPeriod(1) above, which is most
-            // of the whole budget at a high target FPS (e.g. 240 FPS wants
-            // a 4.17ms period) and a large fraction even at a low one (30
-            // FPS's 33.3ms). Sleep for the bulk of the wait, cheaply, then
-            // spin the last stretch so the actual wake time is bounded by
-            // this thread checking the clock, not by the scheduler.
+            // Hybrid wait: sleep_until() alone overshoots by the scheduler granularity (~11-12ms observed even with
+            // timeBeginPeriod(1)), most of a 240 FPS budget. Sleep the bulk cheaply, then spin the last stretch so wake
+            // time is bounded by this thread checking the clock.
             constexpr auto kSpinMargin = std::chrono::microseconds(2000);
             auto nowBeforeWait = std::chrono::high_resolution_clock::now();
             if (frameDeadline - nowBeforeWait > kSpinMargin) {

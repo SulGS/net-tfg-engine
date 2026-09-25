@@ -295,10 +295,8 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
     for (auto [entity, meshC, transform] : meshQuery) {
         if (!meshC->enabled || !meshC->mesh || meshC->additive) continue; // additive ones: see AdditivePass
 
-        // Pipeline state offered to every material. A shader may not use some of it
-        // (an unlit one has no use for the shadow maps), so each is set only if the
-        // shader has it. Set BEFORE bind: Material::bind() is what uploads them, so
-        // afterwards they would only reach the GPU on the next frame.
+        // Pipeline state offered to every material, set only if the shader has it. Set BEFORE bind: Material::bind()
+        // uploads them, so afterwards they'd only reach the GPU next frame.
         if (Material* mat = meshC->mesh->getMaterial()) {
             mat->setVec3IfPresent("uCameraPos", cameraPos);
             mat->setIntIfPresent("uShadowCubeArray", 5);
@@ -326,15 +324,9 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
     glViewport(0, 0, m_screenW, m_screenH);
 }
 
-// Light-only meshes (MeshComponent::additive: laser beams, glows) summed on top
-// of the shaded scene. Runs after ShadingPass + ResolveMSAA, so it draws into the
-// single-sample HDR buffer against the resolved depth (same as the particles):
-// occluded by opaque geometry, but never writes depth, and (SRC_ALPHA, ONE)
-// makes the result independent of draw order. The output stays HDR, so the
-// bloom pass picks up the bright cores.
-//
-// Uses drawGeometryOnly(): these shaders are unlit and need no texture units, so
-// the per-submesh sampler uniforms Mesh::draw() would push are skipped.
+// Light-only meshes (MeshComponent::additive) summed on the shaded scene after ShadingPass + ResolveMSAA: depth-tested
+// against resolved depth, no depth write, (SRC_ALPHA, ONE) so order doesn't matter; stays HDR for bloom.
+// Uses drawGeometryOnly(): these unlit shaders need no texture units, so Mesh::draw()'s sampler uniforms are skipped.
 void RenderSystem::AdditivePass(EntityManager::Query<MeshComponent, Transform>& meshQuery,
     const glm::mat4& view,
     const glm::mat4& projection,

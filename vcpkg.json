@@ -1,10 +1,12 @@
 {
   "dependencies": [
+    "cpp-httplib",
     "freetype",
     "gamenetworkingsockets",
     "glew",
     "glfw3",
     "glm",
+    "nlohmann-json",
     {
       "name": "openal-soft",
       "version>=": "1.24.0"

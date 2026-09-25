@@ -48,17 +48,9 @@ inline int NeighborCellId(int cellId, CellCardinalDirection dir)
 	return nx * MAP_SIZE + ny;
 }
 
-// A shared interior edge is now represented by exactly ONE LaserWallID
-// entity (see the wall-building loops in asteroids.hpp), owned by whichever
-// of its two cells happened to be visited first. Since either side can die
-// independently (a tile getting destroyed), classifying "is this wall solid"
-// has to look at BOTH the entity's own stored cell and its geometric
-// neighbour, not just the one it happens to be stored under:
-//   - both cells alive       -> Interior: normal random on/off toggling.
-//   - exactly one cell alive -> SoleBorder: forced solid, protects the
-//     survivor from falling into the void where the other cell used to be.
-//   - neither cell alive (or this is a map-edge wall whose only cell died)
-//     -> Dead: forced off, hidden, no collider.
+// A shared interior edge is ONE LaserWallID entity, owned by whichever of its two cells was visited first, so
+// classification must check BOTH cells: both alive -> Interior (random toggling); one alive -> SoleBorder (forced solid,
+// protects the survivor from the void); none alive (or a map-edge wall whose cell died) -> Dead (off, hidden, no collider).
 enum class WallEdgeState { Interior, SoleBorder, Dead };
 
 inline WallEdgeState ClassifyWallEdge(int cellId, CellCardinalDirection dir,
@@ -80,12 +72,9 @@ struct CenterSpoke : public IComponent {
 	// Marker component for walls that go from cell center to edge midpoint
 };
 
-// Singleton (one entity, both worlds): counts down the pre-match freeze —
-// see MatchStartSystem in LogicSystems.hpp. Synced through
-// AsteroidShooterGameState::startCountdownTicks (piggybacked on
-// GamePositionsDelta, which is already sent every tick) so the client's
-// local prediction blocks input in lockstep with the server instead of
-// drifting during the freeze.
+// Singleton (one entity, both worlds): pre-match freeze countdown (see MatchStartSystem). Synced via
+// AsteroidShooterGameState::startCountdownTicks (piggybacked on GamePositionsDelta, sent every tick) so client
+// prediction blocks input in lockstep with the server.
 class MatchStartTimer : public IComponent {
 public:
 	int ticksRemaining;
@@ -116,10 +105,8 @@ public:
 	LaserWallID(int c, CellCardinalDirection d) : cellId(c), dir(d), enabled(true), timer(0.0f), warning(false) {}
 };
 
-// Render-only animation state of one laser wall/spoke mesh (never synced or
-// predicted). LaserWallRenderSystem eases it toward what the replicated
-// LaserWallID says, so walls power up/down and stutter in the warning window
-// instead of popping in and out — see laser_wall.frag.
+// Render-only animation state of a laser wall/spoke mesh (never synced/predicted). LaserWallRenderSystem eases it
+// toward the replicated LaserWallID so walls power up/down and stutter instead of popping — see laser_wall.frag.
 class LaserWallVisual : public IComponent {
 public:
 	float power = 0.0f;     // 0 = off, 1 = fully energised beam
@@ -159,10 +146,8 @@ public:
 	ThrusterOwner(int se, bool isSm, bool isLeftE) : shipEntity(se), isSmoke(isSm), isLeftEngine(isLeftE) {}
 };
 
-// Muzzle offset (nose-ward, along heading) used both for where the charge-up
-// orb sits (RenderSystems.hpp) and where the actual bullet is spawned
-// (InputServerSystem) — kept in sync so the bolt continues exactly from
-// where the orb visually was, instead of the ship's center.
+// Muzzle offset (along heading) shared by the charge-up orb (RenderSystems.hpp) and the bullet spawn
+// (InputServerSystem), so the bolt continues exactly from where the orb was, not from the ship's center.
 inline constexpr float SHIP_MUZZLE_OFFSET = 2.0f;
 
 class SpaceShip : public IComponent {
@@ -268,12 +253,8 @@ class FluidSurface : public IComponent {
 public:
 };
 
-// Tag: marks the game's own status label (health/"REMAINING"/"YOU DIED"/
-// winner text) so CreateQuery<UIElement, UIText>() in RenderSystems.hpp
-// only ever matches that one entity. Without it, those queries also pick up
-// any other UIText in the same EntityManager — e.g. the DebugOverlay FPS/
-// latency label that IECSGameRenderer::Init() adds to every scene — and
-// reposition/overwrite it along with the real HUD text.
+// Tag for the game's status label (health/"REMAINING"/"YOU DIED"/winner) so CreateQuery<UIElement, UIText>() in
+// RenderSystems.hpp only matches it, and not other UIText such as the DebugOverlay label added by IECSGameRenderer::Init().
 class GameStatusText : public IComponent {
 public:
 };

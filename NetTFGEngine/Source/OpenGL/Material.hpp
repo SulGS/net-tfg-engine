@@ -34,11 +34,8 @@ public:
     void setVec4(const std::string& name, const glm::vec4& value);
     void setMat4(const std::string& name, const glm::mat4& value);
 
-    // For uniforms the ENGINE offers to every material (texture samplers, camera
-    // position, shadow state...): a shader is free not to use them, and the GLSL
-    // compiler strips any uniform it doesn't use, so a missing one is not an error.
-    // The setters above warn (once per name and material) because there a missing
-    // uniform is almost certainly a typo; these skip it silently instead.
+    // For uniforms the ENGINE offers every material (samplers, camera, shadows...): shaders may not use them and the
+    // compiler strips unused ones, so missing is not an error. The setters above warn (likely a typo); these skip silently.
     bool hasUniform(const std::string& name);
     void setIntIfPresent(const std::string& name, int value);
     void setVec3IfPresent(const std::string& name, const glm::vec3& value);

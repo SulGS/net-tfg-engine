@@ -18,6 +18,7 @@
 #include "ecs/UI/UIText.hpp"
 #include "ecs/UI/UIElement.hpp"
 #include "NetTFG_Engine.hpp"
+#include "Matchmaking/MatchmakingClient.hpp"
 
 #include <openssl/evp.h>
 
@@ -26,21 +27,24 @@
 // Id used to register this scene in main().
 inline constexpr int MENU_SCENE_ID = 0;
 
-// Player's form; survives the ECS rebuild when entering/leaving settings.
+// Player's form; survives the ECS rebuild when entering/leaving settings or a match.
 struct MenuFormMemory {
-    std::string ip;
-    std::string port;
     std::string clientName;
 };
 
 inline MenuFormMemory g_menuForm;
+
+// Lives outside the ECS so a search isn't tied to one menu world. Its server
+// address is set in main() from --matchmaker or matchmaking.cfg.
+inline MatchmakingClient g_matchmaker;
 
 struct StartScreenGameState {
     bool spacePressed;
     int frameCount;
 };
 
-// Connect button state: pressed is an edge (consumed once), busy is level (lasts the whole attempt).
+// Search/cancel button state: pressed is an edge (consumed once), busy is level
+// (lasts while connecting to the game server, when the button can't be used).
 class ConnectButton : public IComponent {
 public:
     bool pressed = false;
@@ -48,7 +52,6 @@ public:
 
     void Press() {
         pressed = true;
-        busy = true;
     }
 
     // Devuelve true una sola vez por pulsacion.
@@ -87,19 +90,26 @@ public:
     int remainTicks = CurrentTargetFPS() / 4;
     int currentState = 0;
 
+    std::string baseText = "Conectando";
     std::string errorMessage = "";
 };
 
 // Single place to write connection status text, instead of repeating the query in every branch.
-inline void SetConnectStatus(EntityManager& em, bool connecting, const std::string& message) {
+// animated = message followed by cycling dots; otherwise message is shown as is.
+inline void SetConnectStatus(EntityManager& em, bool animated, const std::string& message) {
     auto query = em.CreateQuery<UIElement, UIText, TextAnimationData>();
     for (auto [entity, element, text, animData] : query) {
-        animData->active = connecting;
-        animData->errorMessage = message;
+        animData->active = animated;
+        if (animated) {
+            animData->baseText = message;
+        }
+        else {
+            animData->errorMessage = message;
+        }
     }
 }
 
-// Only writer of the Connect button's isInteractable: clickable only while no connection attempt is in progress.
+// Only writer of the Connect button's isInteractable: clickable except while connecting to the game server.
 class ConnectButtonSystem : public ISystem {
 public:
     void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
@@ -126,20 +136,9 @@ class TextAnimationSystem : public ISystem {
             if (animData->remainTicks <= 0) {
                 animData->currentState = (animData->currentState + 1) % 4;
                 animData->remainTicks = CurrentTargetFPS() / 4;
-                switch (animData->currentState) {
-                case 0:
-                    text->text = "Conectando.";
-                    break;
-                case 1:
-                    text->text = "Conectando..";
-                    break;
-                case 2:
-                    text->text = "Conectando...";
-                    break;
-                case 3:
-                    text->text = "Conectando";
-                    break;
-                }
+                // 1, 2, 3 and 0 dots.
+                const int dots = (animData->currentState + 1) % 4;
+                text->text = animData->baseText + std::string(dots, '.');
             }
         }
     }
@@ -295,40 +294,8 @@ public:
         camSettings->setUp(glm::vec3(0.0f, 1.0f, 0.0f));
 
         // Create text field (LOWER layer = rendered first, behind other elements)
-        Entity ipField = em.CreateEntity();
-        UIElement* element = em.AddComponent<UIElement>(ipField);
-        element->anchor = UIAnchor::TOP_LEFT;
-        element->position = glm::vec2(100.0f, 10.0f);
-        element->size = glm::vec2(300.0f, 40.0f);
-        element->isVisible = true;
-        element->layer = 1;
-
-        UITextField* ipInput = em.AddComponent<UITextField>(ipField);
-        ipInput->id = "ip_input";
-        ipInput->placeholderText = "Enter IP here...";
-        ipInput->fontSize = 16.0f;
-        ipInput->padding = 10.0f;
-        ipInput->maxLength = 100;
-        ipInput->text = g_menuForm.ip;
-
-        Entity portField = em.CreateEntity();
-        element = em.AddComponent<UIElement>(portField);
-        element->anchor = UIAnchor::TOP_LEFT;
-        element->position = glm::vec2(100.0f, 55.0f);
-        element->size = glm::vec2(300.0f, 40.0f);
-        element->isVisible = true;
-        element->layer = 1;
-
-        UITextField* portInput = em.AddComponent<UITextField>(portField);
-        portInput->id = "port_input";
-        portInput->placeholderText = "Enter port here...";
-        portInput->fontSize = 16.0f;
-        portInput->padding = 10.0f;
-        portInput->maxLength = 100;
-        portInput->text = g_menuForm.port;
-
         Entity nameField = em.CreateEntity();
-        element = em.AddComponent<UIElement>(nameField);
+        UIElement* element = em.AddComponent<UIElement>(nameField);
         element->anchor = UIAnchor::TOP_LEFT;
         element->position = glm::vec2(100.0f, 100.0f);
         element->size = glm::vec2(300.0f, 40.0f);
@@ -337,10 +304,10 @@ public:
 
         UITextField* nameInput = em.AddComponent<UITextField>(nameField);
         nameInput->id = "name_input";
-        nameInput->placeholderText = "Enter name here...";
+        nameInput->placeholderText = "Nickname...";
         nameInput->fontSize = 16.0f;
         nameInput->padding = 10.0f;
-        nameInput->maxLength = 100;
+        nameInput->maxLength = MatchmakingProtocol::MAX_NAME_LENGTH;
         nameInput->text = g_menuForm.clientName;
 
         Entity buttonElement = em.CreateEntity();
@@ -351,7 +318,7 @@ public:
         element->layer = 10;  // higher layer number renders on top
 
         UIButton* button = em.AddComponent<UIButton>(buttonElement);
-        button->text = "Connect";
+        button->text = "Buscar partida";
 
         // onClick only records the press; ConnectButtonSystem disables the button once busy == true.
         ConnectButton* connectBtn = em.AddComponent<ConnectButton>(buttonElement);
@@ -395,11 +362,11 @@ public:
 
         UIButton* settingsBtn = em.AddComponent<UIButton>(settingsButton);
         settingsBtn->text = "Ajustes";
-        settingsBtn->onClick = [ipInput, portInput, nameInput]() {
+        settingsBtn->onClick = [nameInput]() {
             // Guarda el formulario antes de que este mundo se destruya.
-            g_menuForm.ip = ipInput->text;
-            g_menuForm.port = portInput->text;
             g_menuForm.clientName = nameInput->text;
+            // Una partida encontrada mientras se esta en ajustes no tendria quien la recogiera.
+            g_matchmaker.Cancel();
             OpenSettingsFrom(MENU_SCENE_ID);
             };
 
@@ -433,41 +400,75 @@ public:
             auto& em2 = gameLogic->world.GetEntityManager();
             auto& em = gameRenderer->world.GetEntityManager();
 
-            // No longer need to check if the settings panel is open: this is the button's own data now.
+            // One snapshot per frame; the search itself runs on the matchmaker's own thread.
+            const MatchmakingStatus mm = g_matchmaker.GetStatus();
+
             auto connQuery = em2.CreateQuery<ConnectionData>();
 
             for (auto [connEntity, connData] : connQuery) {
 
-                auto query = em.CreateQuery<UIElement, UITextField>();
-
-                for (auto [entity, element, textField] : query) {
-                    if (textField->id == "ip_input") {
-                        connData->ip = textField->text;
-                    }
-                    else if (textField->id == "port_input") {
-                        connData->port = textField->text;
-                    }
-                    else if (textField->id == "name_input") {
-                        connData->clientName = textField->text;
+                // Frozen while searching/connecting: it's the id the game server expects.
+                if (!mm.IsSearching() && !connData->goingToConnect) {
+                    auto query = em.CreateQuery<UIElement, UITextField>();
+                    for (auto [entity, element, textField] : query) {
+                        if (textField->id == "name_input") {
+                            connData->clientName = textField->text;
+                        }
                     }
                 }
 
                 // Query keys off the button's state component, not just "any UIButton".
-                auto buttonQuery = em.CreateQuery<ConnectButton>();
+                auto buttonQuery = em.CreateQuery<UIButton, ConnectButton>();
 
-                for (auto [buttonEntity, connectBtn] : buttonQuery) {
+                for (auto [buttonEntity, button, connectBtn] : buttonQuery) {
 
                     if (connData->errorConnecting)
                     {
                         connData->errorConnecting = false;
                         connectBtn->Reset();
                         SetConnectStatus(em, false,
-                            "Error connecting to " + connData->ip + ":" + connData->port);
+                            "Error conectando a la partida " + connData->ip + ":" + connData->port);
                     }
                     else if (connectBtn->ConsumePress()) {
-                        connData->goingToConnect = true;
-                        SetConnectStatus(em, true, "");
+                        if (mm.IsSearching()) {
+                            g_matchmaker.Cancel();
+                            SetConnectStatus(em, false, "Búsqueda cancelada");
+                        }
+                        else if (!MatchmakingProtocol::IsValidPlayerName(connData->clientName)) {
+                            SetConnectStatus(em, false, "Nickname inválido: 1-"
+                                + std::to_string(MatchmakingProtocol::MAX_NAME_LENGTH)
+                                + " letras, números, - o _");
+                        }
+                        else {
+                            g_menuForm.clientName = connData->clientName;
+                            g_matchmaker.Start(connData->clientName);
+                            SetConnectStatus(em, true, "Buscando partida");
+                        }
                     }
+                    else if (mm.state == MatchmakingState::Ready && !connData->goingToConnect) {
+                        g_matchmaker.Reset();
+                        connData->ip = mm.ip;
+                        connData->port = std::to_string(mm.port);
+                        connData->clientName = mm.playerName;
+                        connData->goingToConnect = true;  // StartScreenInputSystem takes it from here
+                        connectBtn->busy = true;
+                        SetConnectStatus(em, true, mm.reconnecting
+                            ? "Volviendo a tu partida"
+                            : "Partida encontrada, conectando");
+                    }
+                    else if (mm.state == MatchmakingState::Failed) {
+                        g_matchmaker.Reset();
+                        SetConnectStatus(em, false, mm.error);
+                    }
+                    else if (mm.state == MatchmakingState::Waiting) {
+                        SetConnectStatus(em, true, "Buscando partida (" + std::to_string(mm.queued)
+                            + "/" + std::to_string(mm.needed) + ")");
+                    }
+                    else if (mm.state == MatchmakingState::Starting) {
+                        SetConnectStatus(em, true, "Preparando partida");
+                    }
+
+                    button->text = mm.IsSearching() ? "Cancelar" : "Buscar partida";
                 }
             }
 

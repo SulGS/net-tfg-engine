@@ -335,12 +335,9 @@ public:
     std::unique_ptr<Mesh> mesh;
     bool enabled;
 	bool castShadows = true;
-	// Light-only mesh (beams, glows, energy fields). Skipped by the GBuffer,
-	// shadow and opaque shading passes and instead summed on top of the shaded
-	// scene by RenderSystem::AdditivePass: blend (SRC_ALPHA, ONE), depth test
-	// but no depth write, so overlapping meshes just add up and draw order
-	// doesn't matter. Its shader is not lit and only gets uCameraPos plus the
-	// engine's uModel/uView/uProjection — no texture units are bound.
+	// Light-only mesh (beams, glows). Skipped by GBuffer/shadow/opaque passes and summed by RenderSystem::AdditivePass:
+	// (SRC_ALPHA, ONE), depth test without write, so order doesn't matter. Unlit shader: only uCameraPos and
+	// uModel/uView/uProjection, no texture units bound.
 	bool additive = false;
     MeshComponent() : mesh(nullptr), enabled(true), castShadows(true) {}
     MeshComponent(Mesh* m) : mesh(m), enabled(true), castShadows(true) {}

@@ -62,10 +62,8 @@ namespace SettingsUI
 {
     inline std::string FmtBool(bool v) { return v ? "Activado" : "Desactivado"; }
 
-    // Nombres de nivel genericos: los usa tanto el preset como los ajustes
-    // sueltos que se exponen como nivel (calidad de sombras, cantidad de
-    // luces), para que un jugador casual elija "Alto" en vez de un numero
-    // crudo que no significa nada para el.
+    // Nombres de nivel genericos: los usan el preset y los ajustes sueltos expuestos como nivel (sombras, luces),
+    // para que un jugador casual elija "Alto" en vez de un numero crudo.
     inline std::vector<std::string> TierNames()
     {
         return { "Muy bajo", "Bajo", "Medio", "Alto", "Ultra" };
@@ -455,12 +453,12 @@ private:
                     && AudioManager::SaveAudioSettings();
                 data->SetStatus(ok
                     ? "Ajustes guardados"
-                    : "No se pudo escribir la configuracion");
+                    : "No se pudo escribir la configuración");
             },
             SettingsWidget::Vis::Always, 0);
 
         MakeButton(em, glm::vec2(270.0f, FOOTER_Y), glm::vec2(250.0f, 36.0f),
-            baseLayer + 2, "Volver al menu",
+            baseLayer + 2, "Volver al menú",
             []()
             {
                 // Se guarda al salir: los cambios ya estaban aplicados
@@ -493,7 +491,7 @@ private:
 
         // Puro ritmo del bucle de render (ver renderLoop() en client_window.hpp):
         // se aplica en el siguiente tick, sin reinit.
-        AddIntChoice(em, data, baseLayer, TAB_CALIDAD, row++, "Limite de FPS",
+        AddIntChoice(em, data, baseLayer, TAB_CALIDAD, row++, "Límite de FPS",
             { 30, 60, 90, 120, 144, 165, 240 }, "",
             []() { return RenderSettings::instance().getTargetFPS(); },
             [](int v) { RenderSettings::instance().setTargetFPS(v); });
@@ -513,7 +511,7 @@ private:
             });
 
         // Activarla vuelve a atar el framerate al refresco del monitor,
-        // por encima del pacer propio del "Limite de FPS" (ver renderLoop());
+        // por encima del pacer propio del "Límite de FPS" (ver renderLoop());
         // se deja apagada por defecto para que ese limite mande siempre.
         AddToggle(em, baseLayer, TAB_CALIDAD, row++, "VSync",
             []() { return RenderSettings::instance().getVsyncEnabled(); },
@@ -525,10 +523,8 @@ private:
             });
     }
 
-    // SONIDO: cada slider lee/escribe directamente el volumen en bruto del
-    // canal (AudioManager::*ChannelVolume ya es el estado en vivo, no hay
-    // copia intermedia); "Volumen general" es el canal MASTER, que
-    // AudioChannelManager::GetVolume multiplica sobre el resto al reproducir.
+    // SONIDO: cada slider lee/escribe directamente el volumen del canal (AudioManager::*ChannelVolume es el estado en
+    // vivo); "Volumen general" es el canal MASTER, que AudioChannelManager::GetVolume multiplica sobre el resto.
     static void BuildSoundTab(EntityManager& em, SettingsPanelData* data, int baseLayer)
     {
         int row = 0;
@@ -542,7 +538,7 @@ private:
             };
 
         addChannelSlider("Volumen general", AudioChannel::MASTER);
-        addChannelSlider("Musica", AudioChannel::MUSIC);
+        addChannelSlider("Música", AudioChannel::MUSIC);
         addChannelSlider("Efectos", AudioChannel::SFX);
         addChannelSlider("Voz", AudioChannel::VOICE);
         addChannelSlider("Interfaz", AudioChannel::UI);
@@ -588,7 +584,7 @@ private:
     {
         int row = 0;
 
-        AddSlider(em, baseLayer, TAB_IMAGEN, row++, "Exposicion",
+        AddSlider(em, baseLayer, TAB_IMAGEN, row++, "Exposición",
             0.1f, 5.0f, 0.05f, 2, "",
             []() { return RenderSettings::instance().getExposure(); },
             [](float v) { RenderSettings::instance().setExposure(v); });
@@ -663,7 +659,7 @@ private:
                 data->pendingRenderReInit = true;
             });
 
-        AddIntChoice(em, data, baseLayer, TAB_AVANZADO, row++, "Filtrado anisotropico",
+        AddIntChoice(em, data, baseLayer, TAB_AVANZADO, row++, "Filtrado anisotrópico",
             { 1, 2, 4, 8, 16 }, "x",
             []() { return static_cast<int>(RenderSettings::instance().getAnisotropy()); },
             [data](int v)
@@ -798,10 +794,8 @@ private:
             });
     }
 
-    // Como AddIntChoice, pero con nombres de nivel (SettingsUI::TierNames())
-    // en vez del numero crudo: para ajustes que un jugador casual debe poder
-    // tocar sin saber que significa "2048" o "256". options debe tener el
-    // mismo tamano que TierNames().
+    // Como AddIntChoice, pero con nombres de nivel (SettingsUI::TierNames()) en vez del numero crudo, para ajustes
+    // que un jugador casual no entenderia ("2048", "256"). options debe tener el mismo tamano que TierNames().
     static void AddTierChoice(EntityManager& em, SettingsPanelData* data,
         int baseLayer, int tab, int rowIndex,
         const std::string& label,

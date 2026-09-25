@@ -1,5 +1,6 @@
 #include "FontManager.hpp"
 #include "Utils/Debug/Debug.hpp"
+#include "Utils/Utf8.hpp"
 #include <iostream>
 
 FontManager::FontManager() {
@@ -36,9 +37,13 @@ bool FontManager::LoadFont(const std::string& fontName, const std::string& fontP
     // Disable byte-alignment restriction
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
-    // Only the first 128 ASCII characters are pre-loaded
-    std::map<char, Character> characters;
-    for (unsigned char c = 0; c < 128; c++) {
+    // ASCII plus Latin-1 (U+00A0-U+00FF: accented vowels, n with tilde, inverted marks), which
+    // covers Spanish text.
+    std::map<char32_t, Character> characters;
+    for (char32_t c = 0; c < 128; c++) {
+        GenerateCharacterTexture(face, c, characters);
+    }
+    for (char32_t c = 0xA0; c <= 0xFF; c++) {
         GenerateCharacterTexture(face, c, characters);
     }
 
@@ -50,9 +55,10 @@ bool FontManager::LoadFont(const std::string& fontName, const std::string& fontP
     return true;
 }
 
-void FontManager::GenerateCharacterTexture(FT_Face face, char c, std::map<char, Character>& characters) {
+void FontManager::GenerateCharacterTexture(FT_Face face, char32_t c, std::map<char32_t, Character>& characters) {
     if (FT_Load_Char(face, c, FT_LOAD_RENDER)) {
-        Debug::Error("FontManager") << "ERROR: Failed to load Glyph for character: " << c << "\n";
+        Debug::Error("FontManager") << "ERROR: Failed to load Glyph for character U+" << std::hex
+            << static_cast<uint32_t>(c) << std::dec << "\n";
         return;
     }
 
@@ -83,10 +89,10 @@ void FontManager::GenerateCharacterTexture(FT_Face face, char c, std::map<char, 
         static_cast<GLuint>(face->glyph->advance.x)
     };
     
-    characters.insert(std::pair<char, Character>(c, character));
+    characters.insert(std::pair<char32_t, Character>(c, character));
 }
 
-const Character* FontManager::GetCharacter(const std::string& fontName, char c) const {
+const Character* FontManager::GetCharacter(const std::string& fontName, char32_t c) const {
     auto fontIt = fonts.find(fontName);
     if (fontIt == fonts.end()) {
         return nullptr;
@@ -94,7 +100,10 @@ const Character* FontManager::GetCharacter(const std::string& fontName, char c) 
 
     auto charIt = fontIt->second.find(c);
     if (charIt == fontIt->second.end()) {
-        return nullptr;
+        charIt = fontIt->second.find(U'?');
+        if (charIt == fontIt->second.end()) {
+            return nullptr;
+        }
     }
 
     return &charIt->second;
@@ -113,10 +122,9 @@ glm::vec2 FontManager::MeasureText(const std::string& fontName, const std::strin
     float width = 0.0f;
     float maxHeight = 0.0f;
 
-    for (char c : text) {
-        auto charIt = fontIt->second.find(c);
-        if (charIt != fontIt->second.end()) {
-            const Character& ch = charIt->second;
+    for (char32_t c : Utf8::Decode(text)) {
+        if (const Character* found = GetCharacter(fontName, c)) {
+            const Character& ch = *found;
             width += (ch.advance >> 6) * scale;
             maxHeight = std::max(maxHeight, static_cast<float>(ch.size.y) * scale);
         }

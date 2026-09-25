@@ -63,26 +63,9 @@ public:
 
 };
 
-// Walls/tiles aren't predicted client-side (ArenaSystem only runs on the
-// server) — this delta is the client's only source of truth for them.
-//
-// Wire format written into DeltaStateBlob::data (NOT a flat struct memcpy —
-// deltaBlob.len is what actually gets put on the wire, see SendDeltasUpdate,
-// so a short payload really does cost fewer bytes):
-//   byte 0: mode — 0 = full snapshot, 1 = sparse change list
-//   mode 0: WallStateDelta (the old always-sent format), at data+1
-//   mode 1: byte 1 = change count N, then N x WallEdgeChange at data+2
-//
-// Now that every shared edge is a single entity (no more independently-
-// toggled duplicate — see ClassifyWallEdge in Components.hpp), the server's
-// state can only change a handful of edges per tick, so most ticks send a
-// tiny sparse list, and many send nothing at all for this delta type.
-// A full snapshot still goes out periodically (kFullSnapshotIntervalTicks)
-// as a keyframe, and immediately if a single tick changes more edges than
-// the sparse budget — both purely as defence in depth (e.g. against the
-// client bridging to a frame it never locally simulated and starting from a
-// blank state — see ClientPredictionNetcode::GetSnapshot), not because
-// correctness depends on it the way the old always-full format did.
+// Walls/tiles aren't predicted (ArenaSystem is server-only): this delta is the client's only source of truth. Wire format
+// (deltaBlob.len bytes): byte 0 = mode; mode 0 = full WallStateDelta at data+1; mode 1 = byte 1 count N, N x WallEdgeChange at
+// data+2. Most ticks send a tiny sparse list or nothing; full keyframes go out periodically or on overflow, as defence in depth.
 class WallStateDeltaHandler : public IDeltaHandler {
 	static constexpr int kFullSnapshotIntervalTicks = 90; // ~3s at 30 TPS
 	int ticksSinceFullSnapshot = kFullSnapshotIntervalTicks; // force one on the first Check()
@@ -214,10 +197,8 @@ public:
 
 		if (overflowed)
 		{
-			// More edges changed this tick than the sparse budget covers
-			// (e.g. a tile died and dragged its neighbours' border walls
-			// with it) — a full snapshot is simpler and safer than growing
-			// the sparse list further.
+			// More edges changed than the sparse budget covers (e.g. a dying tile dragging its border walls):
+			// a full snapshot is simpler and safer than growing the sparse list.
 			WriteFullSnapshot(deltaBlob, currGS);
 			ticksSinceFullSnapshot = 0;
 			outDeltas.push_back(deltaBlob);
@@ -260,10 +241,8 @@ public:
 		size_t needed = 2 + (size_t)count * sizeof(WallEdgeChange);
 		if ((size_t)delta.len < needed) return true;
 
-		// Sparse: only the listed edges are checked. Anything not listed
-		// wasn't touched by the server this tick, so the client's existing
-		// (already-synced) copy is trusted to still be correct — that's the
-		// whole point of a diff instead of a full resend every time.
+		// Sparse: only listed edges are checked. Unlisted ones weren't touched this tick, so the client's
+		// already-synced copy is trusted — the whole point of a diff.
 		const WallEdgeChange* changes = reinterpret_cast<const WallEdgeChange*>(delta.data + 2);
 		for (uint8_t i = 0; i < count; i++)
 		{

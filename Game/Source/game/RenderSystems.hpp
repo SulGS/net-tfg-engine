@@ -33,41 +33,26 @@ inline int GetWinnerId(EntityManager& entityManager)
     return (total >= 2 && aliveCount == 1) ? winnerId : -1;
 }
 
-// ---------------------------------------------------------------------------
-// Laser shot + charge-up visuals
-//
-// Both are volumetric glows raymarched inside a "canvas" mesh, drawn additively
-// (MeshComponent::additive). The canvas is a UNIT SPHERE (charge.glb) that the
-// entity's scale stretches into the volume the effect needs: a long ellipsoid for
-// the bolt, a sphere for the charge orb. See glow_volume.vert.
-// ---------------------------------------------------------------------------
+// ---- Laser shot + charge-up visuals ---- Volumetric glows raymarched inside a UNIT SPHERE canvas (charge.glb), drawn
+// additively; the entity scale stretches it into a long ellipsoid (bolt) or a sphere (orb). See glow_volume.vert.
 inline constexpr const char* GLOW_VOLUME_MESH = "charge.glb";
 
-// Bolt canvas: local +X is the direction of flight (the bullet is rotated about Z
-// to face its velocity). The head sits ~0.7 ahead of the bullet's position, i.e.
-// on its 2x2 collision box, and the tail trails ~7 units behind it — a bit more
-// than the 5 units a bullet travels per tick, so the streak always covers the
-// distance covered since the last tick.
+// Bolt canvas: local +X = flight direction. The head sits ~0.7 ahead of the bullet position (on its 2x2 box) and the
+// tail trails ~7 units, a bit more than a bullet's 5 units per tick, so the streak always covers the last tick's travel.
 inline const glm::vec3 LASER_BOLT_SCALE(7.0f, 1.7f, 1.7f);
 
-// The light a bolt casts on what it flies over (tiles, pillars, ships). It is one of
-// the very few point lights in the scene, so it does the visible work. A bolt flies
-// ~4 above the tiles: with these values the floor right under it gets ~3x its
-// albedo, ~10 units away ~0.4x, and nothing beyond the radius.
+// Light a bolt casts on what it flies over; one of the few point lights, so it does the visible work. At ~4 above
+// the tiles: floor right under it ~3x albedo, ~10 units away ~0.4x, nothing beyond the radius.
 inline constexpr float LASER_BOLT_LIGHT_INTENSITY = 150.0f;
 inline constexpr float LASER_BOLT_LIGHT_RADIUS = 40.0f;
 inline const glm::vec3 LASER_BOLT_LIGHT_COLOR(1.0f, 0.6f, 0.2f);
 
-// Charge orb: radius of the canvas sphere (the visible glow is smaller than this).
-// How far ahead of the ship's centre it forms (its nose) is SHIP_MUZZLE_OFFSET
-// (Components.hpp), shared with InputServerSystem so the bolt picks up exactly
-// where the orb visually left off.
+// Charge orb canvas radius (the visible glow is smaller). Its distance ahead of the ship is SHIP_MUZZLE_OFFSET
+// (Components.hpp), shared with InputServerSystem so the bolt starts where the orb was.
 inline constexpr float CHARGE_ORB_RADIUS = 4.2f;
 
-// Adds the laser bolt's mesh to a bullet entity. One Material per bolt: each
-// carries its own age/fade uniforms (BulletRenderSystem); the compiled program is
-// shared through ShaderLoader's cache. The colours are light being ADDED to the
-// scene, not a surface colour.
+// Adds the bolt mesh to a bullet. One Material per bolt (own age/fade uniforms, see BulletRenderSystem), program
+// shared via ShaderLoader's cache. Colours are light ADDED to the scene, not a surface colour.
 inline MeshComponent* AddLaserBoltMesh(EntityManager& em, Entity bullet, int bulletId)
 {
     auto mat = std::make_shared<Material>("glow_volume.vert", "laser_bolt.frag");
@@ -84,10 +69,8 @@ inline MeshComponent* AddLaserBoltMesh(EntityManager& em, Entity bullet, int bul
     return mc;
 }
 
-// Adds the bolt's point light to a bullet entity. It follows the entity's Transform;
-// BulletRenderSystem scales its intensity every frame with the bolt's age and fade,
-// so it starts at 0 here. It casts no shadows on purpose: the shadow cube-map slots
-// are few (8) and expensive, and PointLightComponent defaults to casting them.
+// Adds the bolt's point light (follows the Transform; BulletRenderSystem scales intensity by age/fade, so it starts at 0).
+// No shadows on purpose: shadow cube-map slots are few (8) and expensive, and PointLightComponent casts them by default.
 inline PointLightComponent* AddLaserBoltLight(EntityManager& em, Entity bullet)
 {
     PointLightComponent* light =
@@ -128,9 +111,9 @@ public:
         float deltaTime
     ) override
     {
-        auto buttonQuery = entityManager.CreateQuery<UIElement, UIButton>();
+        auto buttonQuery = entityManager.CreateQuery<UIElement, UIButton, ExitButtonChecker>();
 
-        for (auto [entity, element, button] : buttonQuery)
+        for (auto [entity, element, button, exitChecker] : buttonQuery)
         {
             element->isVisible = false;
         }
@@ -190,9 +173,9 @@ public:
                     text->text = "PLAYER " + std::to_string(winnerId + 1) + " WINS";
                 }
 
-				auto buttonQuery = entityManager.CreateQuery<UIElement, UIButton>();
+				auto buttonQuery = entityManager.CreateQuery<UIElement, UIButton, ExitButtonChecker>();
 
-				for (auto [entity, element, button] : buttonQuery)
+				for (auto [entity, element, button, exitChecker] : buttonQuery)
 				{
 					element->isVisible = true;
 				}
@@ -322,11 +305,8 @@ public:
     }
 };
 
-// Overrides the shared GameStatusText label with a centred countdown while
-// the pre-match freeze (MatchStartTimer, see LogicSystems.hpp) is active.
-// Must be added AFTER CameraFollowSystem so it wins the frame's last write;
-// once the countdown reaches 0 it does nothing, leaving that system's
-// REMAINING/health text uncontested from then on.
+// Overrides the GameStatusText label with a centred countdown during the pre-match freeze (MatchStartTimer).
+// Must run AFTER CameraFollowSystem to win the frame's last write; does nothing once the countdown reaches 0.
 class MatchStartCountdownRenderSystem : public ISystem
 {
 public:
@@ -439,9 +419,9 @@ public:
                     }
                 }
 
-                auto buttonQuery = entityManager.CreateQuery<UIElement, UIButton>();
+                auto buttonQuery = entityManager.CreateQuery<UIElement, UIButton, ExitButtonChecker>();
 
-                for (auto [entity, element, button] : buttonQuery)
+                for (auto [entity, element, button, exitChecker] : buttonQuery)
                 {
                     element->isVisible = true;
                 }
@@ -468,10 +448,8 @@ public:
     }
 };
 
-// The charge-up before a shot (laser_charge.frag): an orb of energy that forms at
-// the ship's muzzle for as long as the ship is charging, with a shell of sparks
-// that contracts into a white-hot core. Created when the charge starts, destroyed
-// when it ends (the bolt itself is BulletRenderSystem's job).
+// Charge-up before a shot (laser_charge.frag): an orb at the muzzle while charging, sparks contracting into a
+// white-hot core. Created when the charge starts, destroyed when it ends (the bolt is BulletRenderSystem's job).
 class ChargingBulletRenderSystem : public ISystem
 {
     const float CHARGING_BULLET_FRAMES = 5; // = CHARGE_SHOOT_FRAMES in InputSystem
@@ -566,11 +544,8 @@ public:
     }
 };
 
-// Per-frame state of the laser bolts: the uniforms of laser_bolt.frag (a render-side
-// clock, the bolt's age for the spawn flash and ramp-in, and how close it is to
-// expiring, so it dissipates instead of vanishing) and the intensity of its point
-// light, which follows the same age/fade. Purely visual — nothing here is synced or
-// predicted. The bolt's position and heading are set when its entity is created.
+// Per-frame laser bolt state: laser_bolt.frag uniforms (render clock, age for spawn flash/ramp-in, fade so it dissipates)
+// and its point light intensity (same age/fade). Purely visual, never synced/predicted; position/heading set at creation.
 class BulletRenderSystem : public ISystem
 {
     const float FADE_TICKS = 6.0f; // the bolt dissipates over the last N ticks of its lifetime
@@ -782,10 +757,8 @@ public:
     }
 };
 
-// Drives tile/wall/spoke/pillar visibility from the replicated state, and the
-// per-wall beam animation (laser_wall.frag): each wall eases toward "solid",
-// "warning" or "off" through a LaserWallVisual instead of popping in and out.
-// Purely a render-side effect — nothing here is synced or predicted.
+// Drives tile/wall/spoke/pillar visibility from replicated state, and each wall's beam animation (laser_wall.frag)
+// easing toward solid/warning/off via LaserWallVisual. Purely render-side, never synced or predicted.
 class LaserWallRenderSystem : public ISystem
 {
     // Quick to energise so the wall still reads as a snap; slower to die so the
@@ -903,10 +876,8 @@ public:
                 }
                 else
                 {
-                    // Shared edge: dedup means one entity per boundary, stored
-                    // under whichever of its two cells happened to be visited
-                    // first when the wall was built, so visibility has to be
-                    // judged symmetrically — see ClassifyWallEdge.
+                    // Shared edge: one entity per boundary, stored under whichever cell was visited first, so visibility
+                    // must be judged symmetrically — see ClassifyWallEdge.
                     WallEdgeState edgeState = ClassifyWallEdge(lwID->cellId, lwID->dir, activeTileIds);
 
                     if (edgeState == WallEdgeState::SoleBorder)
@@ -981,10 +952,8 @@ public:
 	}
 };
 
-// Drives the "uTime" uniform for every FluidSurface-tagged mesh (fluid.vert
-// wave displacement, water.frag/lava.frag scrolling detail). Purely a
-// render-side clock: no gameplay state, so it isn't synced or predicted —
-// each client just animates on its own local timeline.
+// Drives "uTime" for every FluidSurface mesh (fluid.vert waves, water/lava.frag detail). Render-side clock only:
+// not synced or predicted, each client animates on its own timeline.
 class FluidAnimationSystem : public ISystem
 {
 	float time = 0.0f;

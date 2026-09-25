@@ -5,6 +5,7 @@
 #include <string>
 #include <functional>
 #include "OpenGL/OpenGLIncludes.hpp"
+#include "Utils/Utf8.hpp"
 
 enum class TextFieldState {
     NORMAL,
@@ -169,8 +170,10 @@ public:
             DeleteSelection();
         }
         else if (cursorPosition > 0) {
-            text.erase(cursorPosition - 1, 1);
-            cursorPosition--;
+            // Whole codepoint, not just its last UTF-8 byte.
+            const size_t start = Utf8::PrevBoundary(text, cursorPosition);
+            text.erase(start, cursorPosition - start);
+            cursorPosition = start;
 
             if (onTextChanged) {
                 onTextChanged(text);
@@ -185,7 +188,7 @@ public:
             DeleteSelection();
         }
         else if (cursorPosition < text.length()) {
-            text.erase(cursorPosition, 1);
+            text.erase(cursorPosition, Utf8::NextBoundary(text, cursorPosition) - cursorPosition);
 
             if (onTextChanged) {
                 onTextChanged(text);
@@ -195,7 +198,7 @@ public:
 
     void MoveCursorLeft(bool selecting = false) {
         if (cursorPosition > 0) {
-            cursorPosition--;
+            cursorPosition = Utf8::PrevBoundary(text, cursorPosition);
             if (selecting) {
                 selectionEnd = cursorPosition;
             }
@@ -207,7 +210,7 @@ public:
 
     void MoveCursorRight(bool selecting = false) {
         if (cursorPosition < text.length()) {
-            cursorPosition++;
+            cursorPosition = Utf8::NextBoundary(text, cursorPosition);
             if (selecting) {
                 selectionEnd = cursorPosition;
             }

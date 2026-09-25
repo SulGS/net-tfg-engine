@@ -37,6 +37,18 @@ int main(int argc, char** argv) {
 	Debug::Initialize("AsteroidsClient", false);
 #endif
 
+	// Matchmaker address: --matchmaker host:port overrides matchmaking.cfg (created with defaults if missing).
+	MatchmakerAddress matchmaker = LoadMatchmakerAddress();
+	for (int i = 1; i < argc; ++i) {
+		if (std::string(argv[i]) == "--matchmaker" && i + 1 < argc) {
+			if (!ParseHostPort(argv[++i], matchmaker)) {
+				Debug::Error("Client") << "Invalid --matchmaker value, expected host:port\n";
+			}
+		}
+	}
+	g_matchmaker.SetServer(matchmaker);
+	Debug::Info("Client") << "Matchmaker at " << matchmaker.host << ":" << matchmaker.port << "\n";
+
 
 
 	engine.RegisterClient(1, new OnlineClient(std::move(gameLogic), std::move(gameRenderer), "online_level.bin"));

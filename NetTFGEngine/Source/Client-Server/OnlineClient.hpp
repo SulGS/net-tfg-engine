@@ -17,6 +17,7 @@
 #include <cstring>  // for std::memcpy
 #include <algorithm> // for std::min
 #include "Utils/Debug/Debug.hpp"
+#include "Utils/PlayerKey.hpp"
 
 #include "Client-Server/Client.hpp"
 #include "Client-Server/InputDelayCalculator.hpp"
@@ -45,6 +46,9 @@ public:
         }
 
         clientId_ = customClientId.empty() ? GenerateClientId() : customClientId;
+        // Nicknames (matchmaking) keep their key across restarts so a crashed game can reconnect;
+        // generated ids are new every session, so a throwaway key is enough.
+        playerKey_ = customClientId.empty() ? PlayerKey::Generate() : PlayerKey::ForName(clientId_);
 
         // Guard against a live previous session; routed through RunOnRenderThread — see OfflineClient::SetupClient.
         if (cWindow_) {
@@ -129,6 +133,7 @@ public:
             });
 
         prediction_->UpdateCurrentFrame(1);
+        delaySyncTick_ = 0;
 
         Debug::Info("OnlineClient") << "Online Client setup OK\n";
 
@@ -154,7 +159,9 @@ public:
 
         net_.SendHashPacket(serverConnection_, hashPacket, hashPacket.frame);
 
-        if (frameToSubmit % 30 == 0) {
+        // Counted in local ticks, not frameToSubmit: the first reconciliation jumps the frame to an arbitrary value, so a
+        // frame % 30 check could hold the first ping (and framesAheadOfServer at its placeholder 1) for up to a second.
+        if (delaySyncTick_++ % DELAY_SYNC_INTERVAL_TICKS == 0) {
             GameStateBlob s = prediction_->GetCurrentState();
             Debug::Info("OnlineClient") << "[CLIENT] Frame: " << frameToSubmit
                 << " | Latency: " << inputDelayCalc.GetLastLatencyMs()
@@ -234,12 +241,17 @@ private:
     std::unique_ptr<IGameLogic> gameLogic_;
     std::unique_ptr<IGameRenderer> gameRenderer_;
     std::string clientId_;
+    std::string playerKey_;
     int assignedPlayerId_;
     bool isReconnection_;
     HSteamNetConnection serverConnection_;
 
     ClientPredictionNetcode* prediction_ = nullptr;
     ClientWindow* cWindow_ = nullptr;
+
+    // Ticks since setup; 0 makes the first TickClient send the input delay ping immediately.
+    static constexpr int DELAY_SYNC_INTERVAL_TICKS = 30;
+    int delaySyncTick_ = 0;
 
     std::atomic<bool> networkRunning_;
     std::thread networkThread_;
@@ -261,6 +273,11 @@ private:
         const size_t copyLen = std::min(clientId_.size(), sizeof(hello.clientId) - 1);
         std::memcpy(hello.clientId, clientId_.data(), copyLen);
         hello.clientId[copyLen] = '\0';
+
+        const std::string& key = playerKey_;
+        static_assert(sizeof(hello.playerKey) == PlayerKey::LENGTH + 1, "hello must fit a full player key");
+        std::memcpy(hello.playerKey, key.data(), key.size());
+        hello.playerKey[key.size()] = '\0';
 
         ISteamNetworkingSockets* sockets = net_.GetSockets();
         if (!sockets || serverConnection_ == k_HSteamNetConnection_Invalid) {

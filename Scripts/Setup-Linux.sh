@@ -45,7 +45,7 @@ rm -rf "$PROJECT_ROOT/Binaries/Intermediates/linux-x86_64"
 
 # Compile only the real projects, not LinuxBuild (which would cause recursion)
 echo ">>> Compiling..."
-make -j$(nproc) config=release NetTFGEngine GameClient GameServer
+make -j$(nproc) config=release NetTFGEngine GameClient GameServer Matchmaking
 
 # Copy shared libraries (.so) to output folder so executables can find them
 echo ">>> Copying shared libraries..."

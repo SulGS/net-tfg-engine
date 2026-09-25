@@ -67,15 +67,9 @@ public:
 
         float frameTimeMs = 1000.0f / tickRate;
 
-        // Size the delay off the worst RTT sample in the window, not the
-        // average, plus a fixed safety margin. The server ticks on its own
-        // timer rather than waiting for input, so any packet slower than
-        // whatever the delay was sized for lands after its frame was
-        // already simulated and gets zero-filled — a held key silently
-        // "releases" for that one frame. Sizing off the mean guarantees
-        // this happens on every jitter spike above average; a shot's charge
-        // still plays out locally (that part is predicted, not networked),
-        // but the server never saw the SHOOT bit, so no bullet spawns.
+        // Size the delay off the worst RTT in the window (+ margin), not the average. The server ticks on its own timer, so a
+        // packet slower than the delay arrives after its frame and is zero-filled: a held key "releases" for a frame, and a
+        // locally predicted charge ends with no SHOOT bit on the server, so no bullet spawns.
         uint32_t worstRttMs = 0;
         for (uint32_t sample : m_rttSamples) {
             if (sample > worstRttMs) worstRttMs = sample;

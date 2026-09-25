@@ -1,9 +1,7 @@
 #pragma once
 
-// Small always-on-top FPS/network-latency label, built once per scene by
-// IECSGameRenderer::Init() so every screen (menu, settings, gameplay...)
-// gets it for free. Visibility follows RenderSettings::getDebugModeEnabled(),
-// toggled live from the settings menu — no scene needs to know it exists.
+// Always-on-top FPS/latency label built by IECSGameRenderer::Init() in every scene. Visibility follows
+// RenderSettings::getDebugModeEnabled(), toggled live from the settings menu.
 
 #include "ecs/ecs.hpp"
 #include "ecs/UI/UIElement.hpp"

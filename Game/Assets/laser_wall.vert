@@ -1,11 +1,8 @@
 #version 430 core
 
-// Pairs with laser_wall.frag. laser_beam.glb is a tube along local Z from -1 to 1
-// whose radius narrows towards both ends.
-// Its normals are no use for the beam profile, so instead of them this exports
-// what the fragment shader needs to rebuild the cross-section coordinate itself:
-// the beam axis and the radial direction, both in world space, plus the distance
-// along the beam in world units.
+// Pairs with laser_wall.frag. laser_beam.glb is a tube along local Z (-1..1) narrowing towards both ends. Its normals
+// are useless for the beam profile, so this exports what the fragment shader needs to rebuild it: beam axis and radial
+// direction (world space) plus the distance along the beam in world units.
 
 layout(location = 0) in vec3 aPos;
 

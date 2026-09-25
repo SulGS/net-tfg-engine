@@ -34,7 +34,8 @@ project "GameClient"
 
    -- Linux
    filter "system:linux"
-      includedirs { "%{wks.location}/vcpkg_installed/x64-linux/include" }
+      -- -isystem: third-party headers must not raise warnings in our build
+      externalincludedirs { "%{wks.location}/vcpkg_installed/x64-linux/include" }
       libdirs     { "%{wks.location}/vcpkg_installed/x64-linux/lib" }
       linkoptions { "-Wl,-rpath,'$$ORIGIN'" }
       links

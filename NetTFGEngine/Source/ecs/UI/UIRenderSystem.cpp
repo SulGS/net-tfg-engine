@@ -3,6 +3,7 @@
 #include <algorithm>
 #include "Utils/Debug/Debug.hpp"
 #include "Utils/AssetManager.hpp"
+#include "Utils/Utf8.hpp"
 
 const char* uiVertexShader = R"(
 #version 330 core
@@ -298,9 +299,9 @@ void UIRenderSystem::RenderUIText(const UIElement* element, const UIText* text) 
     // Calculate scale based on desired font size
     // Most fonts are loaded at a specific size (e.g., 48px)
     // We need to find the actual loaded size to scale correctly
-    const Character* refChar = fontManager->GetCharacter(fontName, 'H');
+    const Character* refChar = fontManager->GetCharacter(fontName, U'H');
     if (!refChar) {
-        refChar = fontManager->GetCharacter(fontName, 'A');
+        refChar = fontManager->GetCharacter(fontName, U'A');
     }
 
     float loadedFontSize = refChar ? static_cast<float>(refChar->size.y) : 48.0f;
@@ -328,7 +329,7 @@ void UIRenderSystem::RenderUIText(const UIElement* element, const UIText* text) 
 
     // Find the maximum bearing.y to establish a consistent baseline
     float maxBearingY = 0.0f;
-    for (char c : text->text) {
+    for (char32_t c : Utf8::Decode(text->text)) {
         const Character* ch = fontManager->GetCharacter(fontName, c);
         if (ch && ch->bearing.y > maxBearingY) {
             maxBearingY = static_cast<float>(ch->bearing.y);
@@ -341,7 +342,7 @@ void UIRenderSystem::RenderUIText(const UIElement* element, const UIText* text) 
     if (element->size.y > 0.0f) {
         float maxHeight = 0.0f;
         float minY = 0.0f;
-        for (char c : text->text) {
+        for (char32_t c : Utf8::Decode(text->text)) {
             const Character* ch = fontManager->GetCharacter(fontName, c);
             if (ch) {
                 float top = ch->bearing.y * scale;
@@ -357,7 +358,7 @@ void UIRenderSystem::RenderUIText(const UIElement* element, const UIText* text) 
     }
 
     // Render each character
-    for (char c : text->text) {
+    for (char32_t c : Utf8::Decode(text->text)) {
         const Character* ch = fontManager->GetCharacter(fontName, c);
         if (!ch) continue;
 
@@ -434,8 +435,8 @@ void UIRenderSystem::RenderUIButton(Entity entity, const UIElement* element, con
         return;
     }
 
-    const Character* refChar = fontManager->GetCharacter(fontName, 'H');
-    if (!refChar) refChar = fontManager->GetCharacter(fontName, 'A');
+    const Character* refChar = fontManager->GetCharacter(fontName, U'H');
+    if (!refChar) refChar = fontManager->GetCharacter(fontName, U'A');
     float loadedFontSize = refChar ? static_cast<float>(refChar->size.y) : 48.0f;
     float scale = button->fontSize / loadedFontSize;
 
@@ -452,7 +453,7 @@ void UIRenderSystem::RenderUIButton(Entity entity, const UIElement* element, con
     glBindVertexArray(textVAO);
 
     float maxBearingY = 0.0f;
-    for (char c : displayText) {
+    for (char32_t c : Utf8::Decode(displayText)) {
         const Character* ch = fontManager->GetCharacter(fontName, c);
         if (ch && ch->bearing.y > maxBearingY) {
             maxBearingY = static_cast<float>(ch->bearing.y);
@@ -460,7 +461,7 @@ void UIRenderSystem::RenderUIButton(Entity entity, const UIElement* element, con
     }
 
     float textWidth = 0.0f;
-    for (char c : displayText) {
+    for (char32_t c : Utf8::Decode(displayText)) {
         const Character* ch = fontManager->GetCharacter(fontName, c);
         if (ch) {
             textWidth += (ch->advance >> 6) * scale;
@@ -471,8 +472,7 @@ void UIRenderSystem::RenderUIButton(Entity entity, const UIElement* element, con
     float baselineY = textPos.y + (textAreaSize.y + maxBearingY * scale) * 0.5f;
     float cursorX = textPos.x + (textAreaSize.x - textWidth) * 0.5f;
 
-    for (size_t i = 0; i < displayText.length(); i++) {
-        char c = displayText[i];
+    for (char32_t c : Utf8::Decode(displayText)) {
         const Character* ch = fontManager->GetCharacter(fontName, c);
         if (!ch) continue;
 
@@ -586,8 +586,8 @@ void UIRenderSystem::RenderUITextField(const UIElement* element, const UITextFie
         return;
     }
 
-    const Character* refChar = fontManager->GetCharacter(fontName, 'H');
-    if (!refChar) refChar = fontManager->GetCharacter(fontName, 'A');
+    const Character* refChar = fontManager->GetCharacter(fontName, U'H');
+    if (!refChar) refChar = fontManager->GetCharacter(fontName, U'A');
     float loadedFontSize = refChar ? static_cast<float>(refChar->size.y) : 48.0f;
     float scale = textField->fontSize / loadedFontSize;
 
@@ -606,7 +606,7 @@ void UIRenderSystem::RenderUITextField(const UIElement* element, const UITextFie
     glBindVertexArray(textVAO);
 
     float maxBearingY = 0.0f;
-    for (char c : displayText) {
+    for (char32_t c : Utf8::Decode(displayText)) {
         const Character* ch = fontManager->GetCharacter(fontName, c);
         if (ch && ch->bearing.y > maxBearingY) {
             maxBearingY = static_cast<float>(ch->bearing.y);
@@ -622,16 +622,16 @@ void UIRenderSystem::RenderUITextField(const UIElement* element, const UITextFie
         size_t selEnd = textField->GetSelectionMax();
 
         float selStartX = textPos.x;
-        for (size_t i = 0; i < selStart && i < displayText.length(); i++) {
-            const Character* ch = fontManager->GetCharacter(fontName, displayText[i]);
+        for (size_t i = 0; i < selStart && i < displayText.length();) {
+            const Character* ch = fontManager->GetCharacter(fontName, Utf8::Next(displayText, i));
             if (ch) {
                 selStartX += (ch->advance >> 6) * scale;
             }
         }
 
         float selWidth = 0.0f;
-        for (size_t i = selStart; i < selEnd && i < displayText.length(); i++) {
-            const Character* ch = fontManager->GetCharacter(fontName, displayText[i]);
+        for (size_t i = selStart; i < selEnd && i < displayText.length();) {
+            const Character* ch = fontManager->GetCharacter(fontName, Utf8::Next(displayText, i));
             if (ch) {
                 selWidth += (ch->advance >> 6) * scale;
             }
@@ -653,9 +653,9 @@ void UIRenderSystem::RenderUITextField(const UIElement* element, const UITextFie
     }
 
     float cursorRenderX = textPos.x;
-    for (size_t i = 0; i < displayText.length(); i++) {
-        char c = displayText[i];
-        const Character* ch = fontManager->GetCharacter(fontName, c);
+    // Walked by bytes, like cursorPosition: i ends up just past the glyph being drawn.
+    for (size_t i = 0; i < displayText.length();) {
+        const Character* ch = fontManager->GetCharacter(fontName, Utf8::Next(displayText, i));
         if (!ch) continue;
 
         float xpos = cursorX + ch->bearing.x * scale;
@@ -680,7 +680,7 @@ void UIRenderSystem::RenderUITextField(const UIElement* element, const UITextFie
         glDrawArrays(GL_TRIANGLES, 0, 6);
 
         // Track cursor position for rendering cursor
-        if (!showPlaceholder && i == textField->cursorPosition - 1) {
+        if (!showPlaceholder && i == textField->cursorPosition) {
             cursorRenderX = cursorX + (ch->advance >> 6) * scale;
         }
 
@@ -760,8 +760,8 @@ void UIRenderSystem::RenderTriangle(const glm::vec2& center, float width, float 
 float UIRenderSystem::GetFontScale(const std::string& fontName, float fontSize) {
     if (!fontManager) return 1.0f;
 
-    const Character* refChar = fontManager->GetCharacter(fontName, 'H');
-    if (!refChar) refChar = fontManager->GetCharacter(fontName, 'A');
+    const Character* refChar = fontManager->GetCharacter(fontName, U'H');
+    if (!refChar) refChar = fontManager->GetCharacter(fontName, U'A');
 
     float loadedFontSize = refChar ? static_cast<float>(refChar->size.y) : 48.0f;
     if (loadedFontSize <= 0.0f) loadedFontSize = 48.0f;
@@ -775,7 +775,7 @@ float UIRenderSystem::MeasureTextWidth(const std::string& text, const std::strin
 
     float scale = GetFontScale(fontName, fontSize);
     float width = 0.0f;
-    for (char c : text) {
+    for (char32_t c : Utf8::Decode(text)) {
         const Character* ch = fontManager->GetCharacter(fontName, c);
         if (ch) width += (ch->advance >> 6) * scale;
     }
@@ -795,13 +795,14 @@ std::string UIRenderSystem::TruncateTextToWidth(const std::string& text, const s
 
     std::string result;
     float width = 0.0f;
-    for (char c : text) {
-        const Character* ch = fontManager->GetCharacter(fontName, c);
+    for (size_t i = 0; i < text.size();) {
+        const size_t start = i;
+        const Character* ch = fontManager->GetCharacter(fontName, Utf8::Next(text, i));
         if (!ch) continue;
         float advance = (ch->advance >> 6) * scale;
         if (width + advance > budget) break;
         width += advance;
-        result += c;
+        result.append(text, start, i - start);
     }
     return result + ellipsis;
 }
@@ -825,7 +826,7 @@ void UIRenderSystem::RenderTextInRect(const std::string& text, const glm::vec2& 
 
     // Baseline: use the tallest glyph so every string sits consistently
     float maxBearingY = 0.0f;
-    for (char c : text) {
+    for (char32_t c : Utf8::Decode(text)) {
         const Character* ch = fontManager->GetCharacter(fontName, c);
         if (ch && ch->bearing.y > maxBearingY) {
             maxBearingY = static_cast<float>(ch->bearing.y);
@@ -843,7 +844,7 @@ void UIRenderSystem::RenderTextInRect(const std::string& text, const glm::vec2& 
 
     float baselineY = rectPos.y + (rectSize.y + maxBearingY * scale) * 0.5f;
 
-    for (char c : text) {
+    for (char32_t c : Utf8::Decode(text)) {
         const Character* ch = fontManager->GetCharacter(fontName, c);
         if (!ch) continue;
 

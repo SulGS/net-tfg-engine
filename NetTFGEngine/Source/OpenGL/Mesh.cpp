@@ -85,11 +85,8 @@ void Mesh::draw() const
 {
     if (!buffer || !material) return;
 
-    // Which of the PBR texture slots this material's shader actually uses. The GLSL
-    // compiler strips every sampler a shader doesn't read, so e.g. a procedural
-    // surface (lava, water) has none of them: for those, binding a texture and
-    // setting the uniform would be wasted work — and, without this check, a
-    // "uniform not found" warning per slot per frame.
+    // Which PBR texture slots this shader actually uses. Unread samplers are stripped by the compiler (e.g. lava/water
+    // have none), so binding them would be wasted work and, without this check, a "uniform not found" warning per frame.
     const bool useAlbedo    = material->hasUniform("uAlbedoTex");
     const bool useNormal    = material->hasUniform("uNormalTex");
     const bool useMR        = material->hasUniform("uMRTex");

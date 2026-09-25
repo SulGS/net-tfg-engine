@@ -52,10 +52,8 @@ public:
     int  texBaseMip()     const { return m_baseMip; }
     bool texCompression() const { return m_useCompression; }
 
-    // RUNTIME — RENDER LOOP: caps how fast ClientWindow's render thread spins
-    // (see renderLoop() in netcode/client_window.hpp). Deliberately not part
-    // of applyPreset(): a quality tier shouldn't dictate frame rate, and
-    // resetToPreset() must not silently change it.
+    // RUNTIME — RENDER LOOP: caps ClientWindow's render thread rate (see renderLoop()). Not part of applyPreset():
+    // a quality tier shouldn't dictate frame rate, and resetToPreset() must not change it.
     void setTargetFPS(int v) { m_targetFPS = std::clamp(v, 1, 360); }
     int  getTargetFPS() const { return m_targetFPS; }
 

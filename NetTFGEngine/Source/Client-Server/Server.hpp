@@ -6,12 +6,16 @@
 #include "netcode/server_netcode.hpp"
 #include "netcode/valve_sockets_session.hpp"
 #include "Utils/Debug/Debug.hpp"
+#include "Utils/PlayerKey.hpp"
 #include <set>
 #include <map>
 #include <vector>
 #include <memory>
 #include <chrono>
 #include <iomanip>
+#include <algorithm>
+#include <functional>
+#include <optional>
 
 #include <string>
 #include <sstream>
@@ -42,6 +46,18 @@ struct ServerConfig {
     bool requireClientId;
     int maxFrames;
     std::chrono::seconds reconnectionTimeout;
+    // Only these client ids may join (empty = anyone). Set by the matchmaker to the matched players.
+    std::vector<std::string> allowedClientIds;
+    // Every hello (reconnections included) must carry the PlayerKey registered for its
+    // client id in playerKeys. Turn off only for direct connections during development.
+    bool checkPlayerKeys;
+    std::map<std::string, std::string> playerKeys;  // client id -> PlayerKey
+    // Give up if minPlayers haven't joined within this time (0 = wait forever).
+    std::chrono::seconds joinTimeout;
+    // Stop once no player has been connected for this long during the game (0 = never).
+    std::chrono::seconds emptyTimeout;
+    // Called once the listen socket is open, before waiting for players.
+    std::function<void()> onListening;
 
     ServerConfig(uint16_t p = 7777)
         : port(p)
@@ -53,6 +69,9 @@ struct ServerConfig {
         , requireClientId(false)
         , maxFrames(0)
         , reconnectionTimeout(30)
+        , checkPlayerKeys(true)
+        , joinTimeout(0)
+        , emptyTimeout(0)
     {
     }
 };
@@ -79,6 +98,10 @@ public:
         }
 
         PrintServerConfig();
+
+        if (config_.onListening) {
+            config_.onListening();
+        }
 
         if (!WaitForClients()) {
             return 1;
@@ -270,13 +293,14 @@ private:
 
         const ClientHelloPacket* hello = (const ClientHelloPacket*)data;
         std::string clientId(hello->clientId, strnlen(hello->clientId, sizeof(hello->clientId)));
+        std::string playerKey(hello->playerKey, strnlen(hello->playerKey, sizeof(hello->playerKey)));
 
         Debug::Info("Server") << "Client attempting connection/reconnection during game: " << clientId << "\n";
 
         net_.AddConnectionToPollGroup(conn);
 
         // Reuse the normal handler for consistency
-        HandleNewClient(conn, clientId);
+        HandleNewClient(conn, clientId, playerKey);
     }
 
     void HandleReceiveEventInGame(HSteamNetConnection conn, const uint8_t* data, int len) {
@@ -400,11 +424,29 @@ private:
 
     
 
-    bool HandleNewClient(HSteamNetConnection conn, const std::string& clientId) {
+    bool HandleNewClient(HSteamNetConnection conn, const std::string& clientId, const std::string& playerKey) {
         if (config_.requireClientId && !IsValidClientId(clientId)) {
             Debug::Info("Server") << "Invalid client ID format: " << clientId << "\n";
             net_.GetSockets()->CloseConnection(conn, k_ESteamNetConnectionEnd_App_Generic, nullptr, false);
             return false;
+        }
+
+        if (!config_.allowedClientIds.empty() &&
+            std::find(config_.allowedClientIds.begin(), config_.allowedClientIds.end(), clientId) == config_.allowedClientIds.end()) {
+            Debug::Info("Server") << "Client ID not assigned to this match: " << clientId << "\n";
+            net_.GetSockets()->CloseConnection(conn, k_ESteamNetConnectionEnd_App_Generic, nullptr, false);
+            return false;
+        }
+
+        // Before the reconnection handling below, which would drop the current connection
+        // of this id: only the install matched with this nickname may take its place.
+        if (config_.checkPlayerKeys) {
+            auto keyIt = config_.playerKeys.find(clientId);
+            if (keyIt == config_.playerKeys.end() || !PlayerKey::Equals(keyIt->second, playerKey)) {
+                Debug::Info("Server") << "Rejected " << clientId << ": wrong or missing player key\n";
+                net_.GetSockets()->CloseConnection(conn, k_ESteamNetConnectionEnd_App_Generic, nullptr, false);
+                return false;
+            }
         }
 
         PeerInfo* existingPlayer = FindPlayerByClientId(clientId);
@@ -496,17 +538,19 @@ private:
 
         const ClientHelloPacket* hello = (const ClientHelloPacket*)data;
         std::string clientId(hello->clientId,strnlen(hello->clientId, sizeof(hello->clientId)));
+        std::string playerKey(hello->playerKey, strnlen(hello->playerKey, sizeof(hello->playerKey)));
 
         Debug::Info("Server") << "Received CLIENT_HELLO from " << clientId << "\n";
 
         // Add to poll group BEFORE handling (in case it's already connected via callback)
         net_.AddConnectionToPollGroup(conn);
 
-        HandleNewClient(conn, clientId);
+        HandleNewClient(conn, clientId, playerKey);
     }
 
     bool WaitForClients() {
         bool running = true;
+        const auto waitStart = std::chrono::steady_clock::now();
 
         while (peerInfo_.size() < config_.minPlayers && running) {
             net_.PumpCallbacks();  // CRITICAL: Pump callbacks to process connection state changes
@@ -523,6 +567,13 @@ private:
                 }, false);
 
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+            if (config_.joinTimeout.count() > 0 &&
+                std::chrono::steady_clock::now() - waitStart > config_.joinTimeout) {
+                Debug::Info("Server") << "Only " << peerInfo_.size() << "/" << config_.minPlayers
+                    << " players joined within " << config_.joinTimeout.count() << "s. Stopping server.\n";
+                running = false;
+            }
         }
 
         return running && peerInfo_.size() >= config_.minPlayers;
@@ -548,12 +599,14 @@ private:
 
             for (auto& [conn, info] : peerInfo_) {
                 SteamNetConnectionInfo_t connInfo;
-                if (sockets->GetConnectionInfo(conn, &connInfo)) {
-                    if (connInfo.m_eState == k_ESteamNetworkingConnectionState_ClosedByPeer ||
-                        connInfo.m_eState == k_ESteamNetworkingConnectionState_ProblemDetectedLocally ||
-                        connInfo.m_eState == k_ESteamNetworkingConnectionState_Dead) {
-                        toRemove.push_back(conn);
-                    }
+                // An unknown handle counts as gone too: GNSSession closes the handle itself as
+                // soon as the peer drops (ClosedByPeer/ProblemDetectedLocally), so by now
+                // GetConnectionInfo usually fails rather than reporting those states.
+                if (!sockets->GetConnectionInfo(conn, &connInfo) ||
+                    connInfo.m_eState == k_ESteamNetworkingConnectionState_ClosedByPeer ||
+                    connInfo.m_eState == k_ESteamNetworkingConnectionState_ProblemDetectedLocally ||
+                    connInfo.m_eState == k_ESteamNetworkingConnectionState_Dead) {
+                    toRemove.push_back(conn);
                 }
             }
 
@@ -572,6 +625,7 @@ private:
     void RunServerLoop() {
         auto nextTick = std::chrono::high_resolution_clock::now();
         activePlayerCount_ = CountActivePlayers();
+        std::optional<std::chrono::steady_clock::time_point> emptySince;
 
         for (auto [conn, info] : peerInfo_) {
             server_.OnPlayerConnected(info.playerId);
@@ -658,12 +712,26 @@ private:
                     << meanMs << " ms" << "\n";
             }
 
-            nextTick += std::chrono::milliseconds(MS_PER_TICK);
+            nextTick += TICK_DURATION;
             std::this_thread::sleep_until(nextTick);
 
             if (config_.maxFrames > 0 && server_.GetCurrentFrame() > config_.maxFrames) {
                 Debug::Info("Server") << "Reached maximum frames. Stopping server.\n";
                 running_ = false;
+            }
+
+            if (config_.emptyTimeout.count() > 0) {
+                if (activePlayerCount_ > 0) {
+                    emptySince.reset();
+                }
+                else if (!emptySince) {
+                    emptySince = std::chrono::steady_clock::now();
+                }
+                else if (std::chrono::steady_clock::now() - *emptySince > config_.emptyTimeout) {
+                    Debug::Info("Server") << "No players connected for " << config_.emptyTimeout.count()
+                        << "s. Stopping server.\n";
+                    running_ = false;
+                }
             }
         }
 
@@ -676,6 +744,21 @@ private:
 
         if (config_.requireClientId) {
             Debug::Info("Server") << "Client ID validation is ENABLED\n";
+        }
+
+        if (config_.checkPlayerKeys) {
+            Debug::Info("Server") << "Player key check is ENABLED (" << config_.playerKeys.size() << " keys)\n";
+        }
+        else {
+            Debug::Warning("Server") << "Player key check is DISABLED: any client can join under any allowed id\n";
+        }
+
+        if (!config_.allowedClientIds.empty()) {
+            std::string ids;
+            for (const auto& id : config_.allowedClientIds) {
+                ids += " " + id;
+            }
+            Debug::Info("Server") << "Allowed client IDs:" << ids << "\n";
         }
 
         if (config_.allowReconnection) {

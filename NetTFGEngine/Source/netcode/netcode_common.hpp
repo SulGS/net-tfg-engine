@@ -31,6 +31,9 @@ using namespace std::chrono_literals;
 
 const int TICKS_PER_SECOND = 30;
 const int MS_PER_TICK = 1000 / TICKS_PER_SECOND;
+// Exact tick period for the server and client tick loops: MS_PER_TICK truncates (33 ms at 30 Hz), which ran the server at
+// ~30.3 Hz against the client's 30 Hz and made the client drift behind, corrected only by reconciliation jumps.
+const std::chrono::microseconds TICK_DURATION(1000000 / TICKS_PER_SECOND);
 const int MAX_ROLLBACK_FRAMES = 90;
 
 // Tama�os ajustables seg�n tus necesidades
@@ -216,6 +219,7 @@ constexpr uint8_t PACKET_SERVER_REJECT = 12;
 struct ClientHelloPacket {
     uint8_t type;
     char clientId[64];
+    char playerKey[33];  // PlayerKey (32 hex chars) + '\0'; checked by the server unless disabled
 };
 
 struct ServerAcceptPacket {
