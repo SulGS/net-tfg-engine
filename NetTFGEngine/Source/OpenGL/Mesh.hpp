@@ -28,7 +28,7 @@ public:
     void draw() const;
     void drawGeometryOnly() const;
 
-    // GBuffer pre-pass — binds only normal map (unit 1) and MR map (unit 2),
+    // GBuffer pre-pass — binds only albedo (unit 0), normal map (unit 1) and MR map (unit 2),
     // then draws geometry. The caller must have already set uModel/uView/uProjection
     // on the gbuffer shader via glUniform before calling this.
     void drawGBuffer(GLuint gbufferShader) const;

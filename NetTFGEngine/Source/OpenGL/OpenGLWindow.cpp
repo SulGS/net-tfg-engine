@@ -1,6 +1,7 @@
 #include "OpenGLWindow.hpp"
 #include <iostream>
 #include <stdexcept>
+#include <algorithm>
 
 OpenGLWindow::OpenGLWindow(int width, int height, const std::string& title)
     : window(nullptr)
@@ -48,9 +49,10 @@ OpenGLWindow::OpenGLWindow(int width, int height, const std::string& title)
 
     glfwGetWindowSize(window, &logicalWidth, &logicalHeight);
 
-    glfwGetWindowPos(window, &windowedX, &windowedY);
     windowedWidth = logicalWidth;
     windowedHeight = logicalHeight;
+    centerWindowedPosition();
+    glfwSetWindowPos(window, windowedX, windowedY);
 }
 
 OpenGLWindow::~OpenGLWindow() {
@@ -95,13 +97,10 @@ WindowMode OpenGLWindow::getWindowMode() const {
 void OpenGLWindow::setWindowMode(WindowMode mode) {
     if (mode == getWindowMode()) return;
 
-    // Remember the windowed geometry before leaving it, so Windowed can be
-    // restored exactly regardless of how many times Borderless/Fullscreen
-    // were toggled in between.
-    if (getWindowMode() == WindowMode::Windowed) {
+    // Remember where the window was before leaving Windowed, so it comes back to the same place regardless of how
+    // many times Borderless/Fullscreen were toggled in between. The size is not read back: it is the setting.
+    if (getWindowMode() == WindowMode::Windowed)
         glfwGetWindowPos(window, &windowedX, &windowedY);
-        glfwGetWindowSize(window, &windowedWidth, &windowedHeight);
-    }
 
     switch (mode) {
     case WindowMode::Windowed:
@@ -142,6 +141,67 @@ void OpenGLWindow::setWindowMode(WindowMode mode) {
     glfwSwapInterval(vsyncEnabled ? 1 : 0);
 }
 
+void OpenGLWindow::setWindowedSize(int width, int height) {
+    int monitorW, monitorH;
+    getMonitorResolution(monitorW, monitorH);
+    windowedWidth = std::clamp(width, 320, std::max(320, monitorW));
+    windowedHeight = std::clamp(height, 240, std::max(240, monitorH));
+
+    // A different size means the old position may no longer fit: re-centre either way.
+    centerWindowedPosition();
+
+    if (getWindowMode() == WindowMode::Windowed)
+        glfwSetWindowMonitor(window, nullptr, windowedX, windowedY, windowedWidth, windowedHeight, 0);
+}
+
+void OpenGLWindow::centerWindowedPosition() {
+    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+    int areaX = 0, areaY = 0, areaW = windowedWidth, areaH = windowedHeight;
+    if (monitor) glfwGetMonitorWorkarea(monitor, &areaX, &areaY, &areaW, &areaH);
+
+    // Never above/left of the work area, so the title bar stays reachable even when the window is as big as the
+    // monitor (it then spills past the bottom/right edge instead).
+    windowedX = areaX + std::max(0, (areaW - windowedWidth) / 2);
+    windowedY = areaY + std::max(0, (areaH - windowedHeight) / 2);
+}
+
+void OpenGLWindow::getMonitorResolution(int& width, int& height) {
+    width = 1920;
+    height = 1080;
+    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+    if (!monitor) return;
+    if (const GLFWvidmode* mode = glfwGetVideoMode(monitor)) {
+        width = mode->width;
+        height = mode->height;
+    }
+}
+
+std::vector<std::pair<int, int>> OpenGLWindow::getAvailableResolutions() {
+    int monitorW, monitorH;
+    getMonitorResolution(monitorW, monitorH);
+
+    std::vector<std::pair<int, int>> result;
+    int count = 0;
+    GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+    const GLFWvidmode* modes = monitor ? glfwGetVideoModes(monitor, &count) : nullptr;
+    for (int i = 0; i < count; ++i) {
+        const std::pair<int, int> size(modes[i].width, modes[i].height);
+        // Modes differ in refresh rate / bit depth too: keep each size once.
+        if (size.first < 1024 || size.second < 576) continue;
+        if (size.first > monitorW || size.second > monitorH) continue;
+        if (std::find(result.begin(), result.end(), size) == result.end())
+            result.push_back(size);
+    }
+
+    // The native size is what Borderless/Fullscreen show, so it must always be in the list.
+    const std::pair<int, int> native(monitorW, monitorH);
+    if (std::find(result.begin(), result.end(), native) == result.end())
+        result.push_back(native);
+
+    std::sort(result.begin(), result.end());
+    return result;
+}
+
 int OpenGLWindow::getWidth()  const { return currentWidth; }
 int OpenGLWindow::getHeight() const { return currentHeight; }
 int OpenGLWindow::getLogicalWidth()  const { return logicalWidth; }
@@ -166,6 +226,8 @@ void OpenGLWindow::initializeGLFW() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    // No dragging the borders nor maximising: the size only changes through the window resolution setting.
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 }
 
 void OpenGLWindow::initializeGLEW() {

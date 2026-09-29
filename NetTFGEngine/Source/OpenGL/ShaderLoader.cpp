@@ -27,7 +27,24 @@ bool ShaderLoader::fetchSource(const std::string& key, std::string& code, bool& 
 GLuint ShaderLoader::createProgram(const std::string& vertexAssetKey,
     const std::string& fragmentAssetKey)
 {
-    CacheKey key{ vertexAssetKey, fragmentAssetKey };
+    return acquireProgram(vertexAssetKey, fragmentAssetKey, "", "");
+}
+
+GLuint ShaderLoader::createVariantProgram(const std::string& vertexAssetKey,
+    const std::string& fragmentAssetKey,
+    const std::string& define,
+    const std::string& preamble)
+{
+    return acquireProgram(vertexAssetKey, fragmentAssetKey, define, preamble);
+}
+
+GLuint ShaderLoader::acquireProgram(const std::string& vertexAssetKey,
+    const std::string& fragmentAssetKey,
+    const std::string& define,
+    const std::string& preamble)
+{
+    const std::string displayFrag = variantKey(fragmentAssetKey, define);
+    CacheKey key{ vertexAssetKey, displayFrag };
     auto& c = cache();
 
     // Cache hit � just bump the ref count
@@ -35,7 +52,7 @@ GLuint ShaderLoader::createProgram(const std::string& vertexAssetKey,
     if (it != c.end()) {
         ++it->second.refCount;
         Debug::Info("ShaderLoader") << "Cache hit for shader: "
-            << vertexAssetKey << " + " << fragmentAssetKey << "\n";
+            << vertexAssetKey << " + " << displayFrag << "\n";
         return it->second.program;
     }
 
@@ -54,17 +71,41 @@ GLuint ShaderLoader::createProgram(const std::string& vertexAssetKey,
         return 0;
     }
 
+    // Sources are CPU-only text - release the asset references once compiled (or once we know there's nothing to do)
+    auto releaseSources = [&]() {
+        if (vertFromAsset) AssetManager::instance().unloadAsset<ShaderSource>(vertexAssetKey);
+        if (fragFromAsset) AssetManager::instance().unloadAsset<ShaderSource>(fragmentAssetKey);
+        };
+
+    if (!define.empty()) {
+        // Shader doesn't implement this variant: not an error, the caller falls back to its default path.
+        if (fragCode.find(define) == std::string::npos) {
+            releaseSources();
+            return 0;
+        }
+
+        // The preamble must follow #version (it has to be the first statement); without one, prepend.
+        size_t insertAt = 0;
+        const size_t versionPos = fragCode.find("#version");
+        if (versionPos != std::string::npos) {
+            const size_t eol = fragCode.find('\n', versionPos);
+            insertAt = (eol == std::string::npos) ? fragCode.size() : eol + 1;
+        }
+        fragCode.insert(insertAt, preamble + "\n");
+    }
+
     GLuint program = compileAndLink(vertCode, fragCode);
+    releaseSources();
 
-    // Sources are CPU-only text - release the asset references immediately
-    if (vertFromAsset) AssetManager::instance().unloadAsset<ShaderSource>(vertexAssetKey);
-    if (fragFromAsset) AssetManager::instance().unloadAsset<ShaderSource>(fragmentAssetKey);
-
-    if (!program) return 0;
+    if (!program) {
+        if (!define.empty())
+            Debug::Error("ShaderLoader") << "Failed to build variant " << displayFrag << "\n";
+        return 0;
+    }
 
     c[key] = { program, 1 };
     Debug::Info("ShaderLoader") << "Compiled and cached shader: "
-        << vertexAssetKey << " + " << fragmentAssetKey << "\n";
+        << vertexAssetKey << " + " << displayFrag << "\n";
     return program;
 }
 
@@ -72,7 +113,18 @@ GLuint ShaderLoader::createProgram(const std::string& vertexAssetKey,
 void ShaderLoader::destroyProgram(const std::string& vertexAssetKey,
     const std::string& fragmentAssetKey)
 {
-    CacheKey key{ vertexAssetKey, fragmentAssetKey };
+    releaseProgram({ vertexAssetKey, fragmentAssetKey });
+}
+
+void ShaderLoader::destroyVariantProgram(const std::string& vertexAssetKey,
+    const std::string& fragmentAssetKey,
+    const std::string& define)
+{
+    releaseProgram({ vertexAssetKey, variantKey(fragmentAssetKey, define) });
+}
+
+void ShaderLoader::releaseProgram(const CacheKey& key)
+{
     auto& c = cache();
 
     auto it = c.find(key);
@@ -81,9 +133,9 @@ void ShaderLoader::destroyProgram(const std::string& vertexAssetKey,
     --it->second.refCount;
     if (it->second.refCount == 0) {
         glDeleteProgram(it->second.program);
-        c.erase(it);
         Debug::Info("ShaderLoader") << "Destroyed cached shader: "
-            << vertexAssetKey << " + " << fragmentAssetKey << "\n";
+            << key.first << " + " << key.second << "\n";
+        c.erase(it);
     }
 }
 

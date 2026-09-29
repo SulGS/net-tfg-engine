@@ -161,7 +161,9 @@ struct ParticleEmitterComponent : public IComponent {
     int       aliveCount = 0;        // for stats / culling
     bool      burstFired = false;   // burstCount already spawned
     bool      done = false;    // true once a non-looping emitter has finished and all particles died; poll to know when to remove/recycle
-    glm::vec3 emitterLastPos = glm::vec3(0.0f); // previous world position, used by SimulationSpace::Local
+    glm::vec3 emitterLastPos = glm::vec3(0.0f); // world position at the previous simulation step, used by SimulationSpace::Local
+    glm::vec3 framePos = glm::vec3(0.0f);       // world position where the last frame's steps ended: the frame's steps are spread from here to the current one
+    bool      hasFramePos = false;              // false until the first update (no previous position to interpolate from)
 };
 
 #endif // PARTICLE_EMITTER_COMPONENT_HPP

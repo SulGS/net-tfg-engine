@@ -19,6 +19,18 @@ public:
     static void destroyProgram(const std::string& vertexAssetKey,
         const std::string& fragmentAssetKey);
 
+    // Same program with `preamble` injected after the fragment shader's #version line (the preamble #defines `define`).
+    // Cached separately from the plain program. Returns 0 WITHOUT logging an error when the fragment source never
+    // mentions `define`: that shader simply doesn't implement the variant. See GBufferVariant.hpp.
+    static GLuint createVariantProgram(const std::string& vertexAssetKey,
+        const std::string& fragmentAssetKey,
+        const std::string& define,
+        const std::string& preamble);
+
+    static void destroyVariantProgram(const std::string& vertexAssetKey,
+        const std::string& fragmentAssetKey,
+        const std::string& define);
+
 private:
     ShaderLoader() = default; // non-instantiable
 
@@ -51,6 +63,20 @@ private:
 
     // Source for `key`: a built-in if one is registered, otherwise the game asset of that name (fromAsset = true, so the caller must unloadAsset it afterwards).
     static bool fetchSource(const std::string& key, std::string& code, bool& fromAsset);
+
+    // Shared body of createProgram/createVariantProgram; an empty `define` means the plain program.
+    static GLuint acquireProgram(const std::string& vertexAssetKey,
+        const std::string& fragmentAssetKey,
+        const std::string& define,
+        const std::string& preamble);
+
+    static void releaseProgram(const CacheKey& key);
+
+    // Variants share the cache with plain programs under "<fragment>#<define>".
+    static std::string variantKey(const std::string& fragmentAssetKey, const std::string& define)
+    {
+        return define.empty() ? fragmentAssetKey : fragmentAssetKey + "#" + define;
+    }
 
     // Raw compilation — no caching, no asset manager involvement
     static GLuint compileAndLink(const std::string& vertexSource,

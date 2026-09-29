@@ -101,6 +101,35 @@ namespace SettingsUI
         return best;
     }
 
+    // Resolucion exacta si esta en la lista; si no (p. ej. una guardada en otro monitor), la de area mas parecida.
+    inline int IndexOfNearestResolution(const std::vector<std::pair<int, int>>& opts, int w, int h)
+    {
+        int best = 0;
+        long long bestDiff = LLONG_MAX;
+        for (size_t i = 0; i < opts.size(); ++i)
+        {
+            if (opts[i].first == w && opts[i].second == h) return static_cast<int>(i);
+            const long long d = std::llabs(static_cast<long long>(opts[i].first) * opts[i].second
+                - static_cast<long long>(w) * h);
+            if (d < bestDiff) { bestDiff = d; best = static_cast<int>(i); }
+        }
+        return best;
+    }
+
+    // Resolucion de SSAO/SSR: divisor de la de render (RenderSettings::set*ResolutionScale), de mejor a peor.
+    inline const std::vector<int>& ScreenSpaceScales()
+    {
+        static const std::vector<int> scales = { 1, 2, 4 };
+        return scales;
+    }
+    inline std::vector<std::string> ScreenSpaceScaleNames() { return { "Completa", "Media", "Un cuarto" }; }
+    inline int IndexOfScreenSpaceScale(int scale) { return IndexOfNearest(ScreenSpaceScales(), scale); }
+    inline int ScreenSpaceScaleAt(int idx)
+    {
+        const auto& scales = ScreenSpaceScales();
+        return (idx >= 0 && idx < static_cast<int>(scales.size())) ? scales[idx] : 2;
+    }
+
     inline std::vector<std::string> IntOptionNames(const std::vector<int>& opts,
         const std::string& suffix)
     {
@@ -161,6 +190,10 @@ public:
     std::function<std::string()> readText;    // UIText / UIButton
     std::function<float()>       readSlider;  // UISlider
     std::function<int()>         readChoice;  // UIDropdown (indice)
+
+    // Opcional: si devuelve false el widget se ve (atenuado) pero no se puede usar. Lo usa la resolucion de
+    // ventana, que en "Sin bordes" y "Pantalla completa" es fija (la nativa del monitor).
+    std::function<bool()>        enabled;
 };
 
 // Sistema del renderer de ajustes: visibilidad por pestana, sincroniza widgets desde
@@ -250,10 +283,11 @@ public:
         for (auto [entity, element, dropdown, widget] : dropdownQuery)
         {
             const bool vis = visible(widget);
-            dropdown->isInteractable = vis;
+            const bool usable = vis && (!widget->enabled || widget->enabled());
+            dropdown->isInteractable = usable;
 
-            // Al cambiar de pestana el popup no debe quedarse flotando.
-            if (!vis && dropdown->isOpen) dropdown->Close();
+            // Al cambiar de pestana (o al quedar bloqueado) el popup no debe quedarse flotando.
+            if (!usable && dropdown->isOpen) dropdown->Close();
 
             if (dropdown->isOpen)
             {
@@ -510,6 +544,89 @@ private:
                     window->setWindowMode(mode);
             });
 
+        // Solo elegible en modo ventana: "Sin bordes" y "Pantalla completa" usan siempre la resolucion nativa del
+        // monitor, y aqui se muestra esa (bloqueada). La ventana ya no se puede redimensionar a mano, este es el
+        // unico sitio donde cambia su tamano.
+        {
+            const std::vector<std::pair<int, int>> resolutions = OpenGLWindow::getAvailableResolutions();
+            std::vector<std::string> names;
+            for (const auto& r : resolutions)
+                names.push_back(std::to_string(r.first) + "x" + std::to_string(r.second));
+
+            const Entity windowRes = AddChoice(em, data, baseLayer, TAB_CALIDAD, row++, "Resolución de ventana",
+                names,
+                [resolutions]()
+                {
+                    const RenderSettings& rs = RenderSettings::instance();
+                    int w = rs.getWindowWidth(), h = rs.getWindowHeight();
+                    if (rs.getWindowMode() != WindowMode::Windowed)
+                        OpenGLWindow::getMonitorResolution(w, h);
+                    return SettingsUI::IndexOfNearestResolution(resolutions, w, h);
+                },
+                [resolutions](int idx)
+                {
+                    if (idx < 0 || idx >= static_cast<int>(resolutions.size())) return;
+                    const auto& r = resolutions[idx];
+                    RenderSettings::instance().setWindowResolution(r.first, r.second);
+                    if (OpenGLWindow* window = ClientWindow::GetWindow())
+                        window->setWindowedSize(r.first, r.second);
+                });
+
+            if (SettingsWidget* w = em.GetComponent<SettingsWidget>(windowRes))
+                w->enabled = []() { return RenderSettings::instance().getWindowMode() == WindowMode::Windowed; };
+        }
+
+        // Altura de los render targets internos; el ancho sigue la proporcion de la ventana y la pasada final
+        // escala la imagen al tamano de la ventana. Se aplica en el siguiente frame (RenderSystem::Resize), sin
+        // reinit completo.
+        {
+            const std::vector<int> heights = { 0, 540, 720, 900, 1080, 1440, 2160 };
+            AddChoice(em, data, baseLayer, TAB_CALIDAD, row++, "Resolución de render",
+                { "Nativa", "540p", "720p", "900p", "1080p", "1440p", "2160p" },
+                [heights]() { return SettingsUI::IndexOfNearest(heights, RenderSettings::instance().getRenderHeight()); },
+                [heights](int idx)
+                {
+                    if (idx >= 0 && idx < static_cast<int>(heights.size()))
+                        RenderSettings::instance().setRenderHeight(heights[idx]);
+                });
+        }
+
+        // Filtro con el que la pasada final lleva la resolucion de render a la de la ventana. Solo elegible fuera de
+        // la nativa (ahi no hay escalado). FSR solo sube resolucion: con una de render superior usa el bilineal.
+        // Se aplica en el siguiente frame, sin reinit. El orden del menu no es el del enum (cuyos valores son los
+        // guardados en render_settings.cfg), de ahi la tabla.
+        {
+            static const std::vector<UpscaleMode> modes = { UpscaleMode::Nearest, UpscaleMode::Bilinear, UpscaleMode::FSR1 };
+            const Entity upscaler = AddChoice(em, data, baseLayer, TAB_CALIDAD, row++, "Escalado",
+                { "Nearest", "Bilineal", "AMD FSR 1.0" },
+                []()
+                {
+                    const auto it = std::find(modes.begin(), modes.end(), RenderSettings::instance().getUpscaleMode());
+                    return it == modes.end() ? 1 : static_cast<int>(it - modes.begin());
+                },
+                [](int idx)
+                {
+                    if (idx >= 0 && idx < static_cast<int>(modes.size()))
+                        RenderSettings::instance().setUpscaleMode(modes[idx]);
+                });
+
+            if (SettingsWidget* w = em.GetComponent<SettingsWidget>(upscaler))
+                w->enabled = []()
+                {
+                    const OpenGLWindow* window = ClientWindow::GetWindow();
+                    if (!window) return false;
+                    int renderW = 0, renderH = 0;
+                    RenderSettings::instance().computeRenderSize(window->getWidth(), window->getHeight(), renderW, renderH);
+                    return renderW != window->getWidth() || renderH != window->getHeight();
+                };
+        }
+
+        // RCAS, el paso de nitidez de FSR tras escalar (sin efecto con "Nearest" o "Bilineal").
+        AddSlider(em, baseLayer, TAB_CALIDAD, row++, "FSR: nitidez",
+            0.0f, 1.0f, 0.05f, 2, "",
+            []() { return RenderSettings::instance().getFSRSharpness(); },
+            [](float v) { RenderSettings::instance().setFSRSharpness(v); });
+
         // Activarla vuelve a atar el framerate al refresco del monitor,
         // por encima del pacer propio del "Límite de FPS" (ver renderLoop());
         // se deja apagada por defecto para que ese limite mande siempre.
@@ -616,6 +733,44 @@ private:
         AddToggle(em, baseLayer, TAB_EFECTOS, row++, "FXAA",
             []() { return RenderSettings::instance().getFXAAEnabled(); },
             [](bool v) { RenderSettings::instance().setFXAAEnabled(v); });
+
+        AddToggle(em, baseLayer, TAB_EFECTOS, row++, "Oclusión ambiental (SSAO)",
+            []() { return RenderSettings::instance().getSSAOEnabled(); },
+            [](bool v) { RenderSettings::instance().setSSAOEnabled(v); });
+
+        AddSlider(em, baseLayer, TAB_EFECTOS, row++, "SSAO: intensidad",
+            0.5f, 4.0f, 0.05f, 2, "",
+            []() { return RenderSettings::instance().getSSAOIntensity(); },
+            [](float v) { RenderSettings::instance().setSSAOIntensity(v); });
+
+        // Divisor de la resolucion de render (1, 2 o 4). Se aplica en el siguiente frame, sin reinit.
+        AddChoice(em, data, baseLayer, TAB_EFECTOS, row++, "SSAO: resolución",
+            SettingsUI::ScreenSpaceScaleNames(),
+            []() { return SettingsUI::IndexOfScreenSpaceScale(RenderSettings::instance().getSSAOResolutionScale()); },
+            [](int idx) { RenderSettings::instance().setSSAOResolutionScale(SettingsUI::ScreenSpaceScaleAt(idx)); });
+
+        AddToggle(em, baseLayer, TAB_EFECTOS, row++, "Reflejos (SSR)",
+            []() { return RenderSettings::instance().getSSREnabled(); },
+            [](bool v) { RenderSettings::instance().setSSREnabled(v); });
+
+        AddSlider(em, baseLayer, TAB_EFECTOS, row++, "SSR: intensidad",
+            0.0f, 2.0f, 0.05f, 2, "",
+            []() { return RenderSettings::instance().getSSRIntensity(); },
+            [](float v) { RenderSettings::instance().setSSRIntensity(v); });
+
+        AddChoice(em, data, baseLayer, TAB_EFECTOS, row++, "SSR: resolución",
+            SettingsUI::ScreenSpaceScaleNames(),
+            []() { return SettingsUI::IndexOfScreenSpaceScale(RenderSettings::instance().getSSRResolutionScale()); },
+            [](int idx) { RenderSettings::instance().setSSRResolutionScale(SettingsUI::ScreenSpaceScaleAt(idx)); });
+
+        AddToggle(em, baseLayer, TAB_EFECTOS, row++, "Desenfoque de movimiento",
+            []() { return RenderSettings::instance().getMotionBlurEnabled(); },
+            [](bool v) { RenderSettings::instance().setMotionBlurEnabled(v); });
+
+        AddSlider(em, baseLayer, TAB_EFECTOS, row++, "Desenfoque: intensidad",
+            0.0f, 1.5f, 0.05f, 2, "",
+            []() { return RenderSettings::instance().getMotionBlurStrength(); },
+            [](float v) { RenderSettings::instance().setMotionBlurStrength(v); });
     }
 
     // AVANZADO (init-time: se aplican con un RenderSystem::Init())
@@ -737,8 +892,8 @@ private:
             nullptr, std::move(get), nullptr);
     }
 
-    // Lista de opciones con nombre. getIndex/setIndex trabajan con indices.
-    static void AddChoice(EntityManager& em, SettingsPanelData* data,
+    // Lista de opciones con nombre. getIndex/setIndex trabajan con indices. Devuelve la entidad del dropdown.
+    static Entity AddChoice(EntityManager& em, SettingsPanelData* data,
         int baseLayer, int tab, int rowIndex,
         const std::string& label,
         const std::vector<std::string>& names,
@@ -769,6 +924,7 @@ private:
 
         Tag(em, e, SettingsWidget::Vis::Tab, tab, baseLayer + 2,
             nullptr, nullptr, std::move(getIndex));
+        return e;
     }
 
     // Lista de enteros. Traduce valor <-> indice, tolerando valores que no

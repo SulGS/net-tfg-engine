@@ -202,27 +202,27 @@ private:
 
 	mutable std::mutex mtx;
 
+	// A new snapshot starts as a copy of the nearest earlier one. Not snapshots[frame - 1]: when the client has fallen
+	// behind the server (a stall longer than the engine's catch-up window drops ticks), a delta or event can name a frame
+	// past the last predicted one; operator[] then default-constructed frame - 1 as an all-zero state, and deltas were
+	// applied over it. Sparse wall deltas only carry changed edges, so tiles/walls vanished (and every ship read as dead)
+	// until the next wall keyframe. The nearest earlier snapshot always exists (lastConfirmedFrame's is never pruned).
 	Snapshot& GetSnapshot(int frame)
 	{
+		auto it = snapshots.find(frame);
+		if (it != snapshots.end())
+			return it->second;
 
-		if (snapshots.find(frame) == snapshots.end())
-		{
-			snapshots[frame] = Snapshot();
+		Snapshot snapshot;
+		snapshot.frame = frame;
 
-			snapshots[frame].frame = frame;
-			if (frame > 0)
-			{
-				snapshots[frame].state = snapshots[frame - 1].state;
-			}
-			else
-			{
-				snapshots[frame].state = currentState;
-			}
+		auto next = snapshots.lower_bound(frame);
+		if (next != snapshots.begin())
+			snapshot.state = std::prev(next)->second.state;
+		else
+			snapshot.state = currentState;
 
-
-		}
-
-		return snapshots[frame];
+		return snapshots.emplace(frame, std::move(snapshot)).first->second;
 	}
 
 	void SimulateFrame(int frame, bool debug)

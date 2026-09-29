@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <atomic>
+#include <unordered_map>
 
 #include "OpenGL/Particles/ParticleSystem.hpp"
 
@@ -44,7 +45,7 @@ struct GPUShadowData {
 using MeshQuery = decltype(
     std::declval<EntityManager>().CreateQuery<MeshComponent, Transform>());
 
-// Per-frame pipeline: GBufferPass → CollectLightsPass → ShadowPass → DirShadowPass → ShadingPass → AdditivePass → particles → BloomPass → TonemapPass → FXAAPass.
+// Per-frame pipeline: [GBufferPass → LinearDepthPass, only if SSAO or SSR is on] → SSAOPass → CollectLightsPass → ShadowPass → DirShadowPass → ShadingPass → AdditivePass → SSRPass → particles → MotionBlurPass → BloomPass → TonemapPass → FXAAPass [→ CopyPass (nearest) or FSRPass, per the upscale mode].
 class RenderSystem : public ISystem {
 public:
 
@@ -52,8 +53,11 @@ public:
 
 	bool needsReinit = false;  // Set true to reinitialise all GPU resources next frame
 
-    void Init(int screenW, int screenH);
-    void Resize(int screenW, int screenH);
+    // screenW/H: internal render resolution (every screen-sized target). outputW/H: the window's framebuffer, which
+    // only FXAAPass draws to, scaling the render resolution image up or down to it.
+    void Init(int screenW, int screenH, int outputW, int outputH);
+    // Only recreates the targets when the render resolution changed; a new output size alone is free.
+    void Resize(int screenW, int screenH, int outputW, int outputH);
     void ReInitShadows();
 
     void Update(EntityManager& entityManager,
@@ -70,12 +74,15 @@ public:
 
     int GetScreenWidth() const { return m_screenW; }
     int GetScreenHeight() const { return m_screenH; }
+    int GetOutputWidth() const { return m_outputW; }
+    int GetOutputHeight() const { return m_outputH; }
 
 private:
     int MAX_LIGHTS = 512;
     int MAX_SHADOW_LIGHTS = 8;
 
-    int m_screenW = 0, m_screenH = 0;
+    int m_screenW = 0, m_screenH = 0;   // render resolution
+    int m_outputW = 0, m_outputH = 0;   // window framebuffer
     int m_lightCount = 0;
 
     ParticleSystem* m_particleSystem = nullptr;
@@ -101,12 +108,65 @@ private:
 
     GPUDirLight m_cpuDirLight{};  // cached copy of the directional light for CPU-side use (e.g. particles)
 
-    // GBuffer framebuffer
+    // GBuffer framebuffer (layout shared with GBufferVariant.hpp). Only filled when SSAO or SSR needs it. Depth is a
+    // sampleable texture (not an RBO) because SSAO/SSR reconstruct view positions from it.
     GLuint m_gbufferFBO = 0;
-    GLuint m_gbufferNormalTex = 0;
-    GLuint m_gbufferRoughnessTex = 0;
-    GLuint m_gbufferMetalnessTex = 0;
-    GLuint m_gbufferDepthRBO = 0;
+    GLuint m_gbufferNormalTex = 0;     // RGBA16F: xyz = view-space normal, w = perceptual roughness
+    GLuint m_gbufferMaterialTex = 0;   // RGBA8:   r = metalness, g = 1 if the material has its own env reflection
+    GLuint m_gbufferAlbedoTex = 0;     // RGBA8:   rgb = base colour (SSR uses it as the metals' F0)
+    GLuint m_gbufferVelocityTex = 0;   // RG16F:   object-only screen motion this frame (UV units), camera motion excluded
+    GLuint m_gbufferDepthTex = 0;
+
+    // SSAO and SSR each run at the render resolution divided by their own setting (1, 2 or 4; see RenderSettings'
+    // ResolutionScale). Sizes are rounded up, so reduced pixel p covers full pixels s*p .. s*p+s-1 and reads pixel s*p.
+    // The scales the targets were built with; Update() rebuilds them when the settings change.
+    int m_ssaoScale = 2, m_ssaoW = 1, m_ssaoH = 1;
+    int m_ssrScale = 2,  m_ssrW = 1,  m_ssrH = 1;
+
+    // View-space Z (R32F) of full pixel s*p at the SSAO scale, background = -1e6. Built once per frame from the
+    // GBuffer depth so SSAO/SSR samples cost one fetch instead of a fetch plus an inverse-projection matrix multiply.
+    // Motion blur reads it too. SSR gets its own copy at its scale only when the two scales differ (see SSRLinearDepth).
+    GLuint m_linearDepthFBO = 0;
+    GLuint m_linearDepthTex = 0;
+    GLuint m_ssrLinearDepthFBO = 0;
+    GLuint m_ssrLinearDepthTex = 0;
+    GLuint SSRLinearDepthTex() const { return m_ssrLinearDepthTex ? m_ssrLinearDepthTex : m_linearDepthTex; }
+
+    // SSAO: raw AO (noisy, 4x4 rotation pattern) then a depth-aware 4x4 blur that the shading pass samples (bilinear
+    // upscale) on unit 7. When SSAO is off the blurred target is cleared to 1.0, so materials never branch on it.
+    GLuint m_ssaoFBO = 0;
+    GLuint m_ssaoTex = 0;
+    GLuint m_ssaoBlurFBO = 0;
+    GLuint m_ssaoBlurTex = 0;
+    std::vector<glm::vec3> m_ssaoKernel;
+
+    // SSR: reduced-res mipmapped copy of the HDR scene (rougher surfaces read blurrier mips), reduced-res trace result
+    // (premultiplied colour + replace alpha), then a depth-aware upscale composite into m_hdrFBO.
+    GLuint m_ssrSceneFBO = 0;
+    GLuint m_ssrSceneTex = 0;
+    int    m_ssrSceneMips = 1;
+    GLuint m_ssrTraceFBO = 0;
+    GLuint m_ssrTraceTex = 0;
+
+    // Motion blur (McGuire-style reconstruction): full-res velocity (camera + object, as a blur radius in pixels,
+    // clamped to one tile), per-tile max, 3x3 neighbour max of that, then a gather pass reading a copy of the HDR scene.
+    int    m_mbTile = 16;              // tile size in pixels = max blur radius
+    int    m_mbTilesW = 1, m_mbTilesH = 1;
+    GLuint m_mbVelocityFBO = 0;
+    GLuint m_mbVelocityTex = 0;
+    GLuint m_mbTileMaxFBO = 0;
+    GLuint m_mbTileMaxTex = 0;
+    GLuint m_mbNeighborMaxFBO = 0;
+    GLuint m_mbNeighborMaxTex = 0;
+    GLuint m_mbSourceFBO = 0;
+    GLuint m_mbSourceTex = 0;
+
+    // Previous frame's transforms for velocities: camera view-projection, and each mesh entity's model matrix
+    // (rebuilt every GBufferPass, so destroyed entities drop out).
+    glm::mat4 m_prevViewProjection{ 1.0f };
+    bool      m_hasPrevViewProjection = false;
+    std::unordered_map<Entity, glm::mat4> m_prevModels;
+    std::unordered_map<Entity, glm::mat4> m_currModels;
 
     // MSAA framebuffer
     GLuint m_msaaFBO = 0;
@@ -135,12 +195,36 @@ private:
     GLuint m_ldrFBO = 0;
     GLuint m_ldrTex = 0;
 
+    // Scaling targets for the Nearest and FSR 1 modes (Bilinear needs none). Created on first use and recreated
+    // whenever the render or output size changes, so they cost nothing in Bilinear. Pre-scale: FXAA's output at render
+    // resolution (anti-aliasing must run before the scale); EASU (FSR only): the upscaled image at output resolution,
+    // which RCAS sharpens into the window.
+    GLuint m_preScaleFBO = 0;
+    GLuint m_preScaleTex = 0;
+    int    m_preScaleW = 0, m_preScaleH = 0;
+    GLuint m_fsrEasuFBO = 0;
+    GLuint m_fsrEasuTex = 0;
+    int    m_fsrEasuW = 0, m_fsrEasuH = 0;
+
     // Shader programs
     GLuint m_gbufferShader = 0;
     GLuint m_tonemapShader = 0;
     GLuint m_bloomThreshShader = 0;
     GLuint m_bloomKawaseShader = 0;
     GLuint m_fxaaShader = 0;
+    GLuint m_ssaoShader = 0;
+    GLuint m_ssaoBlurShader = 0;
+    GLuint m_ssrShader = 0;
+    GLuint m_ssrCopyShader = 0;
+    GLuint m_ssrCompositeShader = 0;
+    GLuint m_linearDepthShader = 0;
+    GLuint m_mbVelocityShader = 0;
+    GLuint m_mbTileMaxShader = 0;
+    GLuint m_mbNeighborMaxShader = 0;
+    GLuint m_mbGatherShader = 0;
+    GLuint m_fsrEasuShader = 0;
+    GLuint m_fsrRcasShader = 0;
+    GLuint m_copyShader = 0;   // final copy to the window without FXAA / Nearest scaling (see CompileCopyShader)
 
     // Initialisation helpers
     void InitLightSSBO();
@@ -152,7 +236,12 @@ private:
     void InitHDRFBO();
     void InitBloom();
     void InitLDRFBO();
+    void InitScreenSpace(); // reduced-res linear depth + SSAO + SSR targets (at the settings' scales), motion blur
+    void DeleteScreenSpace();
     void InitScreenQuad();
+    // (Re)creates the pre-scale target, and the EASU one if withEasu, when missing or the render/output size changed.
+    void EnsureScaleTargets(bool withEasu);
+    void DeleteScaleTargets();
 
     void ResolveMSAA();
 
@@ -166,10 +255,22 @@ private:
     void CompileTonemapShader();
     void CompileBloomShaders();
     void CompileFXAAShader();
+    void CompileSSAOShaders(); // also the linear depth shader both effects share
+    void CompileSSRShader();
+    void CompileMotionBlurShaders();
+    void CompileFSRShaders();
+    void CompileCopyShader();
 
     // Per-frame passes
+    // Clears targetFBO and draws sourceTex (render resolution) over all of it with the copy shader.
+    void CopyPass(GLuint sourceTex, GLuint targetFBO, int targetW, int targetH, bool nearest);
     void GBufferPass(EntityManager::Query<MeshComponent, Transform>& meshQuery,
         const glm::mat4& view, const glm::mat4& projection);
+    // View-space Z of every scale-th pixel into fbo (w x h).
+    void LinearDepthPass(const glm::mat4& projection, GLuint fbo, int w, int h, int scale);
+    void SSAOPass(const glm::mat4& projection);
+    void SSRPass(const glm::mat4& projection);
+    void MotionBlurPass(const glm::mat4& viewProjection, float deltaTime);
     void CollectLightsPass(EntityManager& em);  // also handles directional light
     void ShadowPass(EntityManager& em, EntityManager::Query<MeshComponent, Transform>& meshQuery);
     void DirShadowPass(EntityManager::Query<MeshComponent, Transform>& meshQuery,
@@ -182,7 +283,14 @@ private:
         const glm::vec3& cameraPos);
     void BloomPass();
     void TonemapPass();
-    void FXAAPass();
+    // Final pass to the window in Bilinear mode. Draws to targetFBO at its size (render resolution for the Nearest/FSR
+    // pre-scale target, output otherwise).
+    void FXAAPass(GLuint targetFBO, int targetW, int targetH);
+    // EASU (render -> output resolution) then RCAS into the window. Replaces the bilinear scale in FXAAPass.
+    void FSRPass(GLuint inputTex);
+    // Upscale mode actually used this frame: the setting, except FSR1 falls back to Bilinear when it can't apply
+    // (native or higher render resolution, shaders failed) and nothing but Bilinear is needed at native resolution.
+    UpscaleMode ActiveUpscaleMode() const;
 };
 
 #endif // RENDER_SYSTEM_HPP

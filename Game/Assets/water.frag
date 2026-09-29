@@ -14,15 +14,19 @@ in vec3 vB;
 in vec3 vN;
 
 // -------------------------------------------------------
-// MRT output
+// MRT output (the GBuffer variant writes the engine's GBuffer instead, see GBufferVariant.hpp)
 // -------------------------------------------------------
+#ifndef GBUFFER_PASS
 layout(location = 0) out vec4 FragColor;
+#endif
 
 // ---- Texture units ----
 // Units 0-4 are the PBR maps (albedo, normal, metal/rough, occlusion, emissive); water has none, so it doesn't
 // declare them. Mesh::draw() only binds those a shader has.
 uniform samplerCubeArray uShadowCubeArray; // unit 5 — point light cubemap array
 uniform sampler2DShadow  uDirShadowMap;    // unit 6 — directional light shadow map (hardware PCF)
+uniform sampler2D        uSSAOTex;         // unit 7 — screen-space AO, reduced res (all 1.0 when SSAO is off)
+uniform int              uSSAOScale;       // its resolution divisor (1, 2 or 4)
 
 // -------------------------------------------------------
 // Per-frame uniforms
@@ -355,7 +359,14 @@ vec3 SampleRippleNormal()
 
 void main()
 {
-    vec3 N = SampleRippleNormal();
+    vec3 N      = SampleRippleNormal();
+    vec3 albedo = mix(uDeepColor, uShallowColor, 0.35);
+
+#ifdef GBUFFER_PASS
+    // Waves (fluid.vert) and ripples reach SSAO/SSR. hasEnvReflection = true: SSR replaces the sky fallback below
+    // where its rays hit instead of adding on top of it.
+    WriteGBuffer(N, uRoughness, 0.0, albedo, true);
+#else
     vec3 V = normalize(uCameraPos - vWorldPos);
 
     float NdotV    = clamp(dot(N, V), 0.0, 1.0);
@@ -364,14 +375,17 @@ void main()
     // Dielectric F0 (~0.02 for water); no metallic term.
     vec3  F0     = vec3(0.02);
     float alpha  = max(uRoughness * uRoughness, 0.001);
-    vec3  albedo = mix(uDeepColor, uShallowColor, 0.35);
 
-    vec3 lit = CalcPointLights(N, V, albedo, F0, alpha, 0.0, 1.0)
-             + CalcDirLight   (N, V, albedo, F0, alpha, 0.0, 1.0);
+    // Reduced-res SSAO: texel p holds full pixel s*p, bilinear upscale aligned to that.
+    float ao = texture(uSSAOTex, ((gl_FragCoord.xy - 0.5) / float(max(uSSAOScale, 1)) + 0.5)
+                                 / vec2(textureSize(uSSAOTex, 0))).r;
 
-    // Fake environment reflection: no SSR/cubemap capture in this pipeline
-    // yet, so approximate the reflected environment with the sky colour,
-    // blended in harder at grazing angles the way real Fresnel behaves.
+    vec3 lit = CalcPointLights(N, V, albedo, F0, alpha, 0.0, ao)
+             + CalcDirLight   (N, V, albedo, F0, alpha, 0.0, ao);
+
+    // Fallback environment reflection (no cubemap capture): the sky colour,
+    // blended in harder at grazing angles the way real Fresnel behaves. Where
+    // an SSR ray hits, the SSR pass swaps this share for the traced reflection.
     vec3 reflected = uSkyColor;
 
     // Sharp specular glint from the sun — makes the water read as wet/shiny
@@ -387,4 +401,5 @@ void main()
     }
 
     FragColor = vec4(color, 1.0);
+#endif
 }

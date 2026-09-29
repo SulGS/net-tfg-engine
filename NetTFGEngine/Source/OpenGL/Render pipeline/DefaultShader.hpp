@@ -82,6 +82,8 @@ uniform sampler2D      uOcclusionTex;      // unit 3 - R=AO
 uniform sampler2D      uEmissiveTex;       // unit 4 - emissive
 uniform samplerCubeArray uShadowCubeArray; // unit 5 - point light cubemap array
 uniform sampler2DShadow  uDirShadowMap;    // unit 6 - directional light shadow map (hardware PCF)
+uniform sampler2D      uSSAOTex;           // unit 7 - screen-space AO, reduced res (all 1.0 when SSAO is off)
+uniform int            uSSAOScale;         // its resolution divisor (1, 2 or 4)
 
 // -------------------------------------------------------
 // Per-frame uniforms
@@ -400,10 +402,16 @@ void main()
 {
     vec3  albedo              = texture(uAlbedoTex,    vUV).rgb;
     vec2  mr                  = texture(uMRTex,        vUV).gb;
-    float perceptualRoughness = clamp(mr.x, 0.045, 1.0);
+    // 0.089 = Filament's minimum for half-float targets: below it D_GGX alone passes ~20k and a lit mirror-like
+    // metal overflows the RGBA16F HDR buffer to inf (-> NaN/black after tonemap, spread by bloom and SSR mips).
+    // The GBuffer keeps the true roughness, so SSR reflections stay sharp.
+    float perceptualRoughness = clamp(mr.x, 0.089, 1.0);
     float metallic            = clamp(mr.y, 0.0,   1.0);
     float ao                  = texture(uOcclusionTex, vUV).r;
           ao                  = (ao < 0.001) ? 1.0 : ao;
+          // Reduced texel p holds full pixel s*p: bilinear upscale aligned to that.
+          ao                 *= texture(uSSAOTex, ((gl_FragCoord.xy - 0.5) / float(max(uSSAOScale, 1)) + 0.5)
+                                                  / vec2(textureSize(uSSAOTex, 0))).r;
 
     float alpha = perceptualRoughness * perceptualRoughness;
 
@@ -416,7 +424,9 @@ void main()
 
     color += texture(uEmissiveTex, vUV).rgb;
 
-    FragColor = vec4(color, 1.0);
+    // Last line of defence against inf in the RGBA16F target (max 65504): a light right next to a smooth metal can
+    // still get there. Normal values are far below this, so it changes nothing else.
+    FragColor = vec4(min(color, vec3(60000.0)), 1.0);
 }
 )GLSL";
 

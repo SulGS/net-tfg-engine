@@ -1,6 +1,6 @@
 ﻿#include "RenderSystem.hpp"
 
-void RenderSystem::Init(int screenW, int screenH)
+void RenderSystem::Init(int screenW, int screenH, int outputW, int outputH)
 {
     const auto& rs = RenderSettings::instance();
     MAX_LIGHTS = rs.getMaxLights();
@@ -17,6 +17,8 @@ void RenderSystem::Init(int screenW, int screenH)
 
     m_screenW = screenW;
     m_screenH = screenH;
+    m_outputW = outputW;
+    m_outputH = outputH;
 
     glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
 
@@ -25,6 +27,7 @@ void RenderSystem::Init(int screenW, int screenH)
     InitGBufferFBO();
     InitBloom();
     InitLDRFBO();
+    InitScreenSpace();
     InitLightSSBO();
     InitShadowCubeArray();
     InitDirLightUBO();
@@ -35,13 +38,25 @@ void RenderSystem::Init(int screenW, int screenH)
     CompileTonemapShader();
     CompileBloomShaders();
     CompileFXAAShader();
+    CompileSSAOShaders();
+    CompileSSRShader();
+    CompileMotionBlurShaders();
+    CompileFSRShaders();
+    CompileCopyShader();
     InitScreenQuad();
 }
 
-void RenderSystem::Resize(int screenW, int screenH)
+void RenderSystem::Resize(int screenW, int screenH, int outputW, int outputH)
 {
     // A 0-sized target (minimized window) makes every FBO incomplete.
-    if (screenW <= 0 || screenH <= 0) return;
+    if (screenW <= 0 || screenH <= 0 || outputW <= 0 || outputH <= 0) return;
+
+    m_outputW = outputW;
+    m_outputH = outputH;
+
+    // Same render resolution (e.g. only the window changed with a fixed render height... or nothing did):
+    // the targets are still valid, FXAAPass just scales to the new output (FSRPass recreates its own output target).
+    if (screenW == m_screenW && screenH == m_screenH) return;
 
     m_screenW = screenW;
     m_screenH = screenH;
@@ -58,10 +73,14 @@ void RenderSystem::Resize(int screenW, int screenH)
 
     glDeleteFramebuffers(1, &m_gbufferFBO);      m_gbufferFBO = 0;
     glDeleteTextures(1, &m_gbufferNormalTex);    m_gbufferNormalTex = 0;
-    glDeleteTextures(1, &m_gbufferRoughnessTex); m_gbufferRoughnessTex = 0;
-    glDeleteTextures(1, &m_gbufferMetalnessTex); m_gbufferMetalnessTex = 0;
-    glDeleteRenderbuffers(1, &m_gbufferDepthRBO); m_gbufferDepthRBO = 0;
+    glDeleteTextures(1, &m_gbufferMaterialTex);  m_gbufferMaterialTex = 0;
+    glDeleteTextures(1, &m_gbufferAlbedoTex);    m_gbufferAlbedoTex = 0;
+    glDeleteTextures(1, &m_gbufferVelocityTex);  m_gbufferVelocityTex = 0;
+    glDeleteTextures(1, &m_gbufferDepthTex);     m_gbufferDepthTex = 0;
     InitGBufferFBO();
+
+    DeleteScreenSpace();
+    InitScreenSpace();
 
     glDeleteFramebuffers(1, &m_bloomThreshFBO); m_bloomThreshFBO = 0;
     glDeleteFramebuffers(1, &m_bloomPingFBO);   m_bloomPingFBO = 0;
@@ -95,10 +114,10 @@ void RenderSystem::ReInitShadows()
 void RenderSystem::Update(EntityManager& entityManager,
     std::vector<EventEntry>& events,
     bool /*isServer*/,
-    float /*deltaTime*/)
+    float deltaTime)
 {
 	if (needsReinit) {
-        Init(m_screenW,m_screenH);
+        Init(m_screenW, m_screenH, m_outputW, m_outputH);
 		ReInitShadows();
         needsReinit = false;
 	}
@@ -124,6 +143,11 @@ void RenderSystem::Update(EntityManager& entityManager,
 
     if (!activeCamera || !cameraTransform) {
         Debug::Warning("RenderSystem") << "No camera found\n";
+        // Nothing else writes the window this frame: clear it so the UI isn't drawn over the previous one.
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glViewport(0, 0, m_outputW, m_outputH);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
         entityManager.releaseMutex();
         return;
     }
@@ -134,12 +158,29 @@ void RenderSystem::Update(EntityManager& entityManager,
 
     auto meshQuery = entityManager.CreateQuery<MeshComponent, Transform>();
 
-    GBufferPass(meshQuery, view, projection);
+    const auto& rs = RenderSettings::instance();
+
+    // SSAO/SSR resolution changed in the settings: rebuild their targets (cheap, only screen-space ones).
+    if (rs.getSSAOResolutionScale() != m_ssaoScale || rs.getSSRResolutionScale() != m_ssrScale) {
+        DeleteScreenSpace();
+        InitScreenSpace();
+    }
+
+    // The GBuffer only feeds SSAO/SSR/motion blur: with all of them off, skip the whole extra geometry pass.
+    const bool screenSpace = rs.getSSAOEnabled() || rs.getSSREnabled() || rs.getMotionBlurEnabled();
+    if (screenSpace) {
+        GBufferPass(meshQuery, view, projection);
+        // At the SSAO scale: SSAO and motion blur read it, and SSR too when its scale is the same.
+        LinearDepthPass(projection, m_linearDepthFBO, m_ssaoW, m_ssaoH, m_ssaoScale);
+        if (m_ssrLinearDepthFBO && rs.getSSREnabled())
+            LinearDepthPass(projection, m_ssrLinearDepthFBO, m_ssrW, m_ssrH, m_ssrScale);
+    }
+
+    // Needs only the GBuffer; ShadingPass samples its result (all 1.0 when SSAO is off).
+    SSAOPass(projection);
 
     // CollectLightsPass now handles both point lights and the directional light.
     CollectLightsPass(entityManager);
-
-    const auto& rs = RenderSettings::instance();
 
     if (rs.getPointShadowsEnabled())
         ShadowPass(entityManager, meshQuery);   // point light cubemap shadows
@@ -154,14 +195,45 @@ void RenderSystem::Update(EntityManager& entityManager,
     // Before the particles so their distortion pass (which copies the scene) sees the beams too.
     AdditivePass(meshQuery, view, projection, cameraPos);
 
+    // After the beams so they show up in reflections; before the particles, which aren't in the GBuffer and would
+    // otherwise be reflected as if they were the opaque surface behind them.
+    if (rs.getSSREnabled())
+        SSRPass(projection);
+
     if (m_particleSystem)
         m_particleSystem->Draw(view, projection);
 
-    if (RenderSettings::instance().getBloomEnabled())
+    // On the finished HDR scene (particles and beams included) and before bloom, so bright streaks bloom too.
+    const glm::mat4 viewProjection = projection * view;
+    if (rs.getMotionBlurEnabled())
+        MotionBlurPass(viewProjection, deltaTime);
+    m_prevViewProjection = viewProjection;
+    m_hasPrevViewProjection = true;
+
+    if (rs.getBloomEnabled())
         BloomPass();
 
     TonemapPass();
-    FXAAPass();
+
+    // Bilinear: FXAA straight to the window, scaling as it samples. Nearest/FSR: FXAA (if on) at render resolution into
+    // the pre-scale target first, so the scaler works on the already anti-aliased image.
+    const UpscaleMode upscale = ActiveUpscaleMode();
+    if (upscale == UpscaleMode::Bilinear) {
+        if (m_preScaleTex || m_fsrEasuTex) DeleteScaleTargets();   // just switched to Bilinear or native: free them
+        FXAAPass(0, m_outputW, m_outputH);
+    } else {
+        const bool fsr = (upscale == UpscaleMode::FSR1);
+        EnsureScaleTargets(fsr);
+
+        GLuint scaleTex = m_ldrTex;
+        if (rs.getFXAAEnabled()) {
+            FXAAPass(m_preScaleFBO, m_screenW, m_screenH);
+            scaleTex = m_preScaleTex;
+        }
+
+        if (fsr) FSRPass(scaleTex);
+        else     CopyPass(scaleTex, 0, m_outputW, m_outputH, true);
+    }
 
     entityManager.releaseMutex();
 }
@@ -181,10 +253,27 @@ RenderSystem::~RenderSystem()
     // GBuffer
     glDeleteFramebuffers(1, &m_gbufferFBO);
     glDeleteTextures(1, &m_gbufferNormalTex);
-    glDeleteTextures(1, &m_gbufferRoughnessTex);
-    glDeleteTextures(1, &m_gbufferMetalnessTex);
-    glDeleteRenderbuffers(1, &m_gbufferDepthRBO);
+    glDeleteTextures(1, &m_gbufferMaterialTex);
+    glDeleteTextures(1, &m_gbufferAlbedoTex);
+    glDeleteTextures(1, &m_gbufferVelocityTex);
+    glDeleteTextures(1, &m_gbufferDepthTex);
     glDeleteProgram(m_gbufferShader);
+    // SSAO / SSR
+    DeleteScreenSpace();
+    glDeleteProgram(m_linearDepthShader);
+    glDeleteProgram(m_ssaoShader);
+    glDeleteProgram(m_ssaoBlurShader);
+    glDeleteProgram(m_ssrShader);
+    glDeleteProgram(m_ssrCopyShader);
+    glDeleteProgram(m_ssrCompositeShader);
+    glDeleteProgram(m_mbVelocityShader);
+    glDeleteProgram(m_mbTileMaxShader);
+    glDeleteProgram(m_mbNeighborMaxShader);
+    glDeleteProgram(m_mbGatherShader);
+    // FSR
+    DeleteScaleTargets();
+    glDeleteProgram(m_fsrEasuShader);
+    glDeleteProgram(m_fsrRcasShader);
     // MSAA
     glDeleteFramebuffers(1, &m_msaaFBO);
     glDeleteTextures(1, &m_msaaColorTex);
@@ -198,6 +287,7 @@ RenderSystem::~RenderSystem()
     glDeleteProgram(m_bloomThreshShader);
     glDeleteProgram(m_bloomKawaseShader);
     glDeleteProgram(m_fxaaShader);
+    glDeleteProgram(m_copyShader);
     // Bloom
     glDeleteFramebuffers(1, &m_bloomThreshFBO);
     glDeleteFramebuffers(1, &m_bloomPingFBO);

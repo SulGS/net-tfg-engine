@@ -13,6 +13,9 @@
 #include <chrono>
 
 #if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX // see netcode_common.hpp
+#endif
 #include <windows.h>
 #include <timeapi.h>
 #pragma comment(lib, "winmm.lib")
@@ -130,15 +133,22 @@ public:
                 // renderLoop() were to exit early.
                 HighResTimerGuard highResTimer;
 
-                window = new OpenGLWindow(width, height, title);
+                // The saved window resolution wins over the size the game asked for; that one is only the
+                // fallback when there is no valid setting.
+                const RenderSettings& rs = RenderSettings::instance();
+                const int windowW = rs.getWindowWidth() > 0 ? rs.getWindowWidth() : width;
+                const int windowH = rs.getWindowHeight() > 0 ? rs.getWindowHeight() : height;
+
+                window = new OpenGLWindow(windowW, windowH, title);
+                window->setWindowedSize(windowW, windowH); // clamps to the monitor and centres
                 Input::Init(window->getWindow());
 
                 // Engine-level GL resources that don't belong to any scene: compile the default surface shader now, with the context just created, instead of on the first mesh.
                 Mesh::InitDefaultMaterial();
 
                 // Apply window mode and VSync saved from a previous session.
-                window->setWindowMode(RenderSettings::instance().getWindowMode());
-                window->setVSync(RenderSettings::instance().getVsyncEnabled());
+                window->setWindowMode(rs.getWindowMode());
+                window->setVSync(rs.getVsyncEnabled());
 
                 renderLoop();
 

@@ -9,13 +9,17 @@ in vec3 vT;
 in vec3 vB;
 in vec3 vN;
 
+#ifndef GBUFFER_PASS // the GBuffer variant writes the engine's GBuffer instead, see GBufferVariant.hpp
 layout(location = 0) out vec4 FragColor;
+#endif
 
 // Units 0-4 are the PBR texture maps (albedo, normal, metal/rough, occlusion,
 // emissive); lava has none, so it doesn't declare them. Mesh::draw() checks which
 // of them a shader has and only binds those.
 uniform samplerCubeArray uShadowCubeArray; // unit 5
 uniform sampler2DShadow  uDirShadowMap;    // unit 6
+uniform sampler2D        uSSAOTex;         // unit 7 — screen-space AO, reduced res (all 1.0 when SSAO is off)
+uniform int              uSSAOScale;       // its resolution divisor (1, 2 or 4)
 
 uniform vec3  uCameraPos;
 uniform int   uShadowCount;
@@ -361,14 +365,27 @@ void main()
     vec3 Nsurf = normalize(vN);
     vec3 N = normalize(mat3(T, B, Nsurf) * bump);
 
+#ifdef GBUFFER_PASS
+    // Roughness for SSR only: the cooled crust reads as glassy enough to reflect (below SSR's max 0.6), the cracks
+    // stay rough. Lighting below keeps its matte 0.7 — a smoother crust there turns the light highlights into
+    // whitish patches. No fallback reflection of its own, so SSR adds on top.
+    float ssrRoughness = mix(0.4, 0.85, clamp(ridge * 1.4, 0.0, 1.0));
+    WriteGBuffer(N, ssrRoughness, 0.0, albedo, false);
+#else
     vec3 V = normalize(uCameraPos - vWorldPos);
 
     // Matte, non-metallic rock; crack cores dominate via emissive, not specular.
     vec3  F0    = vec3(0.04);
     float alpha = 0.7 * 0.7;
 
-    vec3 lit = CalcPointLights(N, V, albedo, F0, alpha, 0.0, 1.0)
-             + CalcDirLight   (N, V, albedo, F0, alpha, 0.0, 1.0);
+    // AO darkens only the lit crust; the emissive cracks keep glowing in the crevices.
+    // Reduced-res SSAO: texel p holds full pixel s*p, bilinear upscale aligned to that.
+    float ao = texture(uSSAOTex, ((gl_FragCoord.xy - 0.5) / float(max(uSSAOScale, 1)) + 0.5)
+                                 / vec2(textureSize(uSSAOTex, 0))).r;
+
+    vec3 lit = CalcPointLights(N, V, albedo, F0, alpha, 0.0, ao)
+             + CalcDirLight   (N, V, albedo, F0, alpha, 0.0, ao);
 
     FragColor = vec4(lit + emissive, 1.0);
+#endif
 }

@@ -87,7 +87,7 @@ public:
 class TextAnimationData : public IComponent {
 public:
     bool active = false;
-    int remainTicks = CurrentTargetFPS() / 4;
+    float remainTime = 0.25f; // seconds until the next dot (time, not frames: same pace at any frame rate)
     int currentState = 0;
 
     std::string baseText = "Conectando";
@@ -132,10 +132,10 @@ class TextAnimationSystem : public ISystem {
                 continue;
             }
 
-            animData->remainTicks--;
-            if (animData->remainTicks <= 0) {
+            animData->remainTime -= deltaTime;
+            if (animData->remainTime <= 0.0f) {
                 animData->currentState = (animData->currentState + 1) % 4;
-                animData->remainTicks = CurrentTargetFPS() / 4;
+                animData->remainTime += 0.25f;
                 // 1, 2, 3 and 0 dots.
                 const int dots = (animData->currentState + 1) % 4;
                 text->text = animData->baseText + std::string(dots, '.');

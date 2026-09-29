@@ -1,4 +1,5 @@
 #include "Material.hpp"
+#include "Render pipeline/GBufferVariant.hpp"
 #include "Utils/Debug/Debug.hpp"
 
 Material::Material(const std::string& vertexShaderAsset,
@@ -17,10 +18,47 @@ Material::Material(const std::string& vertexShaderAsset,
     modelLoc = glGetUniformLocation(shaderProgram, "uModel");
     viewLoc = glGetUniformLocation(shaderProgram, "uView");
     projectionLoc = glGetUniformLocation(shaderProgram, "uProjection");
+
+    // 0 when the shader doesn't handle GBUFFER_PASS; GBufferPass then uses the engine's generic GBuffer shader.
+    gbufferProgram = ShaderLoader::createVariantProgram(vertexAssetKey, fragmentAssetKey,
+        GBufferVariant::Define, GBufferVariant::Preamble);
 }
 
 Material::~Material() {
     ShaderLoader::destroyProgram(vertexAssetKey, fragmentAssetKey);
+    if (gbufferProgram)
+        ShaderLoader::destroyVariantProgram(vertexAssetKey, fragmentAssetKey, GBufferVariant::Define);
+}
+
+void Material::bindGBuffer(const glm::mat4& model,
+    const glm::mat4& view,
+    const glm::mat4& projection) const
+{
+    if (!gbufferProgram) return;
+
+    glUseProgram(gbufferProgram);
+
+    auto location = [this](const std::string& name) {
+        auto it = gbufferLocations.find(name);
+        if (it != gbufferLocations.end()) return it->second;
+        const GLint loc = glGetUniformLocation(gbufferProgram, name.c_str());
+        gbufferLocations.emplace(name, loc);
+        return loc;
+        };
+
+    const GLint modelL = location("uModel");
+    const GLint viewL = location("uView");
+    const GLint projL = location("uProjection");
+    const GLint gbViewL = location("uGBufferView");
+    if (modelL != -1)  glUniformMatrix4fv(modelL, 1, GL_FALSE, glm::value_ptr(model));
+    if (viewL != -1)   glUniformMatrix4fv(viewL, 1, GL_FALSE, glm::value_ptr(view));
+    if (projL != -1)   glUniformMatrix4fv(projL, 1, GL_FALSE, glm::value_ptr(projection));
+    if (gbViewL != -1) glUniformMatrix4fv(gbViewL, 1, GL_FALSE, glm::value_ptr(view));
+
+    for (const auto& [name, entry] : uniforms) {
+        const GLint loc = location(name);
+        if (loc != -1) uploadUniform(loc, entry.value);
+    }
 }
 
 void Material::setFloat(const std::string& name, float value) {

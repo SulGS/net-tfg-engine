@@ -9,6 +9,7 @@ enum AsteroidEventMask : uint8_t {
 	ENTER_SPECTATOR = 3,
 	DESTROY_TILE = 4,
 	WARN_TILE = 6,
+	BULLET_HIT_WALL = 7,
 };
 
 struct SpawnBulletEventData {
@@ -31,6 +32,12 @@ struct DestroyTileEventData {
 struct BulletCollidesEventData {
 	int bulletId;
 	int playerId;
+};
+
+// Server-side wall hit: the server destroys the bullet on the spot; this tells clients, whose bullets aren't in the
+// deltas and have no colliders, so theirs don't keep flying through the wall until their lifetime runs out.
+struct BulletHitWallEventData {
+	int bulletId;
 };
 
 struct DeathEventData {

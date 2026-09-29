@@ -27,10 +27,13 @@ struct WallStateDelta {
     bool vWalls[2 * MAP_SIZE][2 * MAP_SIZE + 1];
     bool cWalls[MAP_SIZE][MAP_SIZE][4];
 
-    bool hWallsWarning[2 * MAP_SIZE + 1][2 * MAP_SIZE];
-    bool vWallsWarning[2 * MAP_SIZE][2 * MAP_SIZE + 1];
-    bool cWallsWarning[MAP_SIZE][MAP_SIZE][4];
+    uint16_t hWallsWarning[2 * MAP_SIZE + 1][2 * MAP_SIZE];   // warning codes, see EncodeWallWarning
+    uint16_t vWallsWarning[2 * MAP_SIZE][2 * MAP_SIZE + 1];
+    uint16_t cWallsWarning[MAP_SIZE][MAP_SIZE][4];
 };
+
+// Mode byte + keyframe must fit DeltaStateBlob::data (1024 bytes).
+static_assert(1 + sizeof(WallStateDelta) <= 1024, "WallStateDelta keyframe no longer fits in a DeltaStateBlob");
 
 // DELTA_WALL_STATE "mode 1" payload: one entry per cell whose enabled/warning changed since the previous tick.
 // `x`/`y` index the grid chosen by `kind` (tilesActive, hWalls, vWalls, cWalls); `z` is only for CWall (spoke dir 0-3).
@@ -40,7 +43,7 @@ struct WallEdgeChange {
     WallEdgeKind kind;
     uint8_t x, y, z;
     bool enabled;
-    bool warning;
+    uint16_t warning;   // walls: warning code (EncodeWallWarning); tiles: 0/1
 };
 
 // Sparse changes rarely exceed a handful per tick (walls re-roll a 3-30s timer); worst case is a tile destruction

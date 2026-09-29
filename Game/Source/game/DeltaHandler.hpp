@@ -121,7 +121,7 @@ public:
 			{
 			case WallEdgeKind::Tile:
 				gs->tilesActive[c.x][c.y] = c.enabled;
-				gs->tilesWarning[c.x][c.y] = c.warning;
+				gs->tilesWarning[c.x][c.y] = c.warning != 0;
 				break;
 			case WallEdgeKind::HWall:
 				gs->hWalls[c.x][c.y] = c.enabled;
@@ -161,7 +161,7 @@ public:
 		int changeCount = 0;
 		bool overflowed = false;
 
-		auto note = [&](WallEdgeKind kind, int x, int y, int z, bool enabled, bool warning)
+		auto note = [&](WallEdgeKind kind, int x, int y, int z, bool enabled, uint16_t warning)
 		{
 			if (changeCount >= WALL_DELTA_MAX_SPARSE_CHANGES) { overflowed = true; return; }
 			changes[changeCount++] = { kind, (uint8_t)x, (uint8_t)y, (uint8_t)z, enabled, warning };
@@ -250,7 +250,7 @@ public:
 			switch (c.kind)
 			{
 			case WallEdgeKind::Tile:
-				if (gs->tilesActive[c.x][c.y] != c.enabled || gs->tilesWarning[c.x][c.y] != c.warning) return false;
+				if (gs->tilesActive[c.x][c.y] != c.enabled || gs->tilesWarning[c.x][c.y] != (c.warning != 0)) return false;
 				break;
 			case WallEdgeKind::HWall:
 				if (gs->hWalls[c.x][c.y] != c.enabled || gs->hWallsWarning[c.x][c.y] != c.warning) return false;

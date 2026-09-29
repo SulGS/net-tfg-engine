@@ -153,6 +153,11 @@ void Mesh::drawGBuffer(GLuint gbufferShader) const
     glBindVertexArray(buffer->VAO);
     for (const auto& sm : buffer->subMeshes)
     {
+        // Unit 0 — albedo (fallback: white); SSR reads it as the metals' reflectance
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, sm.diffuseTex ? sm.diffuseTex : m_fallbackWhite);
+        glUniform1i(glGetUniformLocation(gbufferShader, "uAlbedoTex"), 0);
+
         // Unit 1 — normal map (fallback: flat normal 0.5, 0.5, 1.0)
         glActiveTexture(GL_TEXTURE1);
         glBindTexture(GL_TEXTURE_2D, sm.normalTex ? sm.normalTex : m_fallbackNormal);

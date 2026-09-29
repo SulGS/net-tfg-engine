@@ -49,8 +49,20 @@ public:
 
     GLuint getProgram() const { return shaderProgram; }
 
+    // GBuffer variant (see Render pipeline/GBufferVariant.hpp): built automatically when the fragment shader handles
+    // GBUFFER_PASS. bindGBuffer() is bind() for that program: same engine matrices and the same uniform values.
+    bool hasGBufferProgram() const { return gbufferProgram != 0; }
+    void bindGBuffer(const glm::mat4& model,
+        const glm::mat4& view,
+        const glm::mat4& projection) const;
+
 private:
     GLuint shaderProgram = 0;
+    GLuint gbufferProgram = 0;
+
+    // Locations in gbufferProgram, filled on first use: the uniform map stores shaderProgram's locations, which don't
+    // carry over to another program. -1 entries are cached too (uniforms the variant compiled out).
+    mutable std::unordered_map<std::string, GLint> gbufferLocations;
 
     // Asset keys � stored so the destructor and clone can reference the cache
     std::string vertexAssetKey;

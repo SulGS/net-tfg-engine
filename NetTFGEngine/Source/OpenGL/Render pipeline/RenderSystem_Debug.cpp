@@ -229,8 +229,9 @@ namespace {
         WritePNG(path, w, h, rgb);
     }
 
+    // One channel (0 = R ... 3 = A) as greyscale. w/h must be the texture's own size.
     static void DumpTexture2D_GreyscaleR(GLuint tex, int w, int h,
-        const std::string& path)
+        const std::string& path, int channel = 0)
     {
         const int nPix = w * h;
         std::vector<float> pixels(nPix * 4);
@@ -239,7 +240,7 @@ namespace {
         glBindTexture(GL_TEXTURE_2D, 0);
         std::vector<uint8_t> rgb(nPix * 3);
         for (int i = 0; i < nPix; ++i) {
-            float v = pixels[i * 4 + 0];
+            float v = pixels[i * 4 + channel];
             v = v < 0.f ? 0.f : (v > 1.f ? 1.f : v);
             auto b = static_cast<uint8_t>(v * 255.f + 0.5f);
             rgb[i * 3 + 0] = rgb[i * 3 + 1] = rgb[i * 3 + 2] = b;
@@ -301,18 +302,24 @@ void RenderSystem::DumpBuffers() const
         Debug::Info("RenderSystem::DumpBuffers") << "Saved gbuffer_normal.png\n";
     }
 
-    // 3b. GBuffer roughness
-    if (m_gbufferRoughnessTex) {
-        DumpTexture2D_GreyscaleR(m_gbufferRoughnessTex, m_screenW, m_screenH,
-            path("gbuffer_roughness.png"));
+    // 3b. GBuffer roughness (alpha of the normal target)
+    if (m_gbufferNormalTex) {
+        DumpTexture2D_GreyscaleR(m_gbufferNormalTex, m_screenW, m_screenH,
+            path("gbuffer_roughness.png"), 3);
         Debug::Info("RenderSystem::DumpBuffers") << "Saved gbuffer_roughness.png\n";
     }
 
     // 3c. GBuffer metalness
-    if (m_gbufferMetalnessTex) {
-        DumpTexture2D_GreyscaleR(m_gbufferMetalnessTex, m_screenW, m_screenH,
+    if (m_gbufferMaterialTex) {
+        DumpTexture2D_GreyscaleR(m_gbufferMaterialTex, m_screenW, m_screenH,
             path("gbuffer_metalness.png"));
         Debug::Info("RenderSystem::DumpBuffers") << "Saved gbuffer_metalness.png\n";
+    }
+
+    // 3d. SSAO (blurred, what the shading pass sampled; at the SSAO resolution scale)
+    if (m_ssaoBlurTex) {
+        DumpTexture2D_GreyscaleR(m_ssaoBlurTex, m_ssaoW, m_ssaoH, path("ssao.png"));
+        Debug::Info("RenderSystem::DumpBuffers") << "Saved ssao.png\n";
     }
 
     // 4. Bloom threshold
@@ -338,7 +345,7 @@ void RenderSystem::DumpBuffers() const
     }
 
     // 7. Final output
-    DumpDefaultFramebuffer(m_screenW, m_screenH, path("final_output.png"));
+    DumpDefaultFramebuffer(m_outputW, m_outputH, path("final_output.png"));
     Debug::Info("RenderSystem::DumpBuffers") << "Saved final_output.png\n";
 
     // 8. Point light shadow cubemap faces

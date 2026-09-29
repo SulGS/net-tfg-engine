@@ -21,6 +21,11 @@
 
 #if defined(_WIN32) || defined(_WIN64)
 #pragma comment(lib, "ws2_32.lib")
+// Without it windows.h defines min/max macros that break std::min/std::max in every header after this one. glm's
+// _fixes.hpp #undefs them only if glm is first included after here, so any other include order failed to compile.
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <winsock2.h>
 #include <conio.h>
 #else

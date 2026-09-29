@@ -59,6 +59,13 @@ private:
 
     std::vector<Batch> m_batches;
 
+    // Fixed-step simulation (see Update): the result is the same at any render frame rate, matching what stepping
+    // once per frame gave at 240 FPS. The frame's real deltaTime feeds the accumulator; kMaxFrameDt caps catch-up
+    // (at most 24 steps in one frame).
+    static constexpr float kSimStep = 1.0f / 240.0f;
+    static constexpr float kMaxFrameDt = 0.1f;
+    float m_simAccum = 0.0f;
+
     // Sprite sheets requested by emitters, loaded lazily through the AssetManager. 0 = load failed (emitter falls back to the procedural disc).
     std::unordered_map<std::string, GLuint> m_textures;
 
@@ -87,11 +94,15 @@ private:
         const glm::vec3& emitterWorldDir,
         float uniformScale);
 
-    void SimulateEmitter(ParticleEmitterComponent& e,
+    // One fixed step (dt = kSimStep) of emission + physics.
+    void StepEmitter(ParticleEmitterComponent& e,
         const glm::vec3& emitterWorldPos,
         const glm::vec3& emitterWorldDir,
         float uniformScale,
         float dt);
+
+    // Once per frame, after the steps: live particles -> the emitter's batch staging buffer.
+    void BuildStaging(ParticleEmitterComponent& e);
 
     // Initialise (or re-initialise) the pool and free-list to match
     // e.maxParticles. Safe to call multiple times.

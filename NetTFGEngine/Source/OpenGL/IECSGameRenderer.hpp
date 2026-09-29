@@ -21,6 +21,8 @@
 #include "ecs/UI/DebugOverlay.hpp"
 #include "OpenAL/AudioManager.hpp"
 
+#include <algorithm>
+#include <chrono>
 #include <functional>
 
 
@@ -29,6 +31,23 @@ protected:
     ECSWorld world;
 
     int frameCount = 0;
+
+    // Render-side clock: world.Update() gets the real time since the previous Render(), so every render system
+    // (particles, fluid uTime, wall/laser animation, camera shake, UI) runs in real time even when the target FPS
+    // isn't reached. Capped so a hitch, a minimised window or re-activating this scene doesn't jump ahead.
+    static constexpr float kMaxRenderDt = 0.1f;
+    std::chrono::steady_clock::time_point lastRenderTime;
+    bool hasLastRenderTime = false;
+
+    float NextRenderDeltaTime() {
+        const auto now = std::chrono::steady_clock::now();
+        float dt = 1.0f / CurrentTargetFPS(); // first frame: nothing to measure yet
+        if (hasLastRenderTime)
+            dt = std::chrono::duration<float>(now - lastRenderTime).count();
+        lastRenderTime = now;
+        hasLastRenderTime = true;
+        return std::clamp(dt, 0.0f, kMaxRenderDt);
+    }
 
     std::function<void(IECSGameLogic* logic, IECSGameRenderer* renderer)> renderDataTransferToLogicCallback;
 
@@ -45,6 +64,7 @@ public:
 
     void Init(const GameStateBlob& state, OpenGLWindow* window) override {
         world.Reset();
+        hasLastRenderTime = false;
 
         world.GetEntityManager().RegisterComponentType<Transform>();
         world.GetEntityManager().RegisterComponentType<Playable>();
@@ -88,7 +108,9 @@ public:
         particleSys->Init();
 
         RenderSystem* renderSys = world.GetSystem<RenderSystem>();
-        renderSys->Init(window->getWidth(), window->getHeight());
+        int renderW, renderH;
+        RenderSettings::instance().computeRenderSize(window->getWidth(), window->getHeight(), renderW, renderH);
+        renderSys->Init(renderW, renderH, window->getWidth(), window->getHeight());
         renderSys->SetParticleSystem(particleSys);
 
 
@@ -115,9 +137,17 @@ public:
 
         RenderSystem* renderSys = world.GetSystem<RenderSystem>();
 
-        if (window->wasResized())
+        // Checked every frame rather than on wasResized(): the render resolution setting can change without the
+        // window doing so. Resize() is a no-op when nothing changed. The flag is still consumed so it doesn't linger.
+        window->wasResized();
         {
-            renderSys->Resize(window->getWidth(), window->getHeight());
+            const int outW = window->getWidth();
+            const int outH = window->getHeight();
+            int renderW, renderH;
+            RenderSettings::instance().computeRenderSize(outW, outH, renderW, renderH);
+            if (renderW != renderSys->GetScreenWidth() || renderH != renderSys->GetScreenHeight()
+                || outW != renderSys->GetOutputWidth() || outH != renderSys->GetOutputHeight())
+                renderSys->Resize(renderW, renderH, outW, outH);
         }
 
         auto activeCamera = em.CreateQuery<Camera, Transform>();
@@ -136,7 +166,7 @@ public:
 
         auto t1 = std::chrono::high_resolution_clock::now();
         // Minimized: keep game/audio systems advancing, skip only GL drawing.
-        world.Update(false, 1.0f / CurrentTargetFPS(), window->isMinimized());
+        world.Update(false, NextRenderDeltaTime(), window->isMinimized());
 
 		for (auto& system : world.GetSystems()) {
 			if (system.get()->requestRenderReinit) {

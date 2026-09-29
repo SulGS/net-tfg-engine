@@ -21,16 +21,19 @@ public:
     void OnPlayerConnected(int playerId) {
         std::lock_guard<std::mutex> lk(mtx);
         connectedPlayers.insert(playerId);
+        disconnectedPlayers.erase(playerId);
     }
 
     void OnPlayerReconnected(int playerId) {
         std::lock_guard<std::mutex> lk(mtx);
         connectedPlayers.insert(playerId);
+        disconnectedPlayers.erase(playerId);
     }
 
     void OnPlayerDisconnected(int playerId) {
         std::lock_guard<std::mutex> lk(mtx);
         connectedPlayers.erase(playerId);
+        disconnectedPlayers.insert(playerId);
     }
 
     InputEntry GetInputForPlayerAtFrame(int playerId, int frame) {
@@ -124,6 +127,8 @@ private:
     InputHistory appliedInputs;
     EventsHistory appliedEvents;
     std::set<int> connectedPlayers;
+    // Players that dropped mid-game (and haven't reconnected): SimulateFrame feeds them a neutral input.
+    std::set<int> disconnectedPlayers;
 
     // Assumes caller already holds mtx (not locked internally)
     void SimulateFrame(int frame) {
@@ -131,6 +136,14 @@ private:
         auto frameInIt = appliedInputs.find(frame);
         if (frameInIt != appliedInputs.end()) {
             inputs = frameInIt->second;
+        }
+
+        // A missing input is filled with the player's last one (IECSGameLogic::ProcessInputs), which covers a late packet
+        // but, for a player who dropped, kept flying their ship blind with whatever keys were held when the connection
+        // went, until they were back and ticking again (after the reconnect's asset load). Neutral input instead; it also
+        // becomes their last known input, so the gap until the reconnected client's first input stays neutral too.
+        for (int playerId : disconnectedPlayers) {
+            inputs[playerId] = InputEntry{ frame, MakeZeroInputBlob(), playerId };
         }
 
         std::vector<EventEntry> events;

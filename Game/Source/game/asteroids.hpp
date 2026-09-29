@@ -21,14 +21,35 @@
 
 #include "GameState.hpp"
 #include "Components.hpp"
-#include "LogicSystems.hpp"
-#include "RenderSystems.hpp"
+#include "LogicSystems/InputMask.hpp"
+#include "LogicSystems/MatchStartSystem.hpp"
+#include "LogicSystems/InputSystem.hpp"
+#include "LogicSystems/InputServerSystem.hpp"
+#include "LogicSystems/ArenaSystem.hpp"
+#include "LogicSystems/GameOverSystem.hpp"
+#include "LogicSystems/BulletSystem.hpp"
+#include "LogicSystems/OnDeathLogicSystem.hpp"
+#include "LogicSystems/ExitCheckerSystem.hpp"
+#include "RenderSystems/LaserVisuals.hpp"
+#include "RenderSystems/CameraFollowSystem.hpp"
+#include "RenderSystems/OnDeathRenderSystem.hpp"
+#include "RenderSystems/MatchStartCountdownRenderSystem.hpp"
+#include "RenderSystems/ChargingBulletRenderSystem.hpp"
+#include "RenderSystems/BulletRenderSystem.hpp"
+#include "RenderSystems/LinkThrusterToShipSystem.hpp"
+#include "RenderSystems/LaserWallRenderSystem.hpp"
+#include "RenderSystems/UpdateListenerTransformSystem.hpp"
+#include "RenderSystems/ThrustersSoundSystem.hpp"
+#include "RenderSystems/FluidAnimationSystem.hpp"
+#include "RenderSystems/DestroyTimerSystem.hpp"
 #include "Explosion.hpp"
 #include "PauseMenu.hpp"
 #include "Events.hpp"
 #include "EventHandlers.hpp"
 #include "Deltas.hpp"
 #include "DeltaHandler.hpp"
+#include <random>
+#include <set>
 #include <unordered_set>
 
 #include "OpenAL/AudioManager.hpp"
@@ -40,7 +61,7 @@
 
 
 
-// Pre-match freeze: see MatchStartTimer/MatchStartSystem in LogicSystems.hpp.
+// Pre-match freeze: see MatchStartTimer/MatchStartSystem in LogicSystems/MatchStartSystem.hpp.
 inline constexpr int MATCH_START_COUNTDOWN_TICKS = 20 * TICKS_PER_SECOND;
 
 // Returns the world-space centre of tile (cx, cy).
@@ -92,6 +113,15 @@ class AsteroidShooterGame : public IECSGameLogic {
 private:
     int debugTicks = 0;
 public:
+
+    // ArenaSystem stamps each wall's turn-on frame into its warning code (see EncodeWallWarning), so it needs the frame
+    // being simulated; the ECS systems themselves only get deltaTime.
+    void SimulateFrame(GameStateBlob& state, std::vector<EventEntry> events, std::map<int, InputEntry> inputs) override {
+        if (isServer)
+            if (ArenaSystem* arena = world.GetSystem<ArenaSystem>())
+                arena->SetCurrentFrame(state.frame);
+        IECSGameLogic::SimulateFrame(state, std::move(events), std::move(inputs));
+    }
 
     void printGameState(const AsteroidShooterGameState& state) const
     {
@@ -220,29 +250,9 @@ public:
             {
                 if (world.GetEntityManager().GetComponent<CenterSpoke>(entity) != nullptr) continue;
 
-                int cx = lwid->cellId / y_size;
-                int cy = lwid->cellId % y_size;
-
-                switch (lwid->dir)
-                {
-                case CellCardinalDirection::Down:
-                    lwid->enabled = s.vWalls[2 * cx][2 * cy];
-                    lwid->warning = s.vWallsWarning[2 * cx][2 * cy];
-                    break;
-                case CellCardinalDirection::Up:
-                    lwid->enabled = s.vWalls[2 * cx][2 * cy + 2];
-                    lwid->warning = s.vWallsWarning[2 * cx][2 * cy + 2];
-                    break;
-                case CellCardinalDirection::Left:
-                    lwid->enabled = s.hWalls[2 * cx][2 * cy];
-                    lwid->warning = s.hWallsWarning[2 * cx][2 * cy];
-                    break;
-                case CellCardinalDirection::Right:
-                    lwid->enabled = s.hWalls[2 * cx + 2][2 * cy];
-                    lwid->warning = s.hWallsWarning[2 * cx + 2][2 * cy];
-                    break;
-                default: break;
-                }
+                lwid->enabled = EdgeWallSlot(s.hWalls, s.vWalls, lwid->cellId, lwid->dir, lwid->half);
+                lwid->warnCode = EdgeWallSlot(s.hWallsWarning, s.vWallsWarning, lwid->cellId, lwid->dir, lwid->half);
+                lwid->warning = lwid->warnCode != 0;
             }
 
             auto spokeQuery = world.GetEntityManager().CreateQuery<LaserWallID, CenterSpoke>();
@@ -250,17 +260,10 @@ public:
             {
                 int cx = lwid->cellId / y_size;
                 int cy = lwid->cellId % y_size;
-                int dirIdx = 0;
-                switch (lwid->dir)
-                {
-                case CellCardinalDirection::Down:  dirIdx = 0; break;
-                case CellCardinalDirection::Up:    dirIdx = 1; break;
-                case CellCardinalDirection::Left:  dirIdx = 2; break;
-                case CellCardinalDirection::Right: dirIdx = 3; break;
-                default: break;
-                }
+                int dirIdx = SpokeIndex(lwid->dir);
                 lwid->enabled = s.cWalls[cx][cy][dirIdx];
-                lwid->warning = s.cWallsWarning[cx][cy][dirIdx];
+                lwid->warnCode = s.cWallsWarning[cx][cy][dirIdx];
+                lwid->warning = lwid->warnCode != 0;
             }
         }
 
@@ -336,29 +339,8 @@ public:
             {
                 if (world.GetEntityManager().GetComponent<CenterSpoke>(entity) != nullptr) continue;
 
-                int cx = lwid->cellId / y_size;
-                int cy = lwid->cellId % y_size;
-
-                switch (lwid->dir)
-                {
-                case CellCardinalDirection::Down:
-                    s.vWalls[2 * cx][2 * cy] = lwid->enabled;
-                    s.vWallsWarning[2 * cx][2 * cy] = lwid->warning;
-                    break;
-                case CellCardinalDirection::Up:
-                    s.vWalls[2 * cx][2 * cy + 2] = lwid->enabled;
-                    s.vWallsWarning[2 * cx][2 * cy + 2] = lwid->warning;
-                    break;
-                case CellCardinalDirection::Left:
-                    s.hWalls[2 * cx][2 * cy] = lwid->enabled;
-                    s.hWallsWarning[2 * cx][2 * cy] = lwid->warning;
-                    break;
-                case CellCardinalDirection::Right:
-                    s.hWalls[2 * cx + 2][2 * cy] = lwid->enabled;
-                    s.hWallsWarning[2 * cx + 2][2 * cy] = lwid->warning;
-                    break;
-                default: break;
-                }
+                EdgeWallSlot(s.hWalls, s.vWalls, lwid->cellId, lwid->dir, lwid->half) = lwid->enabled;
+                EdgeWallSlot(s.hWallsWarning, s.vWallsWarning, lwid->cellId, lwid->dir, lwid->half) = lwid->warnCode;
             }
         }
 
@@ -370,17 +352,9 @@ public:
                 int cx = lwid->cellId / y_size;
                 int cy = lwid->cellId % y_size;
 
-                int dirIdx = 0;
-                switch (lwid->dir)
-                {
-                case CellCardinalDirection::Down:  dirIdx = 0; break;
-                case CellCardinalDirection::Up:    dirIdx = 1; break;
-                case CellCardinalDirection::Left:  dirIdx = 2; break;
-                case CellCardinalDirection::Right: dirIdx = 3; break;
-                default: break;
-                }
+                int dirIdx = SpokeIndex(lwid->dir);
                 s.cWalls[cx][cy][dirIdx] = lwid->enabled;
-                s.cWallsWarning[cx][cy][dirIdx] = lwid->warning;
+                s.cWallsWarning[cx][cy][dirIdx] = lwid->warnCode;
             }
         }
 
@@ -535,7 +509,9 @@ public:
             }
         }
 
-        // Walls
+        // Walls: one logic entity per 40-unit pillar gap, i.e. per HALF of a cell side (each side borders two subtiles and
+        // each half toggles independently). Each half has its own state slot (EdgeWallSlot), so what collides on the
+        // server is exactly what is serialized and drawn.
         std::mt19937 initRng{ std::random_device{}() };
         std::uniform_real_distribution<float> initDist(3.0f, 30.0f);
 
@@ -550,7 +526,7 @@ public:
                 const float midY = (py - y_size) * 40.0f - 40.0f;
 
                 // An interior boundary matches TWO (cx,cy) combinations (one per side); edgeBuilt keeps only the first
-                // so each physical edge is exactly one entity, not two independently-toggled ones.
+                // so each physical half-edge is exactly one entity, not two independently-toggled ones.
                 bool edgeBuilt = false;
                 for (int cx = 0; cx < x_size && !edgeBuilt; cx++)
                 {
@@ -567,7 +543,7 @@ public:
                         walls.push_back({ cx, cy, dir,
                             glm::vec3(midX, midY, 0.0f),
                             glm::vec3(0.0f, 90.0f, 0.0f),
-                            onBorder });
+                            onBorder, px - 2 * cx });
                         edgeBuilt = true;
                     }
                 }
@@ -598,7 +574,7 @@ public:
                         walls.push_back({ cx, cy, dir,
                             glm::vec3(midX, midY, 0.0f),
                             glm::vec3(90.0f, 0.0f, 0.0f),
-                            onBorder });
+                            onBorder, py - 2 * cy });
                         edgeBuilt = true;
                     }
                 }
@@ -616,7 +592,7 @@ public:
             t->setRotation(w.rot);
             t->setScale(glm::vec3(2.0f, 2.0f, 19.0f));
 
-            LaserWallID lwid(cellId, w.dir);
+            LaserWallID lwid(cellId, w.dir, w.half);
             lwid.enabled = w.onBorder;
             lwid.timer = initDist(initRng);
             em.AddComponent<LaserWallID>(e, lwid);
@@ -748,6 +724,7 @@ public:
         eventProcessor->RegisterHandler(AsteroidEventMask::DEATH, std::make_unique<DeathHandler>());
         eventProcessor->RegisterHandler(AsteroidEventMask::DESTROY_TILE, std::make_unique<DestroyTileHandler>());
         eventProcessor->RegisterHandler(AsteroidEventMask::WARN_TILE, std::make_unique<WarnTileHandler>());
+        eventProcessor->RegisterHandler(AsteroidEventMask::BULLET_HIT_WALL, std::make_unique<BulletHitWallHandler>());
 
         deltaProcessor->RegisterHandler(DELTA_GAME_POSITIONS, std::make_unique<GamePositionsDeltaHandler>());
         deltaProcessor->RegisterHandler(DELTA_WALL_STATE, std::make_unique<WallStateDeltaHandler>());
@@ -765,10 +742,19 @@ public:
             throw std::runtime_error("EVP_DigestInit_ex failed");
         }
 
-        EVP_DigestUpdate(ctx, &s.health[0], sizeof(s.health[0]));
-        EVP_DigestUpdate(ctx, &s.health[1], sizeof(s.health[1]));
-        EVP_DigestUpdate(ctx, &s.alive[0], sizeof(s.alive[0]));
-        EVP_DigestUpdate(ctx, &s.alive[1], sizeof(s.alive[1]));
+        // Only what the client reconstructs exactly (events + deltas), so a mismatch means a real desync and the server
+        // answers with a full state. Walls/tiles included: otherwise an arena desync was only healed by the periodic
+        // wall keyframe (up to 3 s). Positions/bullets are left out: prediction legitimately differs there.
+        EVP_DigestUpdate(ctx, s.health, sizeof(s.health));
+        EVP_DigestUpdate(ctx, s.alive, sizeof(s.alive));
+        EVP_DigestUpdate(ctx, s.tilesActive, sizeof(s.tilesActive));
+        EVP_DigestUpdate(ctx, s.tilesWarning, sizeof(s.tilesWarning));
+        EVP_DigestUpdate(ctx, s.hWalls, sizeof(s.hWalls));
+        EVP_DigestUpdate(ctx, s.vWalls, sizeof(s.vWalls));
+        EVP_DigestUpdate(ctx, s.cWalls, sizeof(s.cWalls));
+        EVP_DigestUpdate(ctx, s.hWallsWarning, sizeof(s.hWallsWarning));
+        EVP_DigestUpdate(ctx, s.vWallsWarning, sizeof(s.vWallsWarning));
+        EVP_DigestUpdate(ctx, s.cWallsWarning, sizeof(s.cWallsWarning));
 
         unsigned int len = 0;
         if (1 != EVP_DigestFinal_ex(ctx, outHash, &len)) {
@@ -898,7 +884,7 @@ public:
                 Transform* st = em.AddComponent<Transform>(bulletSound, Transform{});
                 st->setPosition(glm::vec3(b.posX, b.posY, 0.0f));
                 DestroyTimer* dt = em.AddComponent<DestroyTimer>(bulletSound, DestroyTimer{});
-                dt->framesRemaining = CurrentTargetFPS() * 3;
+                dt->secondsRemaining = 3.0f;
                 AudioSourceComponent* audio = em.AddComponent<AudioSourceComponent>(
                     bulletSound, AudioSourceComponent("shoot.wav", AudioChannel::SFX, false));
                 audio->play = true;
@@ -928,28 +914,9 @@ public:
             for (auto [entity, lwid] : wallQuery)
             {
                 if (em.GetComponent<CenterSpoke>(entity) != nullptr) continue;
-                int cx = lwid->cellId / y_size;
-                int cy = lwid->cellId % y_size;
-                switch (lwid->dir)
-                {
-                case CellCardinalDirection::Down:
-                    lwid->enabled = s.vWalls[2 * cx][2 * cy];
-                    lwid->warning = s.vWallsWarning[2 * cx][2 * cy];
-                    break;
-                case CellCardinalDirection::Up:
-                    lwid->enabled = s.vWalls[2 * cx][2 * cy + 2];
-                    lwid->warning = s.vWallsWarning[2 * cx][2 * cy + 2];
-                    break;
-                case CellCardinalDirection::Left:
-                    lwid->enabled = s.hWalls[2 * cx][2 * cy];
-                    lwid->warning = s.hWallsWarning[2 * cx][2 * cy];
-                    break;
-                case CellCardinalDirection::Right:
-                    lwid->enabled = s.hWalls[2 * cx + 2][2 * cy];
-                    lwid->warning = s.hWallsWarning[2 * cx + 2][2 * cy];
-                    break;
-                default: break;
-                }
+                lwid->enabled = EdgeWallSlot(s.hWalls, s.vWalls, lwid->cellId, lwid->dir, lwid->half);
+                lwid->warnCode = EdgeWallSlot(s.hWallsWarning, s.vWallsWarning, lwid->cellId, lwid->dir, lwid->half);
+                lwid->warning = lwid->warnCode != 0;
             }
 
             auto spokeQuery = em.CreateQuery<LaserWallID, CenterSpoke>();
@@ -957,17 +924,10 @@ public:
             {
                 int cx = lwid->cellId / y_size;
                 int cy = lwid->cellId % y_size;
-                int dirIdx = 0;
-                switch (lwid->dir)
-                {
-                case CellCardinalDirection::Down:  dirIdx = 0; break;
-                case CellCardinalDirection::Up:    dirIdx = 1; break;
-                case CellCardinalDirection::Left:  dirIdx = 2; break;
-                case CellCardinalDirection::Right: dirIdx = 3; break;
-                default: break;
-                }
+                int dirIdx = SpokeIndex(lwid->dir);
                 lwid->enabled = s.cWalls[cx][cy][dirIdx];
-                lwid->warning = s.cWallsWarning[cx][cy][dirIdx];
+                lwid->warnCode = s.cWallsWarning[cx][cy][dirIdx];
+                lwid->warning = lwid->warnCode != 0;
             }
         }
 
@@ -1127,7 +1087,7 @@ public:
         text->SetColor(1.0f, 1.0f, 1.0f, 1.0f);
         text->SetFont("default");
         // Tags this as the game's own status label, distinct from the
-        // DebugOverlay's UIText, so RenderSystems.hpp's UIText queries
+        // DebugOverlay's UIText, so the render systems' UIText queries
         // (REMAINING/YOU DIED/WINS) don't also reposition the debug HUD.
         world.GetEntityManager().AddComponent<GameStatusText>(healthText, GameStatusText{});
 
@@ -1268,7 +1228,8 @@ public:
                 em.AddComponent<MeshComponent>(e, MeshComponent(new Mesh("pilar.glb")));
             }
 
-        // Walls
+        // Walls: one beam per 40-unit pillar gap = one half of a cell side, matching the logic entities one to one
+        // (same cellId, dir, half), so each beam reads exactly its own state slot (EdgeWallSlot).
         std::vector<WallDef> walls;
 
         for (int px = 0; px < 2 * x_size; ++px)
@@ -1289,7 +1250,7 @@ public:
                         const bool onBorder = (py == 0) || (py == 2 * y_size);
                         walls.push_back({ cx, cy, dir,
                             glm::vec3(midX, midY, 0.0f),
-                            glm::vec3(0.0f, 90.0f, 0.0f), onBorder });
+                            glm::vec3(0.0f, 90.0f, 0.0f), onBorder, px - 2 * cx });
                         edgeBuilt = true;
                     }
             }
@@ -1310,7 +1271,7 @@ public:
                         const bool onBorder = (px == 0) || (px == 2 * x_size);
                         walls.push_back({ cx, cy, dir,
                             glm::vec3(midX, midY, 0.0f),
-                            glm::vec3(90.0f, 0.0f, 0.0f), onBorder });
+                            glm::vec3(90.0f, 0.0f, 0.0f), onBorder, py - 2 * cy });
                         edgeBuilt = true;
                     }
             }
@@ -1344,7 +1305,7 @@ public:
             t->setPosition(w.pos);
             t->setRotation(w.rot);
             t->setScale(laserBeamScale);
-            LaserWallID lwid(cellId, w.dir);
+            LaserWallID lwid(cellId, w.dir, w.half);
             lwid.enabled = w.onBorder;
             em.AddComponent<LaserWallID>(e, lwid);
             em.AddComponent<LaserWallVisual>(e, LaserWallVisual{});
@@ -1504,6 +1465,36 @@ public:
         std::memcpy(rend.vWallsWarning, currServer.vWallsWarning, sizeof(currServer.vWallsWarning));
         std::memcpy(rend.cWallsWarning, currServer.cWallsWarning, sizeof(currServer.cWallsWarning));
         std::memcpy(rend.tilesWarning, currServer.tilesWarning, sizeof(currServer.tilesWarning));
+
+        // ...except a wall about to energise, drawn on in the local ship's (predicted) timeline: once the predicted frame
+        // reaches the state frame the server turns it on in, which is when it would kill the ship where it's drawn now.
+        // Otherwise it appeared framesAheadOfServer ticks late relative to the ship (see EncodeWallWarning). Only while
+        // the local ship is alive: a spectator watches everyone at server time, so walls stay in step with them.
+        const bool localAlive = playerId >= 0 && playerId < NUM_PLAYERS && currServer.alive[playerId];
+        if (localAlive)
+        {
+            const int serverFrame = currentServerState.frame;
+            const int localFrame = currentLocalState.frame;
+            auto predictOn = [serverFrame, localFrame](bool& enabled, uint16_t& warnCode)
+                {
+                    if (enabled) return;
+                    const int onFrame = DecodeWallOnFrame(warnCode, serverFrame);
+                    if (onFrame < 0 || localFrame < onFrame) return;
+                    enabled = true;
+                    warnCode = WALL_WARN_NONE;
+                };
+
+            for (int x = 0; x < 2 * MAP_SIZE + 1; x++)
+                for (int y = 0; y < 2 * MAP_SIZE; y++)
+                    predictOn(rend.hWalls[x][y], rend.hWallsWarning[x][y]);
+            for (int x = 0; x < 2 * MAP_SIZE; x++)
+                for (int y = 0; y < 2 * MAP_SIZE + 1; y++)
+                    predictOn(rend.vWalls[x][y], rend.vWallsWarning[x][y]);
+            for (int x = 0; x < MAP_SIZE; x++)
+                for (int y = 0; y < MAP_SIZE; y++)
+                    for (int z = 0; z < 4; z++)
+                        predictOn(rend.cWalls[x][y][z], rend.cWallsWarning[x][y][z]);
+        }
 
         rend.startCountdownTicks = currServer.startCountdownTicks;
     }

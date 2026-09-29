@@ -203,7 +203,6 @@ private:
         PeerInfo info;
         info.connection = conn;
         info.clientId = clientId;
-        info.pendingReceiveFullState = true;
         info.isConnected = true;
         info.playerId = static_cast<int>(allPlayers_.size());
         allPlayers_.push_back(info);
@@ -213,6 +212,8 @@ private:
             << " (" << clientId << ") joined mid-game\n";
 
         SendServerAccept(conn, info.playerId, false);
+        // Only now: the tick loop sends the full state as soon as it sees this, and it must not overtake the accept.
+        peerInfo_[conn].pendingReceiveFullState = true;
         activePlayerCount_++;
 
         return true;
@@ -248,6 +249,8 @@ private:
             << ") reconnected after " << elapsed.count() << "s\n";
 
         SendServerAccept(conn, playerInfo->playerId, true);
+        server_.OnPlayerReconnected(playerInfo->playerId);   // back to real input (see ServerNetcode::SimulateFrame)
+        peerInfo_[conn].pendingReceiveFullState = true;       // sent by the tick loop, see the CLIENT_HELLO reconnection path
 
         return true;
     }
@@ -489,13 +492,15 @@ private:
                 << elapsed.count() << "s\n";
 
             SendServerAccept(conn, existingPlayer->playerId, true);
+            server_.OnPlayerReconnected(existingPlayer->playerId);   // back to real input (see ServerNetcode::SimulateFrame)
 
-            StateUpdate currentUpdate;
-			currentUpdate.frame = server_.GetCurrentFrame();
-			currentUpdate.state = server_.GetCurrentState();
-
-            net_.SendStateUpdate(conn, currentUpdate);
-            Debug::Info("Server") << "Sent state update to reconnected player " << existingPlayer->playerId << "\n";
+            // The full state goes out from the tick loop (RunServerLoop), not from here: this runs on the network thread,
+            // so a tick could slip between reading the state and sending it, and that tick's deltas/events would reach
+            // the client BEFORE the state they follow; the client drops everything until the state arrives
+            // (WaitForStateUpdateAfterReconnection), so they were lost (e.g. a wall change, stale until the next keyframe).
+            // Set after the accept so the state can't overtake it.
+            peerInfo_[conn].pendingReceiveFullState = true;
+            Debug::Info("Server") << "Queued full state for reconnected player " << existingPlayer->playerId << "\n";
 
             return true;
         }
@@ -653,6 +658,21 @@ private:
             std::vector<EventEntry> generatedEvents;
             server_.GetGameLogic()->GetGeneratedEvents(generatedEvents);
 
+            // Full states go out first, ahead of this tick's events and deltas. The state is frame N, and this tick's
+            // events are stamped N (applied when frame N is simulated, so they aren't in the state yet). A client waiting
+            // for a state after (re)connecting drops every packet before it, so nothing that follows the state may precede it.
+            std::set<HSteamNetConnection> sentFullState;
+            for (auto& [conn, info] : peerInfo_) {
+                if (!info.isConnected || !info.pendingReceiveFullState) {
+                    continue;
+                }
+                if (pendingReconnections_.find(info.playerId) == pendingReconnections_.end()) {
+                    info.pendingReceiveFullState = false;
+                    net_.SendStateUpdate(conn, update);
+                    sentFullState.insert(conn);
+                }
+            }
+
             for (auto event : generatedEvents) {
                 for (auto& [conn, info] : peerInfo_) {
                     if (!info.isConnected) {
@@ -672,16 +692,12 @@ private:
                 if (!info.isConnected) {
                     continue;
                 }
+                // Got the whole state above: this tick's deltas are already in it.
+                if (sentFullState.count(conn)) {
+                    continue;
+                }
                 if (pendingReconnections_.find(info.playerId) == pendingReconnections_.end()) {
-                    if (info.pendingReceiveFullState)
-                    {
-						info.pendingReceiveFullState = false;
-                        net_.SendStateUpdate(conn, update);
-                    }
-                    else 
-                    {
-                        net_.SendDeltasUpdate(conn, generatedDeltas, server_.GetCurrentFrame());
-                    }
+                    net_.SendDeltasUpdate(conn, generatedDeltas, server_.GetCurrentFrame());
                 }
             }
 

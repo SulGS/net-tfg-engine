@@ -48,7 +48,40 @@ inline int NeighborCellId(int cellId, CellCardinalDirection dir)
 	return nx * MAP_SIZE + ny;
 }
 
-// A shared interior edge is ONE LaserWallID entity, owned by whichever of its two cells was visited first, so
+// Every cell side is two independent half-walls, one per subtile it borders: `half` 0 = lower/left half, 1 = upper/right
+// half (Down/Up sides split along X, Left/Right sides along Y). Returns that half's slot in the hWalls/vWalls-shaped
+// arrays (state enabled flags, warning codes, ArenaSystem's working maps). Both cells sharing the edge name the same
+// slot: Up of (cx,cy) half h == Down of (cx,cy+1) half h, Right of (cx,cy) half h == Left of (cx+1,cy) half h.
+template <typename T>
+inline T& EdgeWallSlot(T (*hWalls)[2 * MAP_SIZE], T (*vWalls)[2 * MAP_SIZE + 1],
+	int cellId, CellCardinalDirection dir, int half)
+{
+	const int cx = cellId / MAP_SIZE;
+	const int cy = cellId % MAP_SIZE;
+	switch (dir)
+	{
+	case CellCardinalDirection::Down:  return vWalls[2 * cx + half][2 * cy];
+	case CellCardinalDirection::Up:    return vWalls[2 * cx + half][2 * cy + 2];
+	case CellCardinalDirection::Left:  return hWalls[2 * cx][2 * cy + half];
+	case CellCardinalDirection::Right:
+	default:                           return hWalls[2 * cx + 2][2 * cy + half];
+	}
+}
+
+// Spoke index in cWalls[cx][cy][...]: 0=Down, 1=Up, 2=Left, 3=Right.
+inline int SpokeIndex(CellCardinalDirection dir)
+{
+	switch (dir)
+	{
+	case CellCardinalDirection::Down:  return 0;
+	case CellCardinalDirection::Up:    return 1;
+	case CellCardinalDirection::Left:  return 2;
+	case CellCardinalDirection::Right: return 3;
+	default:                           return 0;
+	}
+}
+
+// A shared interior edge is ONE LaserWallID entity per half, owned by whichever of its two cells was visited first, so
 // classification must check BOTH cells: both alive -> Interior (random toggling); one alive -> SoleBorder (forced solid,
 // protects the survivor from the void); none alive (or a map-edge wall whose cell died) -> Dead (off, hidden, no collider).
 enum class WallEdgeState { Interior, SoleBorder, Dead };
@@ -82,8 +115,8 @@ public:
 	MatchStartTimer(int t) : ticksRemaining(t) {}
 };
 
-// Laser walls: each shared edge is ONE entity, stored from one of its two
-// bordering cells' point of view (see ClassifyWallEdge above for why both
+// Laser walls: each half of a shared edge is ONE entity, stored from one of its
+// two bordering cells' point of view (see ClassifyWallEdge above for why both
 // sides still matter); border walls start enabled, interior ones disabled.
 struct WallDef
 {
@@ -92,17 +125,25 @@ struct WallDef
 	glm::vec3             pos;
 	glm::vec3             rot;
 	bool                  onBorder;
+	int                   half = 0;   // see EdgeWallSlot
 };
 
 class LaserWallID : public IComponent {
 public:
 	int cellId;
 	CellCardinalDirection dir;
+	// Which half of the cell side (EdgeWallSlot); always 0 for spokes.
+	int half = 0;
 	float timer;
 	bool enabled;
 	bool warning;
+	// Server: state frame this off wall turns on in while warning (-1 = none/unknown); ArenaSystem folds it and `warning`
+	// into warnCode. warnCode is what goes on the wire (EncodeWallWarning); clients copy it verbatim so the prediction
+	// round-trip through ECSWorld_To_GameState writes back exactly what the server sent.
+	int onFrame = -1;
+	uint16_t warnCode = 0;
 	LaserWallID() : cellId(-1), dir(CellCardinalDirection::None), enabled(true), timer(0.0f), warning(false) {}
-	LaserWallID(int c, CellCardinalDirection d) : cellId(c), dir(d), enabled(true), timer(0.0f), warning(false) {}
+	LaserWallID(int c, CellCardinalDirection d, int h = 0) : cellId(c), dir(d), half(h), enabled(true), timer(0.0f), warning(false) {}
 };
 
 // Render-only animation state of a laser wall/spoke mesh (never synced/predicted). LaserWallRenderSystem eases it
@@ -146,7 +187,7 @@ public:
 	ThrusterOwner(int se, bool isSm, bool isLeftE) : shipEntity(se), isSmoke(isSm), isLeftEngine(isLeftE) {}
 };
 
-// Muzzle offset (along heading) shared by the charge-up orb (RenderSystems.hpp) and the bullet spawn
+// Muzzle offset (along heading) shared by the charge-up orb (ChargingBulletRenderSystem) and the bullet spawn
 // (InputServerSystem), so the bolt continues exactly from where the orb was, not from the ship's center.
 inline constexpr float SHIP_MUZZLE_OFFSET = 2.0f;
 
@@ -208,9 +249,9 @@ public:
 
 class DestroyTimer : public IComponent {
 public:
-	int framesRemaining;
-	DestroyTimer() : framesRemaining(0) {}
-	DestroyTimer(int fr) : framesRemaining(fr) {}
+	float secondsRemaining; // render-side real time (not frames: same lifetime at any frame rate)
+	DestroyTimer() : secondsRemaining(0.0f) {}
+	DestroyTimer(float s) : secondsRemaining(s) {}
 };
 
 class JustDeathChecker : public IComponent {
@@ -248,13 +289,13 @@ public:
 
 // Tag: marks a mesh entity whose Material needs "uTime" refreshed every
 // render frame (fluid.vert/water.frag/lava.frag animation). See
-// FluidAnimationSystem in RenderSystems.hpp.
+// RenderSystems/FluidAnimationSystem.hpp.
 class FluidSurface : public IComponent {
 public:
 };
 
 // Tag for the game's status label (health/"REMAINING"/"YOU DIED"/winner) so CreateQuery<UIElement, UIText>() in
-// RenderSystems.hpp only matches it, and not other UIText such as the DebugOverlay label added by IECSGameRenderer::Init().
+// the render systems only matches it, and not other UIText such as the DebugOverlay label added by IECSGameRenderer::Init().
 class GameStatusText : public IComponent {
 public:
 };

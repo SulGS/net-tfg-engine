@@ -130,8 +130,21 @@ public:
             collider->SetOnCollisionEnter([&world](Entity self, Entity other, const CollisionInfo& info) {
                 Playable* p = world.GetEntityManager().GetComponent<Playable>(other);
 
-                if (!p) 
+                if (!p)
                 {
+                    // Only walls collide with bullets besides players. Announce it: clients have no colliders and
+                    // would otherwise keep drawing this bullet through the wall.
+                    ECSBullet* hitBullet = world.GetEntityManager().GetComponent<ECSBullet>(self);
+                    if (hitBullet)
+                    {
+                        EventEntry hitEvent;
+                        hitEvent.event.type = AsteroidEventMask::BULLET_HIT_WALL;
+                        BulletHitWallEventData hitData;
+                        hitData.bulletId = hitBullet->id;
+                        std::memcpy(hitEvent.event.data, &hitData, sizeof(BulletHitWallEventData));
+                        hitEvent.event.len = sizeof(BulletHitWallEventData);
+                        world.GetEvents().push_back(hitEvent);
+                    }
                     world.GetEntityManager().DestroyEntity(self);
                     return;
                 }
@@ -186,6 +199,25 @@ public:
         auto query = world.GetEntityManager().CreateQuery<Transform, ECSBullet>();
         for (auto [entity, transform, ecsb] : query) {
             if (ecsb->id == coll_ev.bulletId) {
+                world.GetEntityManager().DestroyEntity(entity);
+            }
+        }
+    }
+};
+
+class BulletHitWallHandler : public IEventHandler {
+public:
+    void Handle(const GameEventBlob& event, ECSWorld& world, bool isServer) override
+    {
+        // The server already destroyed it in the collision callback, and by now the id may belong to a new bullet
+        // spawned in this same batch: only clients act on it. Hit events precede that tick's spawns (CollisionSystem
+        // runs before InputServerSystem), so on clients a reused id's new bullet doesn't exist yet either.
+        if (isServer) return;
+
+        auto ev = *reinterpret_cast<const BulletHitWallEventData*>(event.data);
+        auto query = world.GetEntityManager().CreateQuery<ECSBullet>();
+        for (auto [entity, ecsb] : query) {
+            if (ecsb->id == ev.bulletId) {
                 world.GetEntityManager().DestroyEntity(entity);
             }
         }

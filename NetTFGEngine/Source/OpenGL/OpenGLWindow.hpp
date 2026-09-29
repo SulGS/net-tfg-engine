@@ -4,7 +4,11 @@
 #include "OpenGLIncludes.hpp"
 #include "OpenGL/Render pipeline/RenderSettings.hpp"
 #include <string>
+#include <vector>
+#include <utility>
 
+// The window is never resizable by the user: its size only comes from the settings. Windowed uses the chosen
+// window resolution; Borderless and Fullscreen always cover the monitor at its native resolution.
 class OpenGLWindow {
 public:
     OpenGLWindow(int width, int height, const std::string& title);
@@ -22,6 +26,15 @@ public:
 
     void       setWindowMode(WindowMode mode);
     WindowMode getWindowMode() const;
+
+    // Size used in Windowed mode (clamped to the monitor). Applied right away, re-centred, when already windowed;
+    // otherwise remembered for the next switch back to Windowed.
+    void setWindowedSize(int width, int height);
+
+    // Native resolution of the primary monitor: the fixed size of Borderless / Fullscreen.
+    static void getMonitorResolution(int& width, int& height);
+    // Distinct sizes the primary monitor supports (ascending, tiny legacy modes dropped); the windowed choices.
+    static std::vector<std::pair<int, int>> getAvailableResolutions();
 
     // glfwSwapInterval(1)/(0). Reasserted after setWindowMode() too, since
     // glfwSetWindowMonitor can recreate the swap chain (e.g. toggling
@@ -44,6 +57,7 @@ private:
     void initializeGLFW();
     void initializeGLEW();
     void setupOpenGL();
+    void centerWindowedPosition();
 
     GLFWwindow* window;
 
@@ -53,8 +67,8 @@ private:
     int logicalHeight;
     bool resized = false;
 
-    // Windowed position/size, remembered so leaving fullscreen restores it
-    // instead of guessing; refreshed just before entering fullscreen.
+    // Windowed position/size. The size is the window resolution setting; the position is remembered so leaving
+    // fullscreen puts the window back where it was (refreshed just before leaving Windowed).
     int windowedX = 0;
     int windowedY = 0;
     int windowedWidth = 0;

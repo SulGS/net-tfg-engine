@@ -263,7 +263,13 @@ void ParticleSystem::Init()
     m_dViewport = glGetUniformLocation(m_distShader, "uViewport");
 }
 
-// Update — simulate all emitters, fill staging buffers
+// Update — advance all emitters in fixed steps, then fill staging buffers
+//
+// Particles are simulated at a FIXED rate (kSimStep = 1/240 s), driven by the frame's real elapsed time, whatever the render frame
+// rate is. Stepping per frame made the result depend on the frame rate: short non-looping emitters (explosion layers)
+// only emit on the frames that fall inside `duration`, freshly spawned particles age a whole frame at once (short-lived
+// ones like the thrusters were visible for fewer frames), and turbulence is a per-step random impulse. 240 Hz is the
+// reference: at any frame rate you now get exactly what 240 FPS used to give.
 void ParticleSystem::Update(EntityManager& entityManager,
     std::vector<EventEntry>& /*events*/,
     bool isServer,
@@ -275,6 +281,12 @@ void ParticleSystem::Update(EntityManager& entityManager,
     // If Draw() is never called (e.g. emitter is culled), the buffer won't
     // grow without bound.
     for (auto& b : m_batches) b.data.clear();
+
+    // deltaTime is real elapsed time (IECSGameRenderer::NextRenderDeltaTime). Clamped again here so a caller passing
+    // something huge can't queue hundreds of steps.
+    m_simAccum += std::clamp(deltaTime, 0.0f, kMaxFrameDt);
+    int steps = static_cast<int>(m_simAccum / kSimStep);
+    m_simAccum -= static_cast<float>(steps) * kSimStep;
 
     auto query = entityManager.CreateQuery<ParticleEmitterComponent, Transform>();
 
@@ -290,12 +302,34 @@ void ParticleSystem::Update(EntityManager& entityManager,
 
         glm::vec3 worldDir = glm::normalize(glm::vec3(-model[2]));
 
-        SimulateEmitter(*emitter, worldPos, worldDir, uniformScale, deltaTime);
+        // First update of this emitter: no previous position to interpolate from (and Local space must not see a
+        // jump from the origin).
+        if (!emitter->hasFramePos) {
+            emitter->framePos = worldPos;
+            emitter->emitterLastPos = worldPos;
+            emitter->hasFramePos = true;
+        }
+
+        // Spread the frame's steps along the emitter's path, as if it had been rendered at 240 FPS: at low frame
+        // rates particles are laid out along the movement instead of piling up at the frame's end position.
+        const glm::vec3 prevPos = emitter->framePos;
+        for (int s = 0; s < steps && !emitter->done; ++s)
+        {
+            const float k = static_cast<float>(s + 1) / static_cast<float>(steps);
+            StepEmitter(*emitter, glm::mix(prevPos, worldPos, k), worldDir, uniformScale, kSimStep);
+        }
+        // Only once the path up to here has been stepped: a frame with no step (render faster than 240 FPS) keeps the
+        // older start so the next step still interpolates over the whole movement.
+        if (steps > 0)
+            emitter->framePos = worldPos;
 
         if (emitter->done)
         {
 			entityManager.DestroyEntity(entity);
+            continue;
         }
+
+        BuildStaging(*emitter);
     }
 }
 
@@ -437,7 +471,9 @@ void ParticleSystem::CopySceneColor(int w, int h)
     glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, w, h);
 }
 
-void ParticleSystem::SimulateEmitter(ParticleEmitterComponent& e,
+// One fixed simulation step (kSimStep): emission and physics only. BuildStaging() turns the result into GPU data
+// once per frame.
+void ParticleSystem::StepEmitter(ParticleEmitterComponent& e,
     const glm::vec3& emitterWorldPos,
     const glm::vec3& emitterWorldDir,
     float uniformScale,
@@ -486,18 +522,6 @@ void ParticleSystem::SimulateEmitter(ParticleEmitterComponent& e,
 
     e.aliveCount = 0;
 
-    // Batch is resolved once per emitter: sheet + blend mode decide the draw call.
-    const GLuint sheet = (!e.texture.empty() && !e.distortion) ? GetTexture(e.texture) : 0;
-    BatchKey key;
-    key.tex = sheet;
-    key.alphaMode = sheet ? static_cast<int>(e.flipbookAlpha) + 1 : 0;
-    key.additive = e.additiveBlend;
-    key.distortion = e.distortion;
-    auto& staging = GetBatch(key).data;
-
-    const int   flipTotal = (e.flipbookFrames > 0) ? e.flipbookFrames : std::max(1, e.flipbookCols * e.flipbookRows);
-    const bool  useRamp = e.colorRampCount > 0;
-
     for (int idx = 0; idx < static_cast<int>(e.pool.size()); ++idx)
     {
         Particle& p = e.pool[idx];
@@ -539,6 +563,39 @@ void ParticleSystem::SimulateEmitter(ParticleEmitterComponent& e,
         if (e.onUpdate) e.onUpdate(p, simDt);
 
         ++e.aliveCount;
+    }
+
+    // Record emitter position so Local-space particles can track it next step
+    e.emitterLastPos = emitterWorldPos;
+
+    // Mark done once a non-looping emitter has passed its duration and every
+    // particle has died.  Game logic can poll e.done to remove/recycle the entity.
+    if (!e.looping && !e.done
+        && activeTime > e.duration
+        && e.aliveCount == 0)
+    {
+        e.done = true;
+    }
+}
+
+// Packs the emitter's live particles into its batch's staging buffer; once per frame, after the fixed steps.
+void ParticleSystem::BuildStaging(ParticleEmitterComponent& e)
+{
+    // Batch is resolved once per emitter: sheet + blend mode decide the draw call.
+    const GLuint sheet = (!e.texture.empty() && !e.distortion) ? GetTexture(e.texture) : 0;
+    BatchKey key;
+    key.tex = sheet;
+    key.alphaMode = sheet ? static_cast<int>(e.flipbookAlpha) + 1 : 0;
+    key.additive = e.additiveBlend;
+    key.distortion = e.distortion;
+    auto& staging = GetBatch(key).data;
+
+    const int   flipTotal = (e.flipbookFrames > 0) ? e.flipbookFrames : std::max(1, e.flipbookCols * e.flipbookRows);
+    const bool  useRamp = e.colorRampCount > 0;
+
+    for (const Particle& p : e.pool)
+    {
+        if (!p.alive) continue;
 
         float     t = p.age / p.lifetime;
         glm::vec4 color = useRamp ? EvalColorRamp(e, t) : glm::mix(p.colorStart, p.colorEnd, t);
@@ -580,18 +637,6 @@ void ParticleSystem::SimulateEmitter(ParticleEmitterComponent& e,
             glm::vec4(e.stretch, paramY, rotation, t),
             flip
         });
-    }
-
-    // Record emitter position so Local-space particles can track it next frame
-    e.emitterLastPos = emitterWorldPos;
-
-    // Mark done once a non-looping emitter has passed its duration and every
-    // particle has died.  Game logic can poll e.done to remove/recycle the entity.
-    if (!e.looping && !e.done
-        && activeTime > e.duration
-        && e.aliveCount == 0)
-    {
-        e.done = true;
     }
 }
 

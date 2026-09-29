@@ -20,6 +20,18 @@ enum class QualityPreset
     Ultra
 };
 
+// How the final pass scales the render resolution image to the window when they differ.
+// Nearest: nearest-neighbour (blocky, pixel-exact), up or down.
+// Bilinear: plain bilinear sample (also what FSR1 falls back to when downscaling).
+// FSR1: AMD FidelityFX Super Resolution 1 (EASU upscale + RCAS sharpen), only when the render resolution is lower.
+// Explicit values: they are what render_settings.cfg stores ("upscaleMode"), so new modes go at the end.
+enum class UpscaleMode
+{
+    Bilinear = 0,
+    FSR1     = 1,
+    Nearest  = 2,
+};
+
 // Windowed: normal decorated window. Borderless: undecorated window sized to
 // cover the monitor (a.k.a. "borderless fullscreen"), keeps alt-tab fast.
 // Fullscreen: exclusive fullscreen via glfwSetWindowMonitor.
@@ -62,6 +74,34 @@ public:
     // applyPreset(), same reasoning as targetFPS above.
     void       setWindowMode(WindowMode v) { m_windowMode = v; }
     WindowMode getWindowMode() const { return m_windowMode; }
+
+    // RUNTIME — WINDOW: window resolution, only used in Windowed mode (Borderless/Fullscreen are always the
+    // monitor's native size). OpenGLWindow::setWindowedSize() applies it and clamps it to the monitor.
+    void setWindowResolution(int w, int h) { m_windowWidth = std::max(320, w); m_windowHeight = std::max(240, h); }
+    int  getWindowWidth()  const { return m_windowWidth; }
+    int  getWindowHeight() const { return m_windowHeight; }
+
+    // RUNTIME — RENDER RESOLUTION: height of the internal render targets; the width follows the window's aspect
+    // ratio so pixels stay square, and the final pass scales the image to the window. 0 = native (same as the
+    // window). Applied next frame by IECSGameRenderer (RenderSystem::Resize), no reinit needed.
+    void setRenderHeight(int v) { m_renderHeight = (v <= 0) ? 0 : std::clamp(v, 144, 4320); }
+    int  getRenderHeight() const { return m_renderHeight; }
+
+    // Internal render size for an output (window framebuffer) of outW x outH.
+    void computeRenderSize(int outW, int outH, int& renderW, int& renderH) const
+    {
+        if (m_renderHeight <= 0 || outW <= 0 || outH <= 0) { renderW = outW; renderH = outH; return; }
+        renderH = m_renderHeight;
+        renderW = std::max(1, static_cast<int>(static_cast<long long>(outW) * renderH / outH));
+    }
+
+    // RUNTIME — UPSCALING: filter that scales a lower render resolution up to the window (see UpscaleMode). Not part
+    // of applyPreset(), like the render resolution it goes with. Sharpness is RCAS's: 0 = none .. 1 = maximum.
+    void        setUpscaleMode(UpscaleMode v) { m_upscaleMode = v; }
+    UpscaleMode getUpscaleMode() const { return m_upscaleMode; }
+
+    void  setFSRSharpness(float v) { m_fsrSharpness = std::clamp(v, 0.0f, 1.0f); }
+    float getFSRSharpness() const { return m_fsrSharpness; }
 
     // RUNTIME — WINDOW: same as above; OpenGLWindow applies it via
     // setVSync(). Off by default so the targetFPS pacer above is the only
@@ -181,6 +221,64 @@ public:
     void  setFXAAEdgeThresholdMin(float v) { m_fxaaEdgeThresholdMin = v; }
     float getFXAAEdgeThresholdMin()    const { return m_fxaaEdgeThresholdMin; }
 
+    // RUNTIME — SSAO: computed from the GBuffer right after GBufferPass and multiplied into the lighting like the
+    // material AO map (emissive untouched). Radius is in world units; samples is clamped to the kernel size (64).
+    void setSSAOEnabled(bool v) { m_ssaoEnabled = v; }
+    bool getSSAOEnabled()        const { return m_ssaoEnabled; }
+
+    void setSSAOSamples(int v) { m_ssaoSamples = std::clamp(v, 4, 64); }
+    int  getSSAOSamples()        const { return m_ssaoSamples; }
+
+    void  setSSAORadius(float v) { m_ssaoRadius = v; }
+    float getSSAORadius()        const { return m_ssaoRadius; }
+
+    void  setSSAOBias(float v) { m_ssaoBias = v; }
+    float getSSAOBias()          const { return m_ssaoBias; }
+
+    void  setSSAOIntensity(float v) { m_ssaoIntensity = v; }
+    float getSSAOIntensity()     const { return m_ssaoIntensity; }
+
+    // Resolution divisor of the SSAO targets relative to the render resolution: 1 = full, 2 = half, 4 = quarter.
+    // Applied next frame (RenderSystem recreates the screen-space targets), no reinit needed.
+    void setSSAOResolutionScale(int v) { m_ssaoResolutionScale = ClampScreenSpaceScale(v); }
+    int  getSSAOResolutionScale() const { return m_ssaoResolutionScale; }
+
+    // RUNTIME — SSR: view-space ray march against the GBuffer depth, added on top of the shaded HDR scene before the
+    // particles. maxDistance/thickness are in world units; surfaces rougher than maxRoughness get no reflection.
+    void setSSREnabled(bool v) { m_ssrEnabled = v; }
+    bool getSSREnabled()         const { return m_ssrEnabled; }
+
+    void setSSRSteps(int v) { m_ssrSteps = std::clamp(v, 8, 256); }
+    int  getSSRSteps()           const { return m_ssrSteps; }
+
+    // Resolution divisor of the SSR trace (and its scene copy), same meaning as the SSAO one.
+    void setSSRResolutionScale(int v) { m_ssrResolutionScale = ClampScreenSpaceScale(v); }
+    int  getSSRResolutionScale() const { return m_ssrResolutionScale; }
+
+    void  setSSRMaxDistance(float v) { m_ssrMaxDistance = v; }
+    float getSSRMaxDistance()    const { return m_ssrMaxDistance; }
+
+    void  setSSRThickness(float v) { m_ssrThickness = v; }
+    float getSSRThickness()      const { return m_ssrThickness; }
+
+    void  setSSRMaxRoughness(float v) { m_ssrMaxRoughness = v; }
+    float getSSRMaxRoughness()   const { return m_ssrMaxRoughness; }
+
+    void  setSSRIntensity(float v) { m_ssrIntensity = v; }
+    float getSSRIntensity()      const { return m_ssrIntensity; }
+
+    // RUNTIME — MOTION BLUR: camera + per-object, reconstructed from a velocity buffer (McGuire-style tile/neighbour
+    // max, so blur spills past silhouettes). Strength is the shutter time as a fraction of a 1/60 s frame (0.5 = the
+    // classic 180° shutter at 60 FPS); the blur length is independent of the actual frame rate. Samples per pixel.
+    void setMotionBlurEnabled(bool v) { m_motionBlurEnabled = v; }
+    bool getMotionBlurEnabled()        const { return m_motionBlurEnabled; }
+
+    void  setMotionBlurStrength(float v) { m_motionBlurStrength = std::max(0.0f, v); }
+    float getMotionBlurStrength()      const { return m_motionBlurStrength; }
+
+    void setMotionBlurSamples(int v) { m_motionBlurSamples = std::clamp(v, 4, 32); }
+    int  getMotionBlurSamples()        const { return m_motionBlurSamples; }
+
     // PERSISTENCE: render_settings.cfg holds every field (normal load/save path); render_quality.cfg holds just the preset index as a fallback when the other is missing. Loading is automatic in the constructor, on first use of the singleton.
 
     // Reads render_settings.cfg. Returns false when it is missing, empty,
@@ -241,6 +339,14 @@ public:
             {
                 if (i >= 0 && i <= 2) setWindowMode(static_cast<WindowMode>(i));
             }
+            else if (k == "windowWidth")          setWindowResolution(i, m_windowHeight);
+            else if (k == "windowHeight")         setWindowResolution(m_windowWidth, i);
+            else if (k == "renderHeight")         setRenderHeight(i);
+            else if (k == "upscaleMode")
+            {
+                if (i >= 0 && i <= static_cast<int>(UpscaleMode::Nearest)) setUpscaleMode(static_cast<UpscaleMode>(i));
+            }
+            else if (k == "fsrSharpness")         setFSRSharpness(v);
             else if (k == "vsync")                setVsyncEnabled(b);
             else if (k == "debugMode")            setDebugModeEnabled(b);
             else if (k == "maxLights")            setMaxLights(i);
@@ -281,6 +387,25 @@ public:
             else if (k == "fxaaEdgeThreshold")    setFXAAEdgeThreshold(v);
             else if (k == "fxaaEdgeThresholdMin") setFXAAEdgeThresholdMin(v);
 
+            else if (k == "ssao")                 setSSAOEnabled(b);
+            else if (k == "ssaoSamples")          setSSAOSamples(i);
+            else if (k == "ssaoResolutionScale")  setSSAOResolutionScale(i);
+            else if (k == "ssaoRadius")           setSSAORadius(v);
+            else if (k == "ssaoBias")             setSSAOBias(v);
+            else if (k == "ssaoIntensity")        setSSAOIntensity(v);
+
+            else if (k == "ssr")                  setSSREnabled(b);
+            else if (k == "ssrSteps")             setSSRSteps(i);
+            else if (k == "ssrResolutionScale")   setSSRResolutionScale(i);
+            else if (k == "ssrMaxDistance")       setSSRMaxDistance(v);
+            else if (k == "ssrThickness")         setSSRThickness(v);
+            else if (k == "ssrMaxRoughness")      setSSRMaxRoughness(v);
+            else if (k == "ssrIntensity")         setSSRIntensity(v);
+
+            else if (k == "motionBlur")           setMotionBlurEnabled(b);
+            else if (k == "motionBlurStrength")   setMotionBlurStrength(v);
+            else if (k == "motionBlurSamples")    setMotionBlurSamples(i);
+
             else continue;                 // unknown key: ignored on purpose,
             // so an older or newer file still
             // loads instead of being rejected
@@ -305,6 +430,11 @@ public:
 
         f << "targetFPS " << m_targetFPS << "\n";
         f << "windowMode " << static_cast<int>(m_windowMode) << "\n";
+        f << "windowWidth " << m_windowWidth << "\n";
+        f << "windowHeight " << m_windowHeight << "\n";
+        f << "renderHeight " << m_renderHeight << "\n";
+        f << "upscaleMode " << static_cast<int>(m_upscaleMode) << "\n";
+        f << "fsrSharpness " << m_fsrSharpness << "\n";
         f << "vsync " << (m_vsyncEnabled ? 1 : 0) << "\n";
         f << "debugMode " << (m_debugModeEnabled ? 1 : 0) << "\n";
 
@@ -345,6 +475,25 @@ public:
         f << "fxaaSubpix " << m_fxaaSubpix << "\n";
         f << "fxaaEdgeThreshold " << m_fxaaEdgeThreshold << "\n";
         f << "fxaaEdgeThresholdMin " << m_fxaaEdgeThresholdMin << "\n";
+
+        f << "ssao " << (m_ssaoEnabled ? 1 : 0) << "\n";
+        f << "ssaoSamples " << m_ssaoSamples << "\n";
+        f << "ssaoResolutionScale " << m_ssaoResolutionScale << "\n";
+        f << "ssaoRadius " << m_ssaoRadius << "\n";
+        f << "ssaoBias " << m_ssaoBias << "\n";
+        f << "ssaoIntensity " << m_ssaoIntensity << "\n";
+
+        f << "ssr " << (m_ssrEnabled ? 1 : 0) << "\n";
+        f << "ssrSteps " << m_ssrSteps << "\n";
+        f << "ssrResolutionScale " << m_ssrResolutionScale << "\n";
+        f << "ssrMaxDistance " << m_ssrMaxDistance << "\n";
+        f << "ssrThickness " << m_ssrThickness << "\n";
+        f << "ssrMaxRoughness " << m_ssrMaxRoughness << "\n";
+        f << "ssrIntensity " << m_ssrIntensity << "\n";
+
+        f << "motionBlur " << (m_motionBlurEnabled ? 1 : 0) << "\n";
+        f << "motionBlurStrength " << m_motionBlurStrength << "\n";
+        f << "motionBlurSamples " << m_motionBlurSamples << "\n";
 
         f.flush();
         return f.good();
@@ -439,6 +588,9 @@ private:
             m_gamma = 2.2f;
             m_bloomEnabled = false;
             m_fxaaEnabled = false;
+            m_ssaoEnabled = false;
+            m_ssrEnabled = false;
+            applyScreenSpaceDefaults(16, 4, 32, 4, false, 8);
             break;
 
         case QualityPreset::Low:
@@ -464,6 +616,9 @@ private:
             m_gamma = 2.2f;
             m_bloomEnabled = false;
             m_fxaaEnabled = true;
+            m_ssaoEnabled = false;
+            m_ssrEnabled = false;
+            applyScreenSpaceDefaults(16, 4, 32, 4, false, 8);
             break;
 
         case QualityPreset::Medium:
@@ -499,6 +654,9 @@ private:
             m_bloomStrength = 0.5f;
             m_bloomPasses = 3;
             m_fxaaEnabled = true;
+            m_ssaoEnabled = true;
+            m_ssrEnabled = false;
+            applyScreenSpaceDefaults(16, 2, 32, 4, false, 8);
             break;
 
         case QualityPreset::High:
@@ -534,6 +692,9 @@ private:
             m_bloomStrength = 0.25f;
             m_bloomPasses = 5;
             m_fxaaEnabled = true;
+            m_ssaoEnabled = true;
+            m_ssrEnabled = true;
+            applyScreenSpaceDefaults(32, 2, 48, 2, true, 12);
             break;
 
         case QualityPreset::Ultra:
@@ -570,8 +731,35 @@ private:
             m_bloomStrength = 0.25f;
             m_bloomPasses = 8;
             m_fxaaEnabled = true;
+            m_ssaoEnabled = true;
+            m_ssrEnabled = true;
+            applyScreenSpaceDefaults(64, 1, 96, 1, true, 16);
             break;
         }
+    }
+
+    // Screen-space resolution divisors: only 1, 2 or 4 (anything in between snaps down).
+    static int ClampScreenSpaceScale(int v) { return v >= 4 ? 4 : (v >= 2 ? 2 : 1); }
+
+    // SSAO/SSR/motion blur tuning shared by every preset; only the sample/step counts, the SSAO/SSR resolution
+    // divisors (and whether motion blur is on) scale with quality.
+    void applyScreenSpaceDefaults(int ssaoSamples, int ssaoScale, int ssrSteps, int ssrScale,
+                                  bool motionBlur, int motionBlurSamples)
+    {
+        m_ssaoResolutionScale = ClampScreenSpaceScale(ssaoScale);
+        m_ssrResolutionScale = ClampScreenSpaceScale(ssrScale);
+        m_motionBlurEnabled = motionBlur;
+        m_motionBlurSamples = motionBlurSamples;
+        m_motionBlurStrength = 0.5f;
+        m_ssaoSamples = ssaoSamples;
+        m_ssaoRadius = 1.5f;
+        m_ssaoBias = 0.05f;
+        m_ssaoIntensity = 1.5f;
+        m_ssrSteps = ssrSteps;
+        m_ssrMaxDistance = 60.0f;
+        m_ssrThickness = 1.5f;
+        m_ssrMaxRoughness = 0.6f;
+        m_ssrIntensity = 1.0f;
     }
 
     // Quality preset
@@ -584,6 +772,11 @@ private:
 
     // Window
     WindowMode m_windowMode = WindowMode::Windowed;
+    int        m_windowWidth = 1280;
+    int        m_windowHeight = 720;
+    int        m_renderHeight = 0;   // 0 = native
+    UpscaleMode m_upscaleMode = UpscaleMode::FSR1;
+    float       m_fsrSharpness = 0.8f;
     bool       m_vsyncEnabled = false;
 
     // Debug overlay (FPS / network latency)
@@ -632,4 +825,26 @@ private:
     float m_fxaaSubpix = 0.75f;
     float m_fxaaEdgeThreshold = 0.125f;
     float m_fxaaEdgeThresholdMin = 0.0833f;
+
+    // SSAO
+    bool  m_ssaoEnabled = true;
+    int   m_ssaoSamples = 32;
+    int   m_ssaoResolutionScale = 2;
+    float m_ssaoRadius = 1.5f;
+    float m_ssaoBias = 0.05f;
+    float m_ssaoIntensity = 1.5f;
+
+    // SSR
+    bool  m_ssrEnabled = true;
+    int   m_ssrSteps = 48;
+    int   m_ssrResolutionScale = 2;
+    float m_ssrMaxDistance = 60.0f;
+    float m_ssrThickness = 1.5f;
+    float m_ssrMaxRoughness = 0.6f;
+    float m_ssrIntensity = 1.0f;
+
+    // Motion blur
+    bool  m_motionBlurEnabled = true;
+    float m_motionBlurStrength = 0.5f;
+    int   m_motionBlurSamples = 12;
 };
