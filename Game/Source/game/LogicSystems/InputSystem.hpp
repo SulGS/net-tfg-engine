@@ -41,15 +41,27 @@ public:
 
             bool notRotating = !(m & INPUT_LEFT) && !(m & INPUT_RIGHT);
 
+            // Analog intensity (InputMask.hpp): 1.0 exactly for keys, so keyboard play is unchanged. A half-pushed
+            // stick turns at half the rate and banks half as far (leaning back toward that bank if it was deeper).
+            const float leftScale = DecodeInputIntensity(input.data[INPUT_BYTE_LEFT]);
+            const float rightScale = DecodeInputIntensity(input.data[INPUT_BYTE_RIGHT]);
+            const float thrustScale = DecodeInputIntensity(input.data[INPUT_BYTE_THRUST]);
+
             if (m & INPUT_LEFT)
             {
-                ship->angularVel += ROT_THRUST;
-                ship->shipInclination = std::min(ship->shipInclination + 5, 40);
+                ship->angularVel += ROT_THRUST * leftScale;
+                const int bank = static_cast<int>(std::lround(40.0f * leftScale));
+                ship->shipInclination = (ship->shipInclination < bank)
+                    ? std::min(ship->shipInclination + 5, bank)
+                    : std::max(ship->shipInclination - 3, bank);
             }
             if (m & INPUT_RIGHT)
             {
-                ship->angularVel -= ROT_THRUST;
-                ship->shipInclination = std::max(ship->shipInclination - 5, -40);
+                ship->angularVel -= ROT_THRUST * rightScale;
+                const int bank = -static_cast<int>(std::lround(40.0f * rightScale));
+                ship->shipInclination = (ship->shipInclination > bank)
+                    ? std::max(ship->shipInclination - 5, bank)
+                    : std::min(ship->shipInclination + 3, bank);
             }
             if (notRotating)
             {
@@ -78,8 +90,8 @@ public:
 
             if (m & INPUT_TOP)
             {
-                ship->velX += fwdX * THRUST;
-                ship->velY += fwdY * THRUST;
+                ship->velX += fwdX * THRUST * thrustScale;
+                ship->velY += fwdY * THRUST * thrustScale;
                 ship->isMovingForward = true;
             }
             else

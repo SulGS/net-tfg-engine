@@ -17,7 +17,7 @@ public:
             if (checker->exitPressed)
             {
                 switchRequested_ = true;
-                Debug::Info("Asteroids") << "Exit button pressed, switching back to lobby...\n";
+                Debug::Info("Asteroids") << "Exit requested from the pause menu, switching back to lobby...\n";
                 // Deactivate 1 FIRST, then activate 0 — handled atomically by the engine loop
                 NetTFG_Engine::Get().ActivateClientAsync(0,
                     [](int id, ConnectionCode code) {

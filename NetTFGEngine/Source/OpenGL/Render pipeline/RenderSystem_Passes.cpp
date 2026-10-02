@@ -1,4 +1,4 @@
-﻿#include "RenderSystem.hpp"
+#include "RenderSystem.hpp"
 #include <glm/gtc/matrix_transform.hpp>
 #include <cstdint>
 #include <cstdlib>
@@ -20,6 +20,9 @@
 #elif defined(__GNUC__)
     #pragma GCC diagnostic pop
 #endif
+
+// NIS SDK, CPU side: NISConfig / NVScalerUpdateConfig (the shader constants).
+#include "NIS_SDK/NIS_Config.h"
 
 void RenderSystem::GBufferPass(EntityManager::Query<MeshComponent, Transform>& meshQuery,
     const glm::mat4& view, const glm::mat4& projection)
@@ -113,6 +116,18 @@ void RenderSystem::LinearDepthPass(const glm::mat4& projection, GLuint fbo, int 
 
 // Reduced-res raw AO into m_ssaoTex, then the depth-aware blur into m_ssaoBlurTex (what ShadingPass samples, bilinear).
 // Disabled: the blurred target is just cleared to 1.0 so the materials' multiply becomes a no-op.
+void RenderSystem::ClearSSAO()
+{
+    glBindFramebuffer(GL_FRAMEBUFFER, m_ssaoBlurFBO);
+    glViewport(0, 0, m_ssaoW, m_ssaoH);
+    glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glViewport(0, 0, m_screenW, m_screenH);
+    glEnable(GL_DEPTH_TEST);
+}
+
 void RenderSystem::SSAOPass(const glm::mat4& projection)
 {
     const auto& rs = RenderSettings::instance();
@@ -122,13 +137,7 @@ void RenderSystem::SSAOPass(const glm::mat4& projection)
     glDisable(GL_BLEND);
 
     if (!rs.getSSAOEnabled()) {
-        glBindFramebuffer(GL_FRAMEBUFFER, m_ssaoBlurFBO);
-        glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
-        glClear(GL_COLOR_BUFFER_BIT);
-        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glViewport(0, 0, m_screenW, m_screenH);
-        glEnable(GL_DEPTH_TEST);
+        ClearSSAO();
         return;
     }
 
@@ -864,18 +873,23 @@ void RenderSystem::FXAAPass(GLuint targetFBO, int targetW, int targetH)
 }
 
 // At native resolution there is nothing to scale, so every mode is the plain Bilinear path (no extra targets). FSR
-// only upscales (EASU is a 1x-4x area filter): at a higher render resolution it falls back to Bilinear; Nearest works
-// both ways.
+// only upscales (EASU is a 1x-4x area filter): at a higher render resolution it falls back to Bilinear; NIS too, and
+// also past 2x per axis (NVScalerUpdateConfig rejects it); Nearest works both ways.
 UpscaleMode RenderSystem::ActiveUpscaleMode() const
 {
     if (m_screenW == m_outputW && m_screenH == m_outputH) return UpscaleMode::Bilinear;
 
+    const bool upscaling = m_screenW <= m_outputW && m_screenH <= m_outputH;
     switch (RenderSettings::instance().getUpscaleMode()) {
     case UpscaleMode::Nearest:
         return UpscaleMode::Nearest;
     case UpscaleMode::FSR1:
-        if (m_fsrEasuShader && m_fsrRcasShader && m_screenW <= m_outputW && m_screenH <= m_outputH)
+        if (m_fsrEasuShader && m_fsrRcasShader && upscaling)
             return UpscaleMode::FSR1;
+        return UpscaleMode::Bilinear;
+    case UpscaleMode::NIS:
+        if (m_nisShader && upscaling && m_screenW * 2 >= m_outputW && m_screenH * 2 >= m_outputH)
+            return UpscaleMode::NIS;
         return UpscaleMode::Bilinear;
     default:
         return UpscaleMode::Bilinear;
@@ -922,7 +936,7 @@ void RenderSystem::FSRPass(GLuint inputTex)
         static_cast<AF1>(m_screenW), static_cast<AF1>(m_screenH),   // input texture size
         static_cast<AF1>(m_outputW), static_cast<AF1>(m_outputH));  // output size
 
-    glBindFramebuffer(GL_FRAMEBUFFER, m_fsrEasuFBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, m_upscaleOutFBO);
     glViewport(0, 0, m_outputW, m_outputH);
     glUseProgram(m_fsrEasuShader);
     glActiveTexture(GL_TEXTURE0);
@@ -943,11 +957,57 @@ void RenderSystem::FSRPass(GLuint inputTex)
     glViewport(0, 0, m_outputW, m_outputH);
     glUseProgram(m_fsrRcasShader);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, m_fsrEasuTex);
+    glBindTexture(GL_TEXTURE_2D, m_upscaleOutTex);
     glUniform1i(glGetUniformLocation(m_fsrRcasShader, "uInput"), 0);
     glUniform4uiv(glGetUniformLocation(m_fsrRcasShader, "uCon"), 1, rcasCon);
     glDrawArrays(GL_TRIANGLES, 0, 3);
 
     glBindVertexArray(0);
     glEnable(GL_DEPTH_TEST);
+}
+
+// NVIDIA Image Scaling: one NVScaler dispatch scales and sharpens inputTex (render resolution, tonemapped and
+// anti-aliased, display space as the SDK asks) into the upscale output target, then an exact copy puts it in the
+// window. One work group per NIS_BLOCK_WIDTH x NIS_BLOCK_HEIGHT output block; stores past the edge are dropped by GL.
+// Leaves the viewport at the output size for the UI drawn afterwards.
+void RenderSystem::NISPass(GLuint inputTex)
+{
+    NISConfig config{};
+    if (!NVScalerUpdateConfig(config, RenderSettings::instance().getNISSharpness(),
+            0, 0, m_screenW, m_screenH, m_screenW, m_screenH,     // input viewport: all of it
+            0, 0, m_outputW, m_outputH, m_outputW, m_outputH)) {  // output viewport: all of it
+        // Out of NIS's 1x-2x range (ActiveUpscaleMode already filters it): plain bilinear instead.
+        CopyPass(inputTex, 0, m_outputW, m_outputH, false);
+        return;
+    }
+
+    glBindBuffer(GL_UNIFORM_BUFFER, m_nisConfigUBO);
+    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(NISConfig), &config);
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
+    glBindBufferBase(GL_UNIFORM_BUFFER, 3, m_nisConfigUBO);
+
+    glUseProgram(m_nisShader);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, inputTex);
+    glBindSampler(0, m_nisSampler);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, m_nisCoefScaleTex);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, m_nisCoefUsmTex);
+    glBindImageTexture(0, m_upscaleOutTex, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+
+    glDispatchCompute((m_outputW + m_nisBlockW - 1) / m_nisBlockW, (m_outputH + m_nisBlockH - 1) / m_nisBlockH, 1);
+
+    // The copy below samples what the image stores wrote.
+    glMemoryBarrier(GL_TEXTURE_FETCH_BARRIER_BIT);
+
+    glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+    glBindSampler(0, 0);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glActiveTexture(GL_TEXTURE0);
+
+    CopyPass(m_upscaleOutTex, 0, m_outputW, m_outputH, false);
 }

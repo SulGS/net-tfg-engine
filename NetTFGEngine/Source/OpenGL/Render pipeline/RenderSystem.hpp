@@ -1,4 +1,4 @@
-﻿#ifndef RENDER_SYSTEM_HPP
+#ifndef RENDER_SYSTEM_HPP
 #define RENDER_SYSTEM_HPP
 
 #include "ecs/ecs.hpp"
@@ -45,7 +45,7 @@ struct GPUShadowData {
 using MeshQuery = decltype(
     std::declval<EntityManager>().CreateQuery<MeshComponent, Transform>());
 
-// Per-frame pipeline: [GBufferPass → LinearDepthPass, only if SSAO or SSR is on] → SSAOPass → CollectLightsPass → ShadowPass → DirShadowPass → ShadingPass → AdditivePass → SSRPass → particles → MotionBlurPass → BloomPass → TonemapPass → FXAAPass [→ CopyPass (nearest) or FSRPass, per the upscale mode].
+// Per-frame pipeline: [GBufferPass → LinearDepthPass, only if SSAO or SSR is on] → SSAOPass → CollectLightsPass → ShadowPass → DirShadowPass → ShadingPass → AdditivePass → SSRPass → particles → MotionBlurPass → BloomPass → TonemapPass → FXAAPass [→ CopyPass (nearest), FSRPass or NISPass, per the upscale mode].
 class RenderSystem : public ISystem {
 public:
 
@@ -67,8 +67,12 @@ public:
 
     ~RenderSystem();
 
-    void DumpBuffers() const;
+    // Every render target into Render/<timestamp>/ (or dumpDir if given). Must run after a frame, before the swap.
+    void DumpBuffers(std::string dumpDir = {}) const;
+    // Next Update() saves the frame after each pass (stage_NN_*.png) and then DumpBuffers(), all in one folder.
     void RequestDebugDump() { m_debugDumpRequested = true; }
+    // Next Update() saves only the finished frame (no UI, which is drawn after) as Render/<timestamp>.png.
+    void RequestFinalFrameDump() { m_finalDumpRequested = true; }
 
     void SetParticleSystem(ParticleSystem* ps) { m_particleSystem = ps; }
 
@@ -182,7 +186,19 @@ private:
     GLuint m_quadVBO = 0;
 
     mutable std::atomic<bool> m_debugDumpRequested{ false };
+    std::atomic<bool>         m_finalDumpRequested{ false };
+    void DumpFinalFrame() const;
 
+    // Per-stage dump of the frame being rendered: folder for this frame (empty = not dumping) and next stage number.
+    // HDRBloom: tex (HDR scene) + m_bloomPingTex * bloom strength, the sum the tonemap shader makes and never stores.
+    enum class StageImage { HDR, HDRBloom, LDR, Window, Grey, Normals, Depth };
+    std::string m_stageDumpDir;
+    int         m_stageDumpIndex = 0;
+    static std::string MakeDumpDir();
+    static std::string DumpTimestamp();
+    // Saves tex (w x h, read as `kind`) as stage_NN_<name>.png when a stage dump is active. Restores the GL bindings it
+    // touches, so it can run between passes. Window reads the default framebuffer's back buffer at the output size.
+    void DumpStage(const char* name, StageImage kind, GLuint tex = 0, int w = 0, int h = 0);
     // Bloom resources
     GLuint m_bloomThreshFBO = 0;
     GLuint m_bloomThreshTex = 0;
@@ -195,16 +211,26 @@ private:
     GLuint m_ldrFBO = 0;
     GLuint m_ldrTex = 0;
 
-    // Scaling targets for the Nearest and FSR 1 modes (Bilinear needs none). Created on first use and recreated
+    // Scaling targets for the Nearest, FSR 1 and NIS modes (Bilinear needs none). Created on first use and recreated
     // whenever the render or output size changes, so they cost nothing in Bilinear. Pre-scale: FXAA's output at render
-    // resolution (anti-aliasing must run before the scale); EASU (FSR only): the upscaled image at output resolution,
-    // which RCAS sharpens into the window.
+    // resolution (anti-aliasing must run before the scale); upscale output (FSR/NIS only): the upscaled image at output
+    // resolution, which RCAS sharpens into the window (FSR) or which is copied to it (NIS writes it as an image, and
+    // the window can't be one).
     GLuint m_preScaleFBO = 0;
     GLuint m_preScaleTex = 0;
     int    m_preScaleW = 0, m_preScaleH = 0;
-    GLuint m_fsrEasuFBO = 0;
-    GLuint m_fsrEasuTex = 0;
-    int    m_fsrEasuW = 0, m_fsrEasuH = 0;
+    GLuint m_upscaleOutFBO = 0;
+    GLuint m_upscaleOutTex = 0;
+    int    m_upscaleOutW = 0, m_upscaleOutH = 0;
+
+    // NVIDIA Image Scaling: coefficient tables (RGBA32F, 2 x 64: 8 taps per phase), constants UBO (NISConfig) and a
+    // linear/clamp sampler object for the input, whatever filter its texture has. Block size follows the GPU vendor
+    // (NISOptimizer); it is baked into the shader, so it's picked in CompileNISShader.
+    GLuint m_nisCoefScaleTex = 0;
+    GLuint m_nisCoefUsmTex = 0;
+    GLuint m_nisConfigUBO = 0;
+    GLuint m_nisSampler = 0;
+    int    m_nisBlockW = 32, m_nisBlockH = 24;
 
     // Shader programs
     GLuint m_gbufferShader = 0;
@@ -224,6 +250,7 @@ private:
     GLuint m_mbGatherShader = 0;
     GLuint m_fsrEasuShader = 0;
     GLuint m_fsrRcasShader = 0;
+    GLuint m_nisShader = 0;    // compute
     GLuint m_copyShader = 0;   // final copy to the window without FXAA / Nearest scaling (see CompileCopyShader)
 
     // Initialisation helpers
@@ -239,8 +266,9 @@ private:
     void InitScreenSpace(); // reduced-res linear depth + SSAO + SSR targets (at the settings' scales), motion blur
     void DeleteScreenSpace();
     void InitScreenQuad();
-    // (Re)creates the pre-scale target, and the EASU one if withEasu, when missing or the render/output size changed.
-    void EnsureScaleTargets(bool withEasu);
+    // (Re)creates the pre-scale target, and the upscale output one if withOutput, when missing or the render/output
+    // size changed.
+    void EnsureScaleTargets(bool withOutput);
     void DeleteScaleTargets();
 
     void ResolveMSAA();
@@ -259,6 +287,8 @@ private:
     void CompileSSRShader();
     void CompileMotionBlurShaders();
     void CompileFSRShaders();
+    void CompileNISShader();   // also the coefficient textures, UBO and sampler it uses
+    void DeleteNIS();
     void CompileCopyShader();
 
     // Per-frame passes
@@ -269,6 +299,8 @@ private:
     // View-space Z of every scale-th pixel into fbo (w x h).
     void LinearDepthPass(const glm::mat4& projection, GLuint fbo, int w, int h, int scale);
     void SSAOPass(const glm::mat4& projection);
+    // Fills the blurred AO target with 1.0 (no occlusion), what the shading pass reads when SSAO is off.
+    void ClearSSAO();
     void SSRPass(const glm::mat4& projection);
     void MotionBlurPass(const glm::mat4& viewProjection, float deltaTime);
     void CollectLightsPass(EntityManager& em);  // also handles directional light
@@ -288,8 +320,11 @@ private:
     void FXAAPass(GLuint targetFBO, int targetW, int targetH);
     // EASU (render -> output resolution) then RCAS into the window. Replaces the bilinear scale in FXAAPass.
     void FSRPass(GLuint inputTex);
-    // Upscale mode actually used this frame: the setting, except FSR1 falls back to Bilinear when it can't apply
-    // (native or higher render resolution, shaders failed) and nothing but Bilinear is needed at native resolution.
+    // NVScaler compute pass (render -> output resolution) into the upscale output target, then a copy into the window.
+    void NISPass(GLuint inputTex);
+    // Upscale mode actually used this frame: the setting, except FSR1/NIS fall back to Bilinear when they can't apply
+    // (native or higher render resolution, beyond 2x for NIS, shaders failed) and nothing but Bilinear is needed at
+    // native resolution.
     UpscaleMode ActiveUpscaleMode() const;
 };
 

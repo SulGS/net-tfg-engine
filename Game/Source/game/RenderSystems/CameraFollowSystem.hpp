@@ -8,8 +8,9 @@
 #include "ecs/UI/UIButton.hpp"
 #include "ecs/UI/UIElement.hpp"
 #include "ecs/UI/UIText.hpp"
-#include "Utils/Input.hpp"
+#include "Utils/InputMap.hpp"
 #include "../Components.hpp"
+#include "../GameActions.hpp"
 #include "GameResult.hpp"
 
 class CameraFollowSystem : public ISystem
@@ -24,13 +25,6 @@ public:
         float deltaTime
     ) override
     {
-        auto buttonQuery = entityManager.CreateQuery<UIElement, UIButton, ExitButtonChecker>();
-
-        for (auto [entity, element, button, exitChecker] : buttonQuery)
-        {
-            element->isVisible = false;
-        }
-
         auto camQuery = entityManager.CreateQuery<Camera, Transform>();
         if (camQuery.Count() == 0)
             return;
@@ -85,13 +79,6 @@ public:
                     element->pivot = glm::vec2(0.5f);
                     text->text = "PLAYER " + std::to_string(winnerId + 1) + " WINS";
                 }
-
-				auto buttonQuery = entityManager.CreateQuery<UIElement, UIButton, ExitButtonChecker>();
-
-				for (auto [entity, element, button, exitChecker] : buttonQuery)
-				{
-					element->isVisible = true;
-				}
             }
 
             float zoom = 0.6f;
@@ -155,11 +142,10 @@ public:
                         spectator = entityManager.AddComponent<SpectatorState>(entity, newState);
                     }
 
-                    // Cycle target with LEFT / RIGHT arrow keys — read hardware
-                    // directly here since this is renderer-only local state and
-                    // must never touch the networked input blob.
-                    bool leftNow = Input::KeyPressed(Input::ArrowLeft);
-                    bool rightNow = Input::KeyPressed(Input::ArrowRight);
+                    // Cycle target with the Spectate actions (arrows / bumpers by default). Renderer-only local
+                    // state: it must never touch the networked input blob.
+                    bool leftNow = InputMap::Get().Pressed(GameAction::SpectatePrev);
+                    bool rightNow = InputMap::Get().Pressed(GameAction::SpectateNext);
 
                     auto cycleTarget = [&](int direction)
                         {

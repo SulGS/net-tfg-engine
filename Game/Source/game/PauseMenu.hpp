@@ -5,10 +5,11 @@
 #include "ecs/UI/UIElement.hpp"
 #include "ecs/UI/UIImage.hpp"
 #include "ecs/UI/UIText.hpp"
-#include "Utils/Input.hpp"
+#include "Utils/InputMap.hpp"
 #include "Components.hpp"
+#include "GameActions.hpp"
 
-// In-match "exit?" menu, toggled with Escape. Render world only: the match keeps running
+// In-match "exit?" menu, toggled with the Pause action (Esc / Start). Render world only: the match keeps running
 // underneath (it's online), the menu just offers going back to the main menu.
 
 // State of the menu; one instance, on the panel entity.
@@ -26,11 +27,22 @@ class PauseMenuItem : public IComponent {
 class PauseMenuSystem : public ISystem {
 public:
     void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
+        InputMap& input = InputMap::Get();
         auto stateQuery = entityManager.CreateQuery<PauseMenuState>();
         for (auto [entity, state] : stateQuery) {
-            if (Input::KeyTapped(Input::Escape)) {
+            // Pause (Esc / Start) toggles it; UI Back (B, or Esc again) also closes it. Esc is both: the else keeps
+            // it from opening and closing the menu in the same frame.
+            const bool wasVisible = state->visible;
+            if (input.Tapped(GameAction::Pause)) {
                 state->visible = !state->visible;
             }
+            else if (wasVisible && input.Tapped(UIAction::Back)) {
+                state->visible = false;
+            }
+
+            // The stick/A that navigate the menu would also steer and shoot: the ship gets no input while it's open
+            // (the match keeps running underneath, it's online).
+            if (state->visible) input.BlockGameplayThisFrame();
 
             auto itemQuery = entityManager.CreateQuery<UIElement, PauseMenuItem>();
             for (auto [itemEntity, element, item] : itemQuery) {
@@ -45,10 +57,10 @@ inline void RegisterPauseMenuComponents(EntityManager& em) {
     em.RegisterComponentType<PauseMenuItem>();
 }
 
-// "Sí" raises exitChecker->exitPressed, the same path as the game-over Exit button, so
+// "Sí" raises exitChecker->exitPressed, so
 // ExitCheckerSystem takes the player back to the main menu.
 inline void BuildPauseMenu(EntityManager& em, ExitButtonChecker* exitChecker) {
-    constexpr int LAYER = 50;  // above the HUD and the game-over Exit button
+    constexpr int LAYER = 50;  // above the HUD
 
     Entity panel = em.CreateEntity();
     UIElement* element = em.AddComponent<UIElement>(panel, UIElement{});
@@ -105,6 +117,7 @@ inline void BuildPauseMenu(EntityManager& em, ExitButtonChecker* exitChecker) {
     element->pivot = glm::vec2(0.5f, 0.5f);
     element->isVisible = false;
     element->layer = LAYER + 1;
+    element->navDefault = true;   // keyboard/gamepad focus lands on "No": a stray A/Enter doesn't leave the match
     UIButton* no = em.AddComponent<UIButton>(noButton, UIButton{});
     no->text = "No";
     no->fontSize = 24.0f;

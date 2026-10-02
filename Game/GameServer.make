@@ -40,7 +40,7 @@ define POSTBUILDCMDS
 endef
 
 ifeq ($(config),debug)
-TARGETDIR = ../Binaries/linux-x86_64/Debug
+TARGETDIR = ../Binaries/linux-x86_64/Debug/GameServer
 TARGET = $(TARGETDIR)/GameServer
 OBJDIR = ../Binaries/Intermediates/linux-x86_64/Debug/GameServer
 DEFINES += -DDEBUG
@@ -51,7 +51,7 @@ LDDEPS += ../Binaries/linux-x86_64/Debug/Engine/libNetTFGEngine.a
 ALL_LDFLAGS += $(LDFLAGS) -L../Binaries/linux-x86_64/Debug/Engine -L../vcpkg_installed/x64-linux/lib -L../vcpkg_installed/x64-linux/debug/lib -L/usr/lib64 -m64 -Wl,-rpath,'$$ORIGIN'
 
 else ifeq ($(config),release)
-TARGETDIR = ../Binaries/linux-x86_64/Release
+TARGETDIR = ../Binaries/linux-x86_64/Release/GameServer
 TARGET = $(TARGETDIR)/GameServer
 OBJDIR = ../Binaries/Intermediates/linux-x86_64/Release/GameServer
 DEFINES += -DRELEASE
@@ -62,7 +62,7 @@ LDDEPS += ../Binaries/linux-x86_64/Release/Engine/libNetTFGEngine.a
 ALL_LDFLAGS += $(LDFLAGS) -L../Binaries/linux-x86_64/Release/Engine -L../vcpkg_installed/x64-linux/lib -L/usr/lib64 -m64 -Wl,-rpath,'$$ORIGIN'
 
 else ifeq ($(config),dist)
-TARGETDIR = ../Binaries/linux-x86_64/Dist
+TARGETDIR = ../Binaries/linux-x86_64/Dist/GameServer
 TARGET = $(TARGETDIR)/GameServer
 OBJDIR = ../Binaries/Intermediates/linux-x86_64/Dist/GameServer
 DEFINES += -DDIST

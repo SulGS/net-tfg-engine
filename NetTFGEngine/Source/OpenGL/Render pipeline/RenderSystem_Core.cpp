@@ -1,4 +1,4 @@
-﻿#include "RenderSystem.hpp"
+#include "RenderSystem.hpp"
 
 void RenderSystem::Init(int screenW, int screenH, int outputW, int outputH)
 {
@@ -42,6 +42,7 @@ void RenderSystem::Init(int screenW, int screenH, int outputW, int outputH)
     CompileSSRShader();
     CompileMotionBlurShaders();
     CompileFSRShaders();
+    CompileNISShader();
     CompileCopyShader();
     InitScreenQuad();
 }
@@ -160,6 +161,12 @@ void RenderSystem::Update(EntityManager& entityManager,
 
     const auto& rs = RenderSettings::instance();
 
+    // Debug dump (F12): the frame after every pass below as stage_NN_*.png, then every target (DumpBuffers) at the end.
+    m_stageDumpDir.clear();
+    m_stageDumpIndex = 0;
+    if (m_debugDumpRequested.exchange(false))
+        m_stageDumpDir = MakeDumpDir();
+
     // SSAO/SSR resolution changed in the settings: rebuild their targets (cheap, only screen-space ones).
     if (rs.getSSAOResolutionScale() != m_ssaoScale || rs.getSSRResolutionScale() != m_ssrScale) {
         DeleteScreenSpace();
@@ -174,10 +181,14 @@ void RenderSystem::Update(EntityManager& entityManager,
         LinearDepthPass(projection, m_linearDepthFBO, m_ssaoW, m_ssaoH, m_ssaoScale);
         if (m_ssrLinearDepthFBO && rs.getSSREnabled())
             LinearDepthPass(projection, m_ssrLinearDepthFBO, m_ssrW, m_ssrH, m_ssrScale);
+        DumpStage("gbuffer_normal", StageImage::Normals, m_gbufferNormalTex, m_screenW, m_screenH);
+        DumpStage("gbuffer_depth", StageImage::Depth, m_gbufferDepthTex, m_screenW, m_screenH);
     }
 
     // Needs only the GBuffer; ShadingPass samples its result (all 1.0 when SSAO is off).
     SSAOPass(projection);
+    if (rs.getSSAOEnabled())
+        DumpStage("ssao_buffer", StageImage::Grey, m_ssaoBlurTex, m_ssaoW, m_ssaoH);
 
     // CollectLightsPass now handles both point lights and the directional light.
     CollectLightsPass(entityManager);
@@ -190,50 +201,88 @@ void RenderSystem::Update(EntityManager& entityManager,
     if (rs.getDirShadowsEnabled())
         DirShadowPass(meshQuery, cameraPos);               // directional light ortho shadow
 
+    // SSAO has no pass of its own on the scene: the materials multiply their ambient by it while shading. To see what it
+    // adds, the dump frame is shaded once more first with the AO at 1.0 (as if it were off), then SSAO is recomputed.
+    if (!m_stageDumpDir.empty() && rs.getSSAOEnabled()) {
+        ClearSSAO();
+        ShadingPass(meshQuery, view, projection, cameraPos);
+        DumpStage("shading_no_ssao", StageImage::HDR, m_hdrColorTex, m_screenW, m_screenH);
+        SSAOPass(projection);
+    }
+
     ShadingPass(meshQuery, view, projection, cameraPos);
+    DumpStage(rs.getSSAOEnabled() ? "shading_ssao" : "shading", StageImage::HDR, m_hdrColorTex, m_screenW, m_screenH);
 
     // Before the particles so their distortion pass (which copies the scene) sees the beams too.
     AdditivePass(meshQuery, view, projection, cameraPos);
+    DumpStage("additive", StageImage::HDR, m_hdrColorTex, m_screenW, m_screenH);
 
     // After the beams so they show up in reflections; before the particles, which aren't in the GBuffer and would
     // otherwise be reflected as if they were the opaque surface behind them.
-    if (rs.getSSREnabled())
+    if (rs.getSSREnabled()) {
         SSRPass(projection);
+        DumpStage("ssr", StageImage::HDR, m_hdrColorTex, m_screenW, m_screenH);
+    }
 
-    if (m_particleSystem)
+    if (m_particleSystem) {
         m_particleSystem->Draw(view, projection);
+        DumpStage("particles", StageImage::HDR, m_hdrColorTex, m_screenW, m_screenH);
+    }
 
     // On the finished HDR scene (particles and beams included) and before bloom, so bright streaks bloom too.
     const glm::mat4 viewProjection = projection * view;
-    if (rs.getMotionBlurEnabled())
+    if (rs.getMotionBlurEnabled()) {
         MotionBlurPass(viewProjection, deltaTime);
+        DumpStage("motion_blur", StageImage::HDR, m_hdrColorTex, m_screenW, m_screenH);
+    }
     m_prevViewProjection = viewProjection;
     m_hasPrevViewProjection = true;
 
-    if (rs.getBloomEnabled())
+    // Bloom doesn't touch the scene (the tonemap shader adds it): dumped as the blurred bloom alone (half res), then
+    // the scene with it added the way the tonemap does.
+    if (rs.getBloomEnabled()) {
         BloomPass();
+        DumpStage("bloom_blur", StageImage::HDR, m_bloomPingTex, std::max(1, m_screenW / 2), std::max(1, m_screenH / 2));
+        DumpStage("bloom", StageImage::HDRBloom, m_hdrColorTex, m_screenW, m_screenH);
+    }
 
     TonemapPass();
+    DumpStage("tonemap", StageImage::LDR, m_ldrTex, m_screenW, m_screenH);
 
-    // Bilinear: FXAA straight to the window, scaling as it samples. Nearest/FSR: FXAA (if on) at render resolution into
-    // the pre-scale target first, so the scaler works on the already anti-aliased image.
+    // Bilinear: FXAA straight to the window, scaling as it samples. Nearest/FSR/NIS: FXAA (if on) at render resolution
+    // into the pre-scale target first, so the scaler works on the already anti-aliased image.
     const UpscaleMode upscale = ActiveUpscaleMode();
     if (upscale == UpscaleMode::Bilinear) {
-        if (m_preScaleTex || m_fsrEasuTex) DeleteScaleTargets();   // just switched to Bilinear or native: free them
+        if (m_preScaleTex || m_upscaleOutTex) DeleteScaleTargets();   // just switched to Bilinear or native: free them
         FXAAPass(0, m_outputW, m_outputH);
+        DumpStage(rs.getFXAAEnabled() ? "fxaa_scale_window" : "scale_window", StageImage::Window);
     } else {
-        const bool fsr = (upscale == UpscaleMode::FSR1);
-        EnsureScaleTargets(fsr);
+        EnsureScaleTargets(upscale != UpscaleMode::Nearest);
 
         GLuint scaleTex = m_ldrTex;
         if (rs.getFXAAEnabled()) {
             FXAAPass(m_preScaleFBO, m_screenW, m_screenH);
             scaleTex = m_preScaleTex;
+            DumpStage("fxaa", StageImage::LDR, m_preScaleTex, m_screenW, m_screenH);
         }
 
-        if (fsr) FSRPass(scaleTex);
-        else     CopyPass(scaleTex, 0, m_outputW, m_outputH, true);
+        switch (upscale) {
+        case UpscaleMode::FSR1: FSRPass(scaleTex); break;
+        case UpscaleMode::NIS:  NISPass(scaleTex); break;
+        default:                CopyPass(scaleTex, 0, m_outputW, m_outputH, true); break;
+        }
+        DumpStage(upscale == UpscaleMode::FSR1 ? "fsr_window" : upscale == UpscaleMode::NIS ? "nis_window" : "nearest_window",
+            StageImage::Window);
     }
+
+    if (!m_stageDumpDir.empty()) {
+        DumpBuffers(m_stageDumpDir);
+        m_stageDumpDir.clear();
+    }
+
+    // F11: the finished frame alone, before the UI is drawn over it.
+    if (m_finalDumpRequested.exchange(false))
+        DumpFinalFrame();
 
     entityManager.releaseMutex();
 }
@@ -270,10 +319,11 @@ RenderSystem::~RenderSystem()
     glDeleteProgram(m_mbTileMaxShader);
     glDeleteProgram(m_mbNeighborMaxShader);
     glDeleteProgram(m_mbGatherShader);
-    // FSR
+    // FSR / NIS
     DeleteScaleTargets();
     glDeleteProgram(m_fsrEasuShader);
     glDeleteProgram(m_fsrRcasShader);
+    DeleteNIS();
     // MSAA
     glDeleteFramebuffers(1, &m_msaaFBO);
     glDeleteTextures(1, &m_msaaColorTex);

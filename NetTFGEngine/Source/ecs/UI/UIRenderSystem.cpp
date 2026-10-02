@@ -131,8 +131,11 @@ void UIRenderSystem::Update(EntityManager& entityManager, std::vector<EventEntry
     // Open dropdown popups are deferred to a second pass so they are never
     // covered by elements on higher layers.
     std::vector<std::pair<const UIElement*, const UIDropdown*>> openDropdowns;
+    const UIElement* navFocusedElement = nullptr;
 
     for (const auto& [entity, element, layer] : uiElements) {
+        if (element->navFocused) navFocusedElement = element;
+
         UIButton* button = entityManager.GetComponent<UIButton>(entity);
         if (button) {
             UpdateButton(entity, element, button);
@@ -182,6 +185,14 @@ void UIRenderSystem::Update(EntityManager& entityManager, std::vector<EventEntry
                 openDropdowns.push_back({ element, dropdown });
             }
         }
+    }
+
+    // Keyboard/gamepad focus (UIUpdateSystem): a ring just outside the element, over the rest of the UI.
+    if (navFocusedElement) {
+        const float gap = 4.0f;
+        const glm::vec2 pos = navFocusedElement->GetScreenPosition(refWidth, refHeight) - glm::vec2(gap);
+        RenderBorder(pos, navFocusedElement->size + glm::vec2(2.0f * gap),
+            glm::vec4(1.0f, 0.78f, 0.2f, navFocusedElement->opacity), 3.0f);
     }
 
     // Second pass: open dropdown lists on top of everything else

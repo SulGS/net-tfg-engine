@@ -20,6 +20,8 @@
 
 #include "OpenGL/Render pipeline/RenderSettings.hpp"
 #include "NetTFG_Engine.hpp"
+#include "Utils/Input.hpp"
+#include "Utils/InputMap.hpp"
 
 #include <string>
 #include <vector>
@@ -47,6 +49,15 @@ inline void OpenSettingsFrom(int callerScene)
     auto& engine = NetTFG_Engine::Get();
     engine.RequestActivateClient(SETTINGS_SCENE_ID);
     engine.RequestDeactivateClient(callerScene);
+}
+
+// Graficos, audio y controles. Todo se aplica en vivo; esto solo lo persiste.
+inline bool SaveAllSettings()
+{
+    const bool render = RenderSettings::instance().save();
+    const bool audio = AudioManager::SaveAudioSettings();
+    const bool input = InputMap::Get().Save();
+    return render && audio && input;
 }
 
 inline void CloseSettings()
@@ -147,6 +158,7 @@ class SettingsPanelData : public IComponent
 {
 public:
     int tab = 0;
+    int tabCount = 1;   // lo rellena SettingsPanel::Build (LB/RB recorren las pestanas)
 
     // Capa a la que se sube temporalmente un dropdown abierto para que su
     // popup no quede tapado por las filas de debajo.
@@ -224,6 +236,30 @@ public:
             data->pendingShadowReInit = false;
             requestRenderReinit = true;
             if (data->statusMessage.empty()) data->SetStatus("Sombras recreadas");
+        }
+
+        // Resultado de una reasignacion de controles (pestana Controles).
+        InputMap& input = InputMap::Get();
+        const std::string captureMessage = input.TakeCaptureMessage();
+        if (!captureMessage.empty()) data->SetStatus(captureMessage, 3.5f);
+
+        // Mando: LB/RB cambian de pestana, B (o Esc) vuelve al menu. No con un desplegable abierto (B lo cierra, lo
+        // atiende UIUpdateSystem) ni esperando una tecla nueva. Consulta en vivo: m_openDropdown es del frame anterior.
+        bool anyDropdownOpen = false;
+        {
+            auto openQuery = entityManager.CreateQuery<UIDropdown, SettingsWidget>();
+            for (auto [entity, dropdown, widget] : openQuery)
+                anyDropdownOpen |= dropdown->isOpen;
+        }
+        if (!input.IsCapturing() && !anyDropdownOpen)
+        {
+            if (input.Tapped(UIAction::PrevTab)) data->tab = (data->tab + data->tabCount - 1) % data->tabCount;
+            if (input.Tapped(UIAction::NextTab)) data->tab = (data->tab + 1) % data->tabCount;
+            if (input.Tapped(UIAction::Back))
+            {
+                SaveAllSettings();
+                CloseSettings();
+            }
         }
 
         if (data->statusTimer > 0.0f)
@@ -354,6 +390,7 @@ public:
     {
         TAB_CALIDAD = 0,
         TAB_SONIDO,
+        TAB_CONTROLES,
         TAB_SOMBRAS,
         TAB_IMAGEN,
         TAB_EFECTOS,
@@ -376,6 +413,7 @@ public:
         SettingsPanelData* data =
             em.AddComponent<SettingsPanelData>(dataEntity, SettingsPanelData{});
         data->popupLayer = baseLayer + 30;
+        data->tabCount = TAB_COUNT;
 
         // Fondo opcional
         // Necesita una textura en disco. Si no tienes una, dejalo desactivado
@@ -400,6 +438,7 @@ public:
         BuildChrome(em, data, baseLayer);
         BuildQualityTab(em, data, baseLayer);
         BuildSoundTab(em, data, baseLayer);
+        BuildControlsTab(em, data, baseLayer);
         BuildShadowsTab(em, data, baseLayer);
         BuildImageTab(em, data, baseLayer);
         BuildEffectsTab(em, data, baseLayer);
@@ -422,7 +461,7 @@ private:
             nullptr, glm::vec4(1.0f), UITextAlign::CENTER);
 
         static const char* tabNames[TAB_COUNT] =
-        { "Calidad", "Sonido", "Sombras", "Imagen", "Efectos", "Avanzado" };
+        { "Calidad", "Sonido", "Controles", "Sombras", "Imagen", "Efectos", "Avanzado" };
 
         // Sized to fit whatever TAB_COUNT is, with a small margin either
         // side of the panel, instead of a fixed width that only fit 5 tabs.
@@ -483,8 +522,7 @@ private:
             baseLayer + 2, "Guardar cambios",
             [data]()
             {
-                const bool ok = RenderSettings::instance().save()
-                    && AudioManager::SaveAudioSettings();
+                const bool ok = SaveAllSettings();
                 data->SetStatus(ok
                     ? "Ajustes guardados"
                     : "No se pudo escribir la configuración");
@@ -498,8 +536,7 @@ private:
                 // Se guarda al salir: los cambios ya estaban aplicados
                 // en vivo, asi que no hay nada que descartar y perderlos
                 // al reiniciar solo seria una sorpresa desagradable.
-                RenderSettings::instance().save();
-                AudioManager::SaveAudioSettings();
+                SaveAllSettings();
                 CloseSettings();
             },
             SettingsWidget::Vis::Always, 0);
@@ -592,13 +629,15 @@ private:
         }
 
         // Filtro con el que la pasada final lleva la resolucion de render a la de la ventana. Solo elegible fuera de
-        // la nativa (ahi no hay escalado). FSR solo sube resolucion: con una de render superior usa el bilineal.
+        // la nativa (ahi no hay escalado). FSR y NIS solo suben resolucion: con una de render superior usan el
+        // bilineal, y NIS tambien si la ventana es mas del doble que la de render (limite del SDK de NVIDIA).
         // Se aplica en el siguiente frame, sin reinit. El orden del menu no es el del enum (cuyos valores son los
         // guardados en render_settings.cfg), de ahi la tabla.
         {
-            static const std::vector<UpscaleMode> modes = { UpscaleMode::Nearest, UpscaleMode::Bilinear, UpscaleMode::FSR1 };
+            static const std::vector<UpscaleMode> modes = {
+                UpscaleMode::Nearest, UpscaleMode::Bilinear, UpscaleMode::FSR1, UpscaleMode::NIS };
             const Entity upscaler = AddChoice(em, data, baseLayer, TAB_CALIDAD, row++, "Escalado",
-                { "Nearest", "Bilineal", "AMD FSR 1.0" },
+                { "Nearest", "Bilineal", "AMD FSR 1.0", "NVIDIA NIS" },
                 []()
                 {
                     const auto it = std::find(modes.begin(), modes.end(), RenderSettings::instance().getUpscaleMode());
@@ -626,6 +665,12 @@ private:
             0.0f, 1.0f, 0.05f, 2, "",
             []() { return RenderSettings::instance().getFSRSharpness(); },
             [](float v) { RenderSettings::instance().setFSRSharpness(v); });
+
+        // Nitidez del NVScaler de NIS (0.5 es la neutra del SDK); solo tiene efecto con "NVIDIA NIS".
+        AddSlider(em, baseLayer, TAB_CALIDAD, row++, "NIS: nitidez",
+            0.0f, 1.0f, 0.05f, 2, "",
+            []() { return RenderSettings::instance().getNISSharpness(); },
+            [](float v) { RenderSettings::instance().setNISSharpness(v); });
 
         // Activarla vuelve a atar el framerate al refresco del monitor,
         // por encima del pacer propio del "Límite de FPS" (ver renderLoop());
@@ -659,6 +704,74 @@ private:
         addChannelSlider("Efectos", AudioChannel::SFX);
         addChannelSlider("Voz", AudioChannel::VOICE);
         addChannelSlider("Interfaz", AudioChannel::UI);
+    }
+
+    // CONTROLES: una fila por accion reasignable (InputMap), con un boton por dispositivo. Al pulsarlo espera la
+    // siguiente tecla (o boton / stick / gatillo del mando) y la asigna; si otra accion ya la usaba, se intercambian.
+    // Esc o Back cancelan. Las acciones de la interfaz (navegar, aceptar, volver) son fijas y no salen aqui.
+    static constexpr float BIND_KB_X = 90.0f;
+    static constexpr float BIND_PAD_X = 330.0f;
+    static constexpr float BIND_W = 220.0f;
+
+    static void BuildControlsTab(EntityManager& em, SettingsPanelData* data, int baseLayer)
+    {
+        int row = 0;
+
+        // Cabecera: estado del mando y titulos de columna.
+        MakeText(em, glm::vec2(LABEL_X, RowY(row)), glm::vec2(LABEL_W, ROW_TEXT_H),
+            baseLayer + 1, "", 15.0f,
+            SettingsWidget::Vis::Tab, TAB_CONTROLES,
+            []() -> std::string
+            {
+                const char* name = Input::GetGamepadName();
+                return name ? std::string("Mando: ") + name : std::string("Mando: no conectado");
+            },
+            glm::vec4(0.75f, 0.85f, 1.0f, 1.0f));
+        MakeText(em, glm::vec2(BIND_KB_X, RowY(row)), glm::vec2(BIND_W, ROW_TEXT_H),
+            baseLayer + 1, "Teclado", 16.0f, SettingsWidget::Vis::Tab, TAB_CONTROLES,
+            nullptr, glm::vec4(1.0f), UITextAlign::CENTER);
+        MakeText(em, glm::vec2(BIND_PAD_X, RowY(row)), glm::vec2(BIND_W, ROW_TEXT_H),
+            baseLayer + 1, "Mando", 16.0f, SettingsWidget::Vis::Tab, TAB_CONTROLES,
+            nullptr, glm::vec4(1.0f), UITextAlign::CENTER);
+        ++row;
+
+        for (int action : InputMap::Get().RebindableActions())
+        {
+            AddLabel(em, baseLayer, TAB_CONTROLES, row, InputMap::Get().GetLabel(action));
+            AddBindingButton(em, baseLayer, row, action, BindingSlot::Keyboard, BIND_KB_X);
+            AddBindingButton(em, baseLayer, row, action, BindingSlot::Gamepad, BIND_PAD_X);
+            ++row;
+        }
+
+        AddSlider(em, baseLayer, TAB_CONTROLES, row++, "Zona muerta del stick",
+            10.0f, 90.0f, 5.0f, 0, "%",
+            []() { return InputMap::Get().GetStickDeadzone() * 100.0f; },
+            [](float v) { InputMap::Get().SetStickDeadzone(v / 100.0f); });
+
+        MakeButton(em, glm::vec2((BIND_KB_X + BIND_PAD_X) * 0.5f, RowY(row++)), glm::vec2(BIND_W, TOGGLE_H),
+            baseLayer + 2, "Restaurar controles",
+            [data]()
+            {
+                InputMap::Get().ResetBindingsToDefaults();
+                data->SetStatus("Controles por defecto restaurados");
+            },
+            SettingsWidget::Vis::Tab, TAB_CONTROLES);
+    }
+
+    static void AddBindingButton(EntityManager& em, int baseLayer, int rowIndex,
+        int action, BindingSlot slot, float x)
+    {
+        MakeButton(em, glm::vec2(x, RowY(rowIndex)), glm::vec2(BIND_W, TOGGLE_H),
+            baseLayer + 2, "",
+            [action, slot]() { InputMap::Get().BeginCapture(action, slot); },
+            SettingsWidget::Vis::Tab, TAB_CONTROLES,
+            [action, slot]() -> std::string
+            {
+                const InputMap& map = InputMap::Get();
+                if (map.IsCapturing(action, slot))
+                    return slot == BindingSlot::Keyboard ? "Pulsa una tecla..." : "Pulsa un botón...";
+                return map.GetBinding(action, slot).DisplayName();
+            });
     }
 
     // SOMBRAS

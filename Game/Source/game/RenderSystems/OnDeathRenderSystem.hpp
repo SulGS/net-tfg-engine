@@ -96,13 +96,6 @@ public:
                     }
                 }
 
-                auto buttonQuery = entityManager.CreateQuery<UIElement, UIButton, ExitButtonChecker>();
-
-                for (auto [entity, element, button, exitChecker] : buttonQuery)
-                {
-                    element->isVisible = true;
-                }
-
                 auto textQuery = entityManager.CreateQuery<UIElement, UIText, GameStatusText>();
                 for (auto [uiEntity, element, text, statusTag] : textQuery)
                 {

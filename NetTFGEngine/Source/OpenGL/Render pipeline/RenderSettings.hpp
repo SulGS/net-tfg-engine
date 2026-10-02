@@ -24,12 +24,15 @@ enum class QualityPreset
 // Nearest: nearest-neighbour (blocky, pixel-exact), up or down.
 // Bilinear: plain bilinear sample (also what FSR1 falls back to when downscaling).
 // FSR1: AMD FidelityFX Super Resolution 1 (EASU upscale + RCAS sharpen), only when the render resolution is lower.
+// NIS: NVIDIA Image Scaling (NVScaler, directional scale + adaptive sharpen in one compute pass), only when the render
+// resolution is lower and at most 2x smaller per axis (the SDK's limit); needs compute shaders (GL 4.3).
 // Explicit values: they are what render_settings.cfg stores ("upscaleMode"), so new modes go at the end.
 enum class UpscaleMode
 {
     Bilinear = 0,
     FSR1     = 1,
     Nearest  = 2,
+    NIS      = 3,
 };
 
 // Windowed: normal decorated window. Borderless: undecorated window sized to
@@ -96,12 +99,15 @@ public:
     }
 
     // RUNTIME — UPSCALING: filter that scales a lower render resolution up to the window (see UpscaleMode). Not part
-    // of applyPreset(), like the render resolution it goes with. Sharpness is RCAS's: 0 = none .. 1 = maximum.
+    // of applyPreset(), like the render resolution it goes with. Sharpness, per upscaler: 0 = none .. 1 = maximum.
     void        setUpscaleMode(UpscaleMode v) { m_upscaleMode = v; }
     UpscaleMode getUpscaleMode() const { return m_upscaleMode; }
 
     void  setFSRSharpness(float v) { m_fsrSharpness = std::clamp(v, 0.0f, 1.0f); }
     float getFSRSharpness() const { return m_fsrSharpness; }
+
+    void  setNISSharpness(float v) { m_nisSharpness = std::clamp(v, 0.0f, 1.0f); }
+    float getNISSharpness() const { return m_nisSharpness; }
 
     // RUNTIME — WINDOW: same as above; OpenGLWindow applies it via
     // setVSync(). Off by default so the targetFPS pacer above is the only
@@ -344,9 +350,10 @@ public:
             else if (k == "renderHeight")         setRenderHeight(i);
             else if (k == "upscaleMode")
             {
-                if (i >= 0 && i <= static_cast<int>(UpscaleMode::Nearest)) setUpscaleMode(static_cast<UpscaleMode>(i));
+                if (i >= 0 && i <= static_cast<int>(UpscaleMode::NIS)) setUpscaleMode(static_cast<UpscaleMode>(i));
             }
             else if (k == "fsrSharpness")         setFSRSharpness(v);
+            else if (k == "nisSharpness")         setNISSharpness(v);
             else if (k == "vsync")                setVsyncEnabled(b);
             else if (k == "debugMode")            setDebugModeEnabled(b);
             else if (k == "maxLights")            setMaxLights(i);
@@ -435,6 +442,7 @@ public:
         f << "renderHeight " << m_renderHeight << "\n";
         f << "upscaleMode " << static_cast<int>(m_upscaleMode) << "\n";
         f << "fsrSharpness " << m_fsrSharpness << "\n";
+        f << "nisSharpness " << m_nisSharpness << "\n";
         f << "vsync " << (m_vsyncEnabled ? 1 : 0) << "\n";
         f << "debugMode " << (m_debugModeEnabled ? 1 : 0) << "\n";
 
@@ -777,6 +785,7 @@ private:
     int        m_renderHeight = 0;   // 0 = native
     UpscaleMode m_upscaleMode = UpscaleMode::FSR1;
     float       m_fsrSharpness = 0.8f;
+    float       m_nisSharpness = 0.5f;   // the SDK's neutral value (its sample app and driver default)
     bool       m_vsyncEnabled = false;
 
     // Debug overlay (FPS / network latency)

@@ -41,6 +41,9 @@ public:
     }
     void CloseAllDropdowns(EntityManager& entityManager);
 
+    // Keyboard/gamepad navigation focus (0 = none). Shown with a ring while navigation is in use.
+    Entity GetNavFocus() const { return navFocus; }
+
     // Initialize GLFW callbacks
     void SetupCallbacks();
 
@@ -65,6 +68,15 @@ private:
     // Dropdown state
     Entity openDropdown;      // only one popup can be open at a time
     bool prevMouseDown;       // previous button state, used for the press edge
+
+    // Keyboard/gamepad navigation (UIAction::Up/Down/Left/Right/Accept through InputMap). navFocus follows mouse
+    // clicks too, so arrows continue from the last clicked widget; the highlight only shows while navActive (a
+    // navigation input or the gamepad was used more recently than the mouse).
+    Entity navFocus = 0;
+    Entity navFlagged = 0;            // entity whose UIElement::navFocused is currently set
+    bool navActive = false;
+    glm::vec2 lastNavCenter{ 0.0f };  // where the focus was, to land nearby when it has to be picked again
+    bool hasLastNavCenter = false;
 
     // Static callback wrappers (GLFW requires static functions)
     static void CharCallback(GLFWwindow* window, unsigned int codepoint);
@@ -98,6 +110,19 @@ private:
     void HandleSliderKeyboard(EntityManager& entityManager);
     void HandleDropdownKeyboard(EntityManager& entityManager);
     void EndSliderDrag(EntityManager& entityManager);
+
+    // Navigation
+    void UpdateNavigation(EntityManager& entityManager);
+    bool IsNavigable(EntityManager& entityManager, Entity entity) const;
+    bool GetNavCenter(EntityManager& entityManager, Entity entity, glm::vec2& center) const;
+    // navDefault first, else the one nearest nearPoint (if given), else the top-left one of the highest layer.
+    // (Not "near": windows.h defines it as a macro.)
+    Entity PickNavTarget(EntityManager& entityManager, const glm::vec2* nearPoint) const;
+    Entity FindNavNeighbour(EntityManager& entityManager, Entity from, glm::vec2 direction) const;
+    void ActivateNavFocus(EntityManager& entityManager);
+    void RevalidateNavFocus(EntityManager& entityManager);
+    // Mirrors the focus into button/slider/dropdown hover states and UIElement::navFocused.
+    void ApplyNavHighlight(EntityManager& entityManager);
 };
 
 #endif // UIUPDATESYSTEM_HPP

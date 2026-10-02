@@ -5,6 +5,7 @@
 #include "OpenGL/Mesh.hpp"
 #include "OpenGL/Render pipeline/RenderSettings.hpp"
 #include "Utils/Input.hpp"
+#include "Utils/InputMap.hpp"
 #include "Utils/Debug/Debug.hpp"
 #include <functional>
 #include <future>
@@ -432,6 +433,8 @@ private:
             }
 
             Input::Update();
+            // Actions from the raw state just aged, and the snapshot the game tick reads (ConsumeTickInput).
+            InputMap::Get().Update();
 
             // Deadline from this frame's own start, not an accumulated total: a slow frame only costs itself. An accumulated
             // nextTick fell permanently behind "now" (sleep_until on a past time returns instantly), so the FPS limit

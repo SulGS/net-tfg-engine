@@ -48,7 +48,15 @@ public:
     
     // Opacity (0.0 = transparent, 1.0 = opaque)
     float opacity;
-    
+
+    // Keyboard/gamepad navigation (UIUpdateSystem). navFocused: set by the system on the focused element, drawn as a
+    // highlight ring by UIRenderSystem. navDefault: preferred target when focus has to be picked from scratch (e.g.
+    // "No" in an "are you sure?" dialog, so a stray A press doesn't confirm). navSkip: never reachable by
+    // navigation (mouse only), for buttons that must not be hit by accident with keys shared with gameplay.
+    bool navFocused = false;
+    bool navDefault = false;
+    bool navSkip = false;
+
     glm::vec2 GetScreenPosition(int screenWidth, int screenHeight) const {
         glm::vec2 anchorPos = GetAnchorPosition(screenWidth, screenHeight);
         glm::vec2 pivotOffset = glm::vec2(size.x * pivot.x, size.y * pivot.y);

@@ -38,7 +38,7 @@ define PRELINKCMDS
 endef
 
 ifeq ($(config),debug)
-TARGETDIR = ../Binaries/linux-x86_64/Debug
+TARGETDIR = ../Binaries/linux-x86_64/Debug/GameClient
 TARGET = $(TARGETDIR)/GameClient
 OBJDIR = ../Binaries/Intermediates/linux-x86_64/Debug/GameClient
 DEFINES += -DDEBUG
@@ -49,11 +49,11 @@ LDDEPS += ../Binaries/linux-x86_64/Debug/Engine/libNetTFGEngine.a
 ALL_LDFLAGS += $(LDFLAGS) -L../Binaries/linux-x86_64/Debug/Engine -L../vcpkg_installed/x64-linux/lib -L../vcpkg_installed/x64-linux/debug/lib -L/usr/lib64 -m64 -Wl,-rpath,'$$ORIGIN'
 define POSTBUILDCMDS
 	@echo Running postbuild commands
-	[ -d "Assets" ] && python3 "../AssetsPackager.py" "Assets" "../Binaries/linux-x86_64/Debug" || true
+	[ -d "Assets" ] && python3 "../AssetsPackager.py" "Assets" "../Binaries/linux-x86_64/Debug/GameClient" || true
 endef
 
 else ifeq ($(config),release)
-TARGETDIR = ../Binaries/linux-x86_64/Release
+TARGETDIR = ../Binaries/linux-x86_64/Release/GameClient
 TARGET = $(TARGETDIR)/GameClient
 OBJDIR = ../Binaries/Intermediates/linux-x86_64/Release/GameClient
 DEFINES += -DRELEASE
@@ -64,11 +64,11 @@ LDDEPS += ../Binaries/linux-x86_64/Release/Engine/libNetTFGEngine.a
 ALL_LDFLAGS += $(LDFLAGS) -L../Binaries/linux-x86_64/Release/Engine -L../vcpkg_installed/x64-linux/lib -L/usr/lib64 -m64 -Wl,-rpath,'$$ORIGIN'
 define POSTBUILDCMDS
 	@echo Running postbuild commands
-	[ -d "Assets" ] && python3 "../AssetsPackager.py" "Assets" "../Binaries/linux-x86_64/Release" || true
+	[ -d "Assets" ] && python3 "../AssetsPackager.py" "Assets" "../Binaries/linux-x86_64/Release/GameClient" || true
 endef
 
 else ifeq ($(config),dist)
-TARGETDIR = ../Binaries/linux-x86_64/Dist
+TARGETDIR = ../Binaries/linux-x86_64/Dist/GameClient
 TARGET = $(TARGETDIR)/GameClient
 OBJDIR = ../Binaries/Intermediates/linux-x86_64/Dist/GameClient
 DEFINES += -DDIST
@@ -79,7 +79,7 @@ LDDEPS += ../Binaries/linux-x86_64/Dist/Engine/libNetTFGEngine.a
 ALL_LDFLAGS += $(LDFLAGS) -L../Binaries/linux-x86_64/Dist/Engine -L../vcpkg_installed/x64-linux/lib -L/usr/lib64 -m64 -Wl,-rpath,'$$ORIGIN'
 define POSTBUILDCMDS
 	@echo Running postbuild commands
-	[ -d "Assets" ] && python3 "../AssetsPackager.py" "Assets" "../Binaries/linux-x86_64/Dist" || true
+	[ -d "Assets" ] && python3 "../AssetsPackager.py" "Assets" "../Binaries/linux-x86_64/Dist/GameClient" || true
 endef
 
 endif

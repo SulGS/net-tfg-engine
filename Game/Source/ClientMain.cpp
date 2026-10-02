@@ -10,6 +10,7 @@
 #include "game/asteroids.hpp"
 #include "game/menu.hpp"
 #include "game/settings_menu.hpp"
+#include "game/GameActions.hpp"
 
 
 #include "NetTFG_Engine.hpp"
@@ -36,6 +37,9 @@ int main(int argc, char** argv) {
 #else
 	Debug::Initialize("AsteroidsClient", false);
 #endif
+
+	// After Debug::Initialize: it sets the user data folder the saved bindings are read from.
+	RegisterGameActions();
 
 	// Matchmaker address: --matchmaker host:port overrides matchmaking.cfg (created with defaults if missing).
 	MatchmakerAddress matchmaker = LoadMatchmakerAddress();

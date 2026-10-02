@@ -6,6 +6,7 @@
 #include <memory>
 #include <cstring>
 #include "Utils/Input.hpp"
+#include "GameActions.hpp"
 #include "OpenGL/IGameRenderer.hpp"
 #include <math.h>
 #include <cmath>
@@ -145,13 +146,25 @@ public:
         return std::make_unique<AsteroidShooterGame>();
     }
 
+    // Game tick thread: reads InputMap's snapshot (keyboard or gamepad, whatever is bound), never Input directly.
     InputBlob GenerateLocalInput() override {
-        uint8_t m = INPUT_NONE;
-        if (Input::KeyPressed(Input::CharToKeycode('a'))) m |= INPUT_LEFT;
-        if (Input::KeyPressed(Input::CharToKeycode('d'))) m |= INPUT_RIGHT;
-        if (Input::KeyPressed(Input::CharToKeycode('w'))) m |= INPUT_TOP;
-        if (Input::KeyPressed(Input::CharToKeycode(' '))) m |= INPUT_SHOOT;
+        const InputMap::TickInput in = InputMap::Get().ConsumeTickInput();
         InputBlob buf = MakeZeroInputBlob();
+        uint8_t m = INPUT_NONE;
+        // Turning and thrust also carry how far the stick / trigger is pushed (see InputMask.hpp); keys send full.
+        if (in.Down(GameAction::TurnLeft)) {
+            m |= INPUT_LEFT;
+            buf.data[INPUT_BYTE_LEFT] = EncodeInputIntensity(in.Value(GameAction::TurnLeft));
+        }
+        if (in.Down(GameAction::TurnRight)) {
+            m |= INPUT_RIGHT;
+            buf.data[INPUT_BYTE_RIGHT] = EncodeInputIntensity(in.Value(GameAction::TurnRight));
+        }
+        if (in.Down(GameAction::Thrust)) {
+            m |= INPUT_TOP;
+            buf.data[INPUT_BYTE_THRUST] = EncodeInputIntensity(in.Value(GameAction::Thrust));
+        }
+        if (in.Down(GameAction::Shoot)) m |= INPUT_SHOOT;
         buf.data[0] = m;
         return buf;
     }
@@ -1091,26 +1104,11 @@ public:
         // (REMAINING/YOU DIED/WINS) don't also reposition the debug HUD.
         world.GetEntityManager().AddComponent<GameStatusText>(healthText, GameStatusText{});
 
-		// Exit button
-		Entity exitButton = world.GetEntityManager().CreateEntity();
-		ExitButtonChecker* exitChecker = world.GetEntityManager().AddComponent<ExitButtonChecker>(exitButton, ExitButtonChecker{});
-		UIElement* exitElement = world.GetEntityManager().AddComponent<UIElement>(exitButton, UIElement{});
-		exitElement->anchor = UIAnchor::BOTTOM_CENTER;
-		exitElement->position = glm::vec2(0.0f, -20.0f);
-		exitElement->size = glm::vec2(200.0f, 50.0f);
-		exitElement->pivot = glm::vec2(0.5f, 1.0f);
-		exitElement->layer = 1;
-		exitElement->isVisible = false; // Initially hidden, shown on game over
-		UIButton* exitBtnComp = world.GetEntityManager().AddComponent<UIButton>(exitButton, UIButton{});
-		exitBtnComp->text = "Exit";
-		exitBtnComp->fontSize = 28.0f;
-		exitBtnComp->onClick = [this, exitBtnComp, exitChecker]() {
-            Debug::Info("Asteroids") << "Exit button clicked. Exiting to menu.\n";
-			exitBtnComp->isInteractable = false; // Prevent multiple clicks
-			exitChecker->exitPressed = true;
-		};
+		// Exit flag, synced to the logic side below; the pause menu is the only way to set it.
+		Entity exitCheckerEntity = world.GetEntityManager().CreateEntity();
+		ExitButtonChecker* exitChecker = world.GetEntityManager().AddComponent<ExitButtonChecker>(exitCheckerEntity, ExitButtonChecker{});
 
-		// Escape menu, sharing the Exit button's way back to the main menu.
+		// Escape menu: its "Sí" is the way back to the main menu.
 		BuildPauseMenu(world.GetEntityManager(), exitChecker);
 
         renderDataTransferToLogicCallback = [](IECSGameLogic* logic, IECSGameRenderer* renderer) {

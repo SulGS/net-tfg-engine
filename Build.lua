@@ -22,7 +22,9 @@ OutputDir = "%{cfg.system}-%{cfg.architecture}/%{cfg.buildcfg}"
 
 -- Define directory structure
 Directories = {}
-Directories.OutputDir        = "%{wks.location}/Binaries/" .. OutputDir
+-- One folder per executable (Binaries/<os>/<cfg>/<project>) holding only what that program needs, so each
+-- folder is deployable as-is. On Windows, vcpkg's applocal step copies next to each .exe only the DLLs it imports.
+Directories.OutputDir        = "%{wks.location}/Binaries/" .. OutputDir .. "/%{prj.name}"
 Directories.IntermediateDir  = "%{wks.location}/Binaries/Intermediates/" .. OutputDir .. "/%{prj.name}"
 Directories.EngineDir        = "%{wks.location}/Binaries/" .. OutputDir .. "/Engine"
 Directories.ThirdPartyDir    = "%{wks.location}/Binaries/" .. OutputDir .. "/ThirdParty"

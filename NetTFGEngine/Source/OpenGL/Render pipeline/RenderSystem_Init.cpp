@@ -1,4 +1,4 @@
-﻿#include "RenderSystem.hpp"
+#include "RenderSystem.hpp"
 #include <cmath>
 
 // Shader compilation helpers (static)
@@ -442,8 +442,8 @@ void RenderSystem::InitLDRFBO()
 }
 
 // RGBA8 like the LDR target: scaling works on the tonemapped, gamma-encoded image. The nearest blit sets its own
-// filter, EASU gathers and RCAS fetches texels directly, so the filter mode doesn't matter; linear/clamp just matches
-// the other screen targets.
+// filter, EASU gathers and RCAS fetches texels directly, NIS samples through its own sampler object, so the filter mode
+// doesn't matter; linear/clamp just matches the other screen targets. RGBA8 is also the format NIS's image store uses.
 static void CreateScaleTarget(GLuint& fbo, GLuint& tex, int w, int h, const char* name)
 {
     glGenTextures(1, &tex);
@@ -464,7 +464,7 @@ static void CreateScaleTarget(GLuint& fbo, GLuint& tex, int w, int h, const char
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
-void RenderSystem::EnsureScaleTargets(bool withEasu)
+void RenderSystem::EnsureScaleTargets(bool withOutput)
 {
     if (m_preScaleTex == 0 || m_preScaleW != m_screenW || m_preScaleH != m_screenH) {
         glDeleteFramebuffers(1, &m_preScaleFBO);
@@ -474,19 +474,19 @@ void RenderSystem::EnsureScaleTargets(bool withEasu)
         m_preScaleH = m_screenH;
     }
 
-    if (!withEasu) {
-        // Switched away from FSR: its output-size target isn't needed any more.
-        glDeleteFramebuffers(1, &m_fsrEasuFBO); m_fsrEasuFBO = 0;
-        glDeleteTextures(1, &m_fsrEasuTex);     m_fsrEasuTex = 0;
-        m_fsrEasuW = m_fsrEasuH = 0;
+    if (!withOutput) {
+        // Switched away from FSR/NIS: their output-size target isn't needed any more.
+        glDeleteFramebuffers(1, &m_upscaleOutFBO); m_upscaleOutFBO = 0;
+        glDeleteTextures(1, &m_upscaleOutTex);     m_upscaleOutTex = 0;
+        m_upscaleOutW = m_upscaleOutH = 0;
         return;
     }
-    if (m_fsrEasuTex == 0 || m_fsrEasuW != m_outputW || m_fsrEasuH != m_outputH) {
-        glDeleteFramebuffers(1, &m_fsrEasuFBO);
-        glDeleteTextures(1, &m_fsrEasuTex);
-        CreateScaleTarget(m_fsrEasuFBO, m_fsrEasuTex, m_outputW, m_outputH, "FSR EASU");
-        m_fsrEasuW = m_outputW;
-        m_fsrEasuH = m_outputH;
+    if (m_upscaleOutTex == 0 || m_upscaleOutW != m_outputW || m_upscaleOutH != m_outputH) {
+        glDeleteFramebuffers(1, &m_upscaleOutFBO);
+        glDeleteTextures(1, &m_upscaleOutTex);
+        CreateScaleTarget(m_upscaleOutFBO, m_upscaleOutTex, m_outputW, m_outputH, "Upscale output");
+        m_upscaleOutW = m_outputW;
+        m_upscaleOutH = m_outputH;
     }
 }
 
@@ -494,7 +494,7 @@ void RenderSystem::DeleteScaleTargets()
 {
     glDeleteFramebuffers(1, &m_preScaleFBO); m_preScaleFBO = 0;
     glDeleteTextures(1, &m_preScaleTex);     m_preScaleTex = 0;
-    glDeleteFramebuffers(1, &m_fsrEasuFBO);  m_fsrEasuFBO = 0;
-    glDeleteTextures(1, &m_fsrEasuTex);      m_fsrEasuTex = 0;
-    m_preScaleW = m_preScaleH = m_fsrEasuW = m_fsrEasuH = 0;
+    glDeleteFramebuffers(1, &m_upscaleOutFBO);  m_upscaleOutFBO = 0;
+    glDeleteTextures(1, &m_upscaleOutTex);      m_upscaleOutTex = 0;
+    m_preScaleW = m_preScaleH = m_upscaleOutW = m_upscaleOutH = 0;
 }

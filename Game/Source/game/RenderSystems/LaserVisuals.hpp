@@ -52,7 +52,7 @@ inline PointLightComponent* AddLaserBoltLight(EntityManager& em, Entity bullet)
     light->color = LASER_BOLT_LIGHT_COLOR;
     light->intensity = 0.0f;
     light->radius = LASER_BOLT_LIGHT_RADIUS;
-    light->castShadows = false;
+    light->castShadows = true;
     return light;
 }
 

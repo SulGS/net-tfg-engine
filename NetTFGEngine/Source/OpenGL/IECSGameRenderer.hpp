@@ -20,6 +20,7 @@
 #include "ecs/UI/UIUpdateSystem.hpp"
 #include "ecs/UI/DebugOverlay.hpp"
 #include "OpenAL/AudioManager.hpp"
+#include "Utils/Input.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -136,6 +137,13 @@ public:
         GameState_To_ECSWorld(state);
 
         RenderSystem* renderSys = world.GetSystem<RenderSystem>();
+
+        // F12: dump this frame's image after every render pass plus all render targets to Render/<timestamp>/.
+        if (Input::KeyTapped(GLFW_KEY_F12))
+            renderSys->RequestDebugDump();
+        // F11: only the final frame, without the HUD/UI, to Render/<timestamp>.png.
+        if (Input::KeyTapped(GLFW_KEY_F11))
+            renderSys->RequestFinalFrameDump();
 
         // Checked every frame rather than on wasResized(): the render resolution setting can change without the
         // window doing so. Resize() is a no-op when nothing changed. The flag is still consumed so it doesn't linger.

@@ -52,7 +52,7 @@ static std::vector<std::string> SplitCommaList(const std::string& text) {
 int main(int argc, char** argv) {
 
     uint16_t port = 12345;
-    size_t players = 2;
+    size_t players = 1;
     std::vector<std::string> allowedIds;
     std::map<std::string, std::string> playerKeys;
     bool checkPlayerKeys = true;

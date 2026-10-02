@@ -6,6 +6,9 @@
 #include <vector>
 #include <string>
 #include <ctime>
+#include <cstdio>
+#include <cmath>
+#include <algorithm>
 
 // Internal helpers (file-scope only)
 namespace {
@@ -200,9 +203,16 @@ namespace {
         const int nPix = w * h;
         std::vector<uint8_t> pixels(nPix * 3);
 
+        // Tightly packed RGB rows (the default 4-byte alignment pads them when w * 3 isn't a multiple of 4).
+        GLint prevPack = 4;
+        glGetIntegerv(GL_PACK_ALIGNMENT, &prevPack);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
         glReadBuffer(GL_BACK);
         glReadPixels(0, 0, w, h, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
+
+        glPixelStorei(GL_PACK_ALIGNMENT, prevPack);
 
         WritePNG(path, w, h, pixels);
     }
@@ -229,6 +239,56 @@ namespace {
         WritePNG(path, w, h, rgb);
     }
 
+    static std::vector<float> ReadRGBA32F(GLuint tex, int w, int h)
+    {
+        std::vector<float> pixels(static_cast<size_t>(w) * h * 4);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_FLOAT, pixels.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+        return pixels;
+    }
+
+    // The scene as the tonemap shader sees it: hdr + bloom * strength, bloom (bw x bh) sampled like texture() with
+    // GL_LINEAR + CLAMP_TO_EDGE at the full-res pixel centre, inf clamped / NaN zeroed as the shader does. Then
+    // tonemapped like the other HDR dumps.
+    static void DumpTexture2D_HDRWithBloom(GLuint hdrTex, int w, int h,
+        GLuint bloomTex, int bw, int bh, float strength,
+        float exposure, float gamma, const std::string& path)
+    {
+        const std::vector<float> hdr = ReadRGBA32F(hdrTex, w, h);
+        const std::vector<float> bloom = ReadRGBA32F(bloomTex, bw, bh);
+
+        auto bloomAt = [&](int x, int y, int c) {
+            return bloom[(static_cast<size_t>(std::clamp(y, 0, bh - 1)) * bw + std::clamp(x, 0, bw - 1)) * 4 + c];
+            };
+
+        const float invGamma = 1.0f / gamma;
+        std::vector<uint8_t> rgb(static_cast<size_t>(w) * h * 3);
+        for (int y = 0; y < h; ++y) {
+            const float by = (y + 0.5f) / h * bh - 0.5f;
+            const int   y0 = static_cast<int>(std::floor(by));
+            const float fy = by - y0;
+            for (int x = 0; x < w; ++x) {
+                const float bx = (x + 0.5f) / w * bw - 0.5f;
+                const int   x0 = static_cast<int>(std::floor(bx));
+                const float fx = bx - x0;
+
+                const size_t i = static_cast<size_t>(y) * w + x;
+                float v[3];
+                bool  nan = false;
+                for (int c = 0; c < 3; ++c) {
+                    const float top = bloomAt(x0, y0, c) * (1.0f - fx) + bloomAt(x0 + 1, y0, c) * fx;
+                    const float bot = bloomAt(x0, y0 + 1, c) * (1.0f - fx) + bloomAt(x0 + 1, y0 + 1, c) * fx;
+                    v[c] = hdr[i * 4 + c] + (top * (1.0f - fy) + bot * fy) * strength;
+                    nan |= std::isnan(v[c]);
+                }
+                for (int c = 0; c < 3; ++c)
+                    rgb[i * 3 + c] = TonemapChannel(nan ? 0.0f : std::min(v[c], 60000.0f), exposure, invGamma);
+            }
+        }
+        WritePNG(path, w, h, rgb);
+    }
+
     // One channel (0 = R ... 3 = A) as greyscale. w/h must be the texture's own size.
     static void DumpTexture2D_GreyscaleR(GLuint tex, int w, int h,
         const std::string& path, int channel = 0)
@@ -250,8 +310,7 @@ namespace {
 
 } // anonymous namespace
 
-// Dumps every render target (HDR/depth/GBuffer/bloom/LDR/final/shadows) as 8-bit PNGs into a timestamped subfolder.
-void RenderSystem::DumpBuffers() const
+std::string RenderSystem::DumpTimestamp()
 {
     std::time_t now = std::time(nullptr);
     std::tm     tm = {};
@@ -262,7 +321,13 @@ void RenderSystem::DumpBuffers() const
 #endif
     char tsBuf[32];
     std::strftime(tsBuf, sizeof(tsBuf), "%Y-%m-%d_%H-%M-%S", &tm);
-    std::string dumpDir = std::string(kDumpDir) + "/" + tsBuf;
+    return tsBuf;
+}
+
+// Creates Render/<timestamp>/ and returns it, or an empty string on failure.
+std::string RenderSystem::MakeDumpDir()
+{
+    std::string dumpDir = std::string(kDumpDir) + "/" + DumpTimestamp();
 
     std::error_code ec;
     std::filesystem::create_directories(dumpDir, ec);
@@ -270,8 +335,79 @@ void RenderSystem::DumpBuffers() const
         Debug::Error("RenderSystem::DumpBuffers")
             << "Failed to create directory '" << dumpDir
             << "': " << ec.message() << "\n";
+        return {};
+    }
+    return dumpDir;
+}
+
+void RenderSystem::DumpStage(const char* name, StageImage kind, GLuint tex, int w, int h)
+{
+    if (m_stageDumpDir.empty()) return;
+    if (kind != StageImage::Window && !tex) return;
+
+    char prefix[16];
+    std::snprintf(prefix, sizeof(prefix), "stage_%02d_", m_stageDumpIndex++);
+    const std::string path = m_stageDumpDir + "/" + prefix + name + ".png";
+
+    // The helpers below rebind GL_TEXTURE_2D on the active unit (and the window FBO): put back what the passes left.
+    GLint prevTex = 0, prevRead = 0, prevDraw = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &prevTex);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevRead);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDraw);
+
+    const auto& rs = RenderSettings::instance();
+    switch (kind) {
+    case StageImage::HDR:     DumpTexture2D_RGBA16F(tex, w, h, rs.getExposure(), rs.getGamma(), path); break;
+    case StageImage::HDRBloom:
+        DumpTexture2D_HDRWithBloom(tex, w, h, m_bloomPingTex, std::max(1, m_screenW / 2), std::max(1, m_screenH / 2),
+            rs.getBloomStrength(), rs.getExposure(), rs.getGamma(), path);
+        break;
+    case StageImage::LDR:     DumpTexture2D_RGBA8(tex, w, h, path); break;
+    case StageImage::Window:  DumpDefaultFramebuffer(m_outputW, m_outputH, path); break;
+    case StageImage::Grey:    DumpTexture2D_GreyscaleR(tex, w, h, path); break;
+    case StageImage::Normals: DumpTexture2D_ViewNormals(tex, w, h, path); break;
+    case StageImage::Depth:   DumpTexture2D_Depth32F(tex, w, h, path); break;
+    }
+
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(prevTex));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(prevRead));
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(prevDraw));
+
+    Debug::Info("RenderSystem::DumpBuffers") << "Saved " << prefix << name << ".png\n";
+}
+
+// The window's back buffer as Render/<timestamp>.png (_2, _3... when several land in the same second).
+void RenderSystem::DumpFinalFrame() const
+{
+    std::error_code ec;
+    std::filesystem::create_directories(kDumpDir, ec);
+    if (ec) {
+        Debug::Error("RenderSystem::DumpFinalFrame")
+            << "Failed to create directory '" << kDumpDir << "': " << ec.message() << "\n";
         return;
     }
+
+    const std::string base = std::string(kDumpDir) + "/" + DumpTimestamp();
+    std::string path = base + ".png";
+    for (int n = 2; std::filesystem::exists(path); ++n)
+        path = base + "_" + std::to_string(n) + ".png";
+
+    GLint prevRead = 0, prevDraw = 0;
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevRead);
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDraw);
+    DumpDefaultFramebuffer(m_outputW, m_outputH, path);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(prevRead));
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(prevDraw));
+
+    Debug::Info("RenderSystem::DumpFinalFrame") << "Saved " << path << "\n";
+}
+
+// Dumps every render target (HDR/depth/GBuffer/bloom/LDR/final/shadows) as 8-bit PNGs into dumpDir (a new timestamped
+// subfolder when empty).
+void RenderSystem::DumpBuffers(std::string dumpDir) const
+{
+    if (dumpDir.empty()) dumpDir = MakeDumpDir();
+    if (dumpDir.empty()) return;
 
     const auto& rs = RenderSettings::instance();
     const float exposure = rs.getExposure();

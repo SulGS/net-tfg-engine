@@ -1,7 +1,10 @@
 #include "UIUpdateSystem.hpp"
 #include "Utils/Input.hpp"
+#include "Utils/InputMap.hpp"
 #include "Utils/Utf8.hpp"
 #include <algorithm>
+#include <cfloat>
+#include <climits>
 #include <cmath>
 #include <iostream>
 
@@ -136,6 +139,14 @@ void UIUpdateSystem::Update(EntityManager& entityManager, std::vector<EventEntry
     bool mouseIsDown = IsMouseLeftDown();
     bool mouseJustPressed = mouseIsDown && !prevMouseDown;
 
+    // The mouse takes over hover/highlight when it's actually used; the gamepad hands it back to navigation.
+    {
+        double mouseDX = 0.0, mouseDY = 0.0;
+        Input::GetMouseDelta(mouseDX, mouseDY);
+        if (mouseJustPressed || std::abs(mouseDX) + std::abs(mouseDY) > 4.0) navActive = false;
+        if (Input::LastDevice() == Input::Device::Gamepad) navActive = true;
+    }
+
     // Dropdowns and sliders get the click first: an open popup is drawn on top
     // of the rest of the UI, so it must also be hit tested first.
     bool clickConsumed = false;
@@ -159,6 +170,7 @@ void UIUpdateSystem::Update(EntityManager& entityManager, std::vector<EventEntry
         for (auto [entity, element, button] : buttonQuery) {
             if (!element->isVisible || !button->isInteractable) continue;
             if (element->Contains({ refMouseX, refMouseY }, refWidth, refHeight)) {
+                navFocus = entity;
                 if (button->onClick) button->onClick();
                 clickedButton = true;
                 break;
@@ -178,6 +190,7 @@ void UIUpdateSystem::Update(EntityManager& entityManager, std::vector<EventEntry
             }
 
             if (clickedAnyField) {
+                navFocus = clickedField;
                 if (focusedTextField != clickedField) {
                     SetFocus(entityManager, clickedField);
                 }
@@ -210,10 +223,13 @@ void UIUpdateSystem::Update(EntityManager& entityManager, std::vector<EventEntry
             continue;
         }
 
-        bool isInside = element->Contains({ refMouseX, refMouseY }, refWidth, refHeight);
+        // Navigating: the focused button is the "hovered" one, wherever the (maybe hidden) pointer is.
+        bool isInside = navActive
+            ? (entity == navFocus)
+            : element->Contains({ refMouseX, refMouseY }, refWidth, refHeight);
         ButtonState previousState = button->state;
 
-        if (mouseIsDown && isInside) {
+        if (mouseIsDown && isInside && !navActive) {
             button->state = ButtonState::PRESSED;
         }
         else if (isInside) {
@@ -244,6 +260,10 @@ void UIUpdateSystem::Update(EntityManager& entityManager, std::vector<EventEntry
             OnScroll(static_cast<float>(scrollDeltaY));
         }
     }
+
+    // Taken before the handlers below: whatever they close this frame (a dropdown picking with Accept, a text field
+    // left with Back) must not also be read by the navigation as a new Accept/Back.
+    const bool navBlocked = focusedTextField != 0 || openDropdown != 0 || activeSlider != 0;
 
     // Keyboard: an open dropdown takes priority, then a focused slider.
     // Both are skipped while a text field has focus so typing is never stolen.
@@ -363,11 +383,19 @@ void UIUpdateSystem::Update(EntityManager& entityManager, std::vector<EventEntry
                 }
             }
 
-            if (Input::KeyTapped(GLFW_KEY_ESCAPE)) {
+            // Esc, or B on a gamepad (which can't type, but can focus the field with A).
+            if (InputMap::Get().Tapped(UIAction::Back)) {
                 ClearFocus(entityManager);
             }
         }
     }
+
+    // Arrows / D-pad / stick move the focus, Enter / A activates it. After the text field block: the Enter that
+    // focuses a field must not also submit it this frame.
+    if (!navBlocked) {
+        UpdateNavigation(entityManager);
+    }
+    ApplyNavHighlight(entityManager);
 
     // Update all text fields (cursor blinking)
     auto query = entityManager.CreateQuery<UIElement, UITextField>();
@@ -611,6 +639,7 @@ bool UIUpdateSystem::HandleDropdownClick(EntityManager& entityManager, const glm
         if (!element->isVisible || !dropdown->isInteractable) continue;
         if (!element->Contains(refMouse, refWidth, refHeight)) continue;
 
+        navFocus = entity;
         dropdown->Open();
         if (dropdown->isOpen) {
             openDropdown = entity;
@@ -671,8 +700,10 @@ void UIUpdateSystem::HandleDropdownKeyboard(EntityManager& entityManager) {
         return;
     }
 
-    if (Input::KeyTapped(GLFW_KEY_DOWN))  dropdown->MoveHighlight(1);
-    if (Input::KeyTapped(GLFW_KEY_UP))    dropdown->MoveHighlight(-1);
+    // Arrows, D-pad or stick (repeating while held); Enter / A picks, Esc / B closes.
+    InputMap& in = InputMap::Get();
+    if (in.Repeated(UIAction::Down)) dropdown->MoveHighlight(1);
+    if (in.Repeated(UIAction::Up))   dropdown->MoveHighlight(-1);
     if (Input::KeyTapped(GLFW_KEY_PAGE_DOWN)) dropdown->MoveHighlight(dropdown->GetVisibleItemCount());
     if (Input::KeyTapped(GLFW_KEY_PAGE_UP))   dropdown->MoveHighlight(-dropdown->GetVisibleItemCount());
 
@@ -686,7 +717,7 @@ void UIUpdateSystem::HandleDropdownKeyboard(EntityManager& entityManager) {
         dropdown->EnsureVisible(last);
     }
 
-    if (Input::KeyTapped(GLFW_KEY_ENTER) || Input::KeyTapped(GLFW_KEY_KP_ENTER)) {
+    if (in.Tapped(UIAction::Accept)) {
         if (dropdown->hoveredIndex >= 0) {
             dropdown->SelectIndex(dropdown->hoveredIndex);
         }
@@ -695,7 +726,7 @@ void UIUpdateSystem::HandleDropdownKeyboard(EntityManager& entityManager) {
         return;
     }
 
-    if (Input::KeyTapped(GLFW_KEY_ESCAPE)) {
+    if (in.Tapped(UIAction::Back)) {
         dropdown->Close();
         openDropdown = 0;
     }
@@ -715,6 +746,7 @@ bool UIUpdateSystem::HandleSliderClick(EntityManager& entityManager, const glm::
 
         activeSlider = entity;
         focusedSlider = entity;
+        navFocus = entity;   // arrows then adjust it (UpdateNavigation)
         slider->state = SliderState::DRAGGING;
         if (slider->onDragStart) slider->onDragStart();
 
@@ -787,13 +819,209 @@ void UIUpdateSystem::HandleSliderKeyboard(EntityManager& entityManager) {
         return;
     }
 
-    bool horizontal = (slider->orientation == SliderOrientation::HORIZONTAL);
-    int decreaseKey = horizontal ? GLFW_KEY_LEFT : GLFW_KEY_DOWN;
-    int increaseKey = horizontal ? GLFW_KEY_RIGHT : GLFW_KEY_UP;
-
-    if (Input::KeyTapped(decreaseKey)) slider->StepValue(-1);
-    if (Input::KeyTapped(increaseKey)) slider->StepValue(1);
+    // Arrow steps are UpdateNavigation's (a clicked slider is also the navigation focus); only the jumps are here.
     if (Input::KeyTapped(GLFW_KEY_HOME)) slider->SetValue(slider->minValue);
     if (Input::KeyTapped(GLFW_KEY_END))  slider->SetValue(slider->maxValue);
     if (Input::KeyTapped(GLFW_KEY_ESCAPE)) focusedSlider = 0;
+}
+
+// ---------------------------------------------------------------------------
+// Keyboard / gamepad navigation
+// ---------------------------------------------------------------------------
+
+bool UIUpdateSystem::IsNavigable(EntityManager& entityManager, Entity entity) const {
+    if (entity == 0) return false;
+    const UIElement* element = entityManager.GetComponent<UIElement>(entity);
+    if (!element || !element->isVisible || element->navSkip) return false;
+
+    if (const UIButton* b = entityManager.GetComponent<UIButton>(entity)) return b->isInteractable;
+    if (const UISlider* s = entityManager.GetComponent<UISlider>(entity)) return s->isInteractable;
+    if (const UIDropdown* d = entityManager.GetComponent<UIDropdown>(entity)) return d->isInteractable;
+    if (const UITextField* t = entityManager.GetComponent<UITextField>(entity)) return t->isInteractable;
+    return false;
+}
+
+bool UIUpdateSystem::GetNavCenter(EntityManager& entityManager, Entity entity, glm::vec2& center) const {
+    const UIElement* element = entityManager.GetComponent<UIElement>(entity);
+    if (!element) return false;
+    center = element->GetScreenPosition(refWidth, refHeight) + element->size * 0.5f;
+    return true;
+}
+
+Entity UIUpdateSystem::PickNavTarget(EntityManager& entityManager, const glm::vec2* nearPoint) const {
+    Entity best = 0, bestDefault = 0;
+    int bestLayer = INT_MIN, bestDefaultLayer = INT_MIN;
+    glm::vec2 bestPos(0.0f);
+    float bestNearDist = FLT_MAX;
+    Entity bestNear = 0;
+
+    auto query = entityManager.CreateQuery<UIElement>();
+    for (auto [entity, element] : query) {
+        if (!IsNavigable(entityManager, entity)) continue;
+
+        const glm::vec2 pos = element->GetScreenPosition(refWidth, refHeight);
+
+        if (element->navDefault && element->layer > bestDefaultLayer) {
+            bestDefault = entity;
+            bestDefaultLayer = element->layer;
+        }
+
+        if (nearPoint) {
+            glm::vec2 c = pos + element->size * 0.5f;
+            const glm::vec2 d = c - *nearPoint;
+            const float dist = d.x * d.x + d.y * d.y;
+            if (dist < bestNearDist) { bestNearDist = dist; bestNear = entity; }
+        }
+
+        // Highest layer (the dialog on top), then the top-most, then the left-most.
+        const bool better = best == 0
+            || element->layer > bestLayer
+            || (element->layer == bestLayer && (pos.y < bestPos.y - 0.5f
+                || (std::abs(pos.y - bestPos.y) <= 0.5f && pos.x < bestPos.x)));
+        if (better) {
+            best = entity;
+            bestLayer = element->layer;
+            bestPos = pos;
+        }
+    }
+
+    if (bestDefault) return bestDefault;
+    if (bestNear) return bestNear;
+    return best;
+}
+
+Entity UIUpdateSystem::FindNavNeighbour(EntityManager& entityManager, Entity from, glm::vec2 direction) const {
+    glm::vec2 origin;
+    if (!GetNavCenter(entityManager, from, origin)) return 0;
+    const float len = std::sqrt(direction.x * direction.x + direction.y * direction.y);
+    if (len <= 0.0f) return 0;
+    direction /= len;
+
+    Entity best = 0;
+    float bestScore = FLT_MAX;
+
+    auto query = entityManager.CreateQuery<UIElement>();
+    for (auto [entity, element] : query) {
+        if (entity == from || !IsNavigable(entityManager, entity)) continue;
+
+        const glm::vec2 c = element->GetScreenPosition(refWidth, refHeight) + element->size * 0.5f;
+        const glm::vec2 v = c - origin;
+        const float along = v.x * direction.x + v.y * direction.y;
+        if (along < 1.0f) continue;   // not in that direction at all
+
+        // Sideways offset weighs more than distance: "down" prefers the next row over something far to the side.
+        const float across = std::abs(v.x * direction.y - v.y * direction.x);
+        const float score = along + 2.5f * across;
+        if (score < bestScore) {
+            bestScore = score;
+            best = entity;
+        }
+    }
+    return best;
+}
+
+void UIUpdateSystem::ActivateNavFocus(EntityManager& entityManager) {
+    if (UIButton* button = entityManager.GetComponent<UIButton>(navFocus)) {
+        if (button->isInteractable && button->onClick) button->onClick();
+        return;
+    }
+    if (UIDropdown* dropdown = entityManager.GetComponent<UIDropdown>(navFocus)) {
+        if (openDropdown != 0 && openDropdown != navFocus) {
+            if (UIDropdown* other = entityManager.GetComponent<UIDropdown>(openDropdown)) other->Close();
+        }
+        dropdown->Open();
+        openDropdown = dropdown->isOpen ? navFocus : 0;
+        return;
+    }
+    if (entityManager.GetComponent<UITextField>(navFocus)) {
+        SetFocus(entityManager, navFocus);
+    }
+}
+
+void UIUpdateSystem::UpdateNavigation(EntityManager& entityManager) {
+    InputMap& in = InputMap::Get();
+
+    int dx = 0, dy = 0;
+    if (in.Repeated(UIAction::Up)) dy = -1;
+    else if (in.Repeated(UIAction::Down)) dy = 1;
+    if (in.Repeated(UIAction::Left)) dx = -1;
+    else if (in.Repeated(UIAction::Right)) dx = 1;
+    const bool accept = in.Tapped(UIAction::Accept);
+
+    RevalidateNavFocus(entityManager);
+
+    if (dx == 0 && dy == 0 && !accept) return;
+    navActive = true;
+
+    // Nothing focused yet (or it went away: tab change, dialog closed): this press only brings the focus up, near
+    // where it was. It doesn't also move or click, so the player sees what's selected before anything happens.
+    if (navFocus == 0) {
+        navFocus = PickNavTarget(entityManager, hasLastNavCenter ? &lastNavCenter : nullptr);
+        if (navFocus != 0) hasLastNavCenter = GetNavCenter(entityManager, navFocus, lastNavCenter);
+        return;
+    }
+
+    // Along the widget's own axis, arrows change its value instead of moving away.
+    if (UISlider* slider = entityManager.GetComponent<UISlider>(navFocus)) {
+        if (slider->orientation == SliderOrientation::HORIZONTAL && dx != 0) {
+            slider->StepValue(dx);
+            dx = 0;
+        }
+        else if (slider->orientation != SliderOrientation::HORIZONTAL && dy != 0) {
+            slider->StepValue(-dy);   // up = more
+            dy = 0;
+        }
+    }
+    else if (UIDropdown* dropdown = entityManager.GetComponent<UIDropdown>(navFocus)) {
+        // Left/right cycle the options without opening the list (quick for the gamepad).
+        if (dx != 0 && dropdown->GetOptionCount() > 0) {
+            const int current = dropdown->HasSelection() ? dropdown->selectedIndex : 0;
+            const int next = std::clamp(current + dx, 0, dropdown->GetOptionCount() - 1);
+            dropdown->SelectIndex(next);
+            dx = 0;
+        }
+    }
+
+    if (dx != 0 || dy != 0) {
+        const Entity next = FindNavNeighbour(entityManager, navFocus,
+            glm::vec2(static_cast<float>(dx), static_cast<float>(dy)));
+        if (next != 0) navFocus = next;
+    }
+
+    hasLastNavCenter = GetNavCenter(entityManager, navFocus, lastNavCenter);
+
+    if (accept) ActivateNavFocus(entityManager);
+}
+
+void UIUpdateSystem::RevalidateNavFocus(EntityManager& entityManager) {
+    if (navFocus == 0 || IsNavigable(entityManager, navFocus)) return;
+    // The focused widget went away (tab switched, dialog closed). While navigating, move to the nearest one left so
+    // the highlight doesn't just vanish; otherwise drop it.
+    navFocus = (navActive && hasLastNavCenter) ? PickNavTarget(entityManager, &lastNavCenter) : 0;
+    if (navFocus != 0) hasLastNavCenter = GetNavCenter(entityManager, navFocus, lastNavCenter);
+}
+
+void UIUpdateSystem::ApplyNavHighlight(EntityManager& entityManager) {
+    RevalidateNavFocus(entityManager);
+    const Entity shown = navActive ? navFocus : 0;
+
+    if (navFlagged != shown) {
+        if (UIElement* old = entityManager.GetComponent<UIElement>(navFlagged)) old->navFocused = false;
+        navFlagged = shown;
+    }
+    if (UIElement* element = entityManager.GetComponent<UIElement>(shown)) element->navFocused = true;
+
+    if (!navActive) return;
+
+    // Sliders and dropdowns take their hover look from the focus too (buttons already do, in Update()).
+    auto sliderQuery = entityManager.CreateQuery<UIElement, UISlider>();
+    for (auto [entity, element, slider] : sliderQuery) {
+        if (!slider->isInteractable || entity == activeSlider) continue;
+        slider->state = (entity == navFocus) ? SliderState::HOVERED : SliderState::NORMAL;
+    }
+    auto dropdownQuery = entityManager.CreateQuery<UIElement, UIDropdown>();
+    for (auto [entity, element, dropdown] : dropdownQuery) {
+        if (!dropdown->isInteractable || dropdown->isOpen) continue;
+        dropdown->state = (entity == navFocus) ? DropdownState::HOVERED : DropdownState::NORMAL;
+    }
 }

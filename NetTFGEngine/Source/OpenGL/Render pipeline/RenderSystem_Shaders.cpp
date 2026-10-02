@@ -1,5 +1,7 @@
 ﻿#include "RenderSystem.hpp"
 #include "FSR_SDK/FSR1_GLSL.inl"
+#include "NIS_SDK/NIS_Config.h"
+#include "NIS_SDK/NIS_GLSL.inl"
 
 // CompileShadowShader — point light cubemap
 void RenderSystem::CompileShadowShader()
@@ -970,6 +972,151 @@ void RenderSystem::CompileFSRShaders()
     m_fsrRcasShader = build(rcasFrag);
     if (!m_fsrEasuShader || !m_fsrRcasShader)
         Debug::Error("RenderSystem") << "FSR 1 shaders failed to build; upscaling falls back to bilinear\n";
+}
+
+// NVIDIA Image Scaling (NVScaler) from the SDK in NIS_SDK: NIS_Scaler.h embedded by Scripts/embed_nis_sdk.py (texture
+// macros patched to plain sampler2D uniforms), coefficient tables and block sizes from NIS_Config.h. A compute shader,
+// so it needs GL 4.3 (the context is only asked for 3.3): without it, or on a compile/link failure, m_nisShader stays 0
+// and ActiveUpscaleMode() falls back to Bilinear. Like FSR, GL's bottom-left origin is the same for input and output.
+void RenderSystem::CompileNISShader()
+{
+    DeleteNIS();
+
+    if (!glDispatchCompute || !glBindImageTexture || !glMemoryBarrier || !glBindSampler) {
+        Debug::Warning("RenderSystem") << "No compute shader support (GL 4.3); NIS upscaling falls back to bilinear\n";
+        return;
+    }
+
+    // Block and thread group size tuned per vendor by the SDK.
+    const char* vendor = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
+    const std::string v = vendor ? vendor : "";
+    NISGPUArchitecture arch = NISGPUArchitecture::NVIDIA_Generic;
+    if (v.find("AMD") != std::string::npos || v.find("ATI") != std::string::npos) arch = NISGPUArchitecture::AMD_Generic;
+    else if (v.find("Intel") != std::string::npos)                                 arch = NISGPUArchitecture::Intel_Generic;
+    NISOptimizer opt(true, arch);
+    m_nisBlockW = static_cast<int>(opt.GetOptimalBlockWidth());
+    m_nisBlockH = static_cast<int>(opt.GetOptimalBlockHeight());
+    const int groupSize = static_cast<int>(opt.GetOptimalThreadGroupSize());
+
+    // Every NIS_* option the header tests is defined explicitly (an undefined name in #if isn't portable in GLSL).
+    // The constants block mirrors NISConfig: std140 packs scalars at 4 bytes like the C++ struct.
+    const std::string src =
+        "#version 430 core\n"
+        "#define NIS_GLSL 1\n"
+        "#define NIS_HLSL 0\n"
+        "#define NIS_HLSL_6_2 0\n"
+        "#define NIS_SCALER 1\n"
+        "#define NIS_HDR_MODE 0\n"
+        "#define NIS_VIEWPORT_SUPPORT 0\n"
+        "#define NIS_NV12_SUPPORT 0\n"
+        "#define NIS_CLAMP_OUTPUT 1\n"
+        "#define NIS_USE_HALF_PRECISION 0\n"
+        "#define NIS_TEXTURE_GATHER 0\n"
+        "#define NIS_BLOCK_WIDTH " + std::to_string(m_nisBlockW) + "\n"
+        "#define NIS_BLOCK_HEIGHT " + std::to_string(m_nisBlockH) + "\n"
+        "#define NIS_THREAD_GROUP_SIZE " + std::to_string(groupSize) + "\n"
+        R"GLSL(
+        layout(std140, binding = 3) uniform NISConstants
+        {
+            float kDetectRatio;
+            float kDetectThres;
+            float kMinContrastRatio;
+            float kRatioNorm;
+
+            float kContrastBoost;
+            float kEps;
+            float kSharpStartY;
+            float kSharpScaleY;
+
+            float kSharpStrengthMin;
+            float kSharpStrengthScale;
+            float kSharpLimitMin;
+            float kSharpLimitScale;
+
+            float kScaleX;
+            float kScaleY;
+
+            float kDstNormX;
+            float kDstNormY;
+            float kSrcNormX;
+            float kSrcNormY;
+
+            uint kInputViewportOriginX;
+            uint kInputViewportOriginY;
+            uint kInputViewportWidth;
+            uint kInputViewportHeight;
+
+            uint kOutputViewportOriginX;
+            uint kOutputViewportOriginY;
+            uint kOutputViewportWidth;
+            uint kOutputViewportHeight;
+
+            float reserved0;
+            float reserved1;
+        };
+
+        layout(binding = 0) uniform sampler2D in_texture;
+        layout(binding = 1) uniform sampler2D coef_scaler;
+        layout(binding = 2) uniform sampler2D coef_usm;
+        layout(binding = 0, rgba8) uniform writeonly image2D out_texture;
+        )GLSL"
+        + NIS_GLSL::NisScaler() + R"GLSL(
+        layout(local_size_x = NIS_THREAD_GROUP_SIZE) in;
+        void main()
+        {
+            NVScaler(gl_WorkGroupID.xy, gl_LocalInvocationID.x);
+        }
+        )GLSL";
+
+    GLuint prog = LinkProgram({ CompileStage(GL_COMPUTE_SHADER, src.c_str()) });
+    GLint ok = 0;
+    glGetProgramiv(prog, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        glDeleteProgram(prog);
+        Debug::Error("RenderSystem") << "NIS shader failed to build; upscaling falls back to bilinear\n";
+        return;
+    }
+    m_nisShader = prog;
+
+    // Coefficients: 8 taps per phase = 2 RGBA texels per row, one row per phase; the shader texelFetches them.
+    auto makeCoefTex = [](const float (&coef)[kPhaseCount][kFilterSize]) {
+        GLuint tex = 0;
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA32F, static_cast<GLsizei>(kFilterSize / 4),
+            static_cast<GLsizei>(kPhaseCount), 0, GL_RGBA, GL_FLOAT, coef);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        return tex;
+    };
+    m_nisCoefScaleTex = makeCoefTex(coef_scale);
+    m_nisCoefUsmTex = makeCoefTex(coef_usm);
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    glGenBuffers(1, &m_nisConfigUBO);
+    glBindBuffer(GL_UNIFORM_BUFFER, m_nisConfigUBO);
+    glBufferData(GL_UNIFORM_BUFFER, sizeof(NISConfig), nullptr, GL_DYNAMIC_DRAW);
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
+
+    // The SDK samples the input with a linear/clamp sampler (samplerLinearClamp).
+    glGenSamplers(1, &m_nisSampler);
+    glSamplerParameteri(m_nisSampler, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glSamplerParameteri(m_nisSampler, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glSamplerParameteri(m_nisSampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glSamplerParameteri(m_nisSampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+}
+
+void RenderSystem::DeleteNIS()
+{
+    glDeleteProgram(m_nisShader);            m_nisShader = 0;
+    glDeleteTextures(1, &m_nisCoefScaleTex); m_nisCoefScaleTex = 0;
+    glDeleteTextures(1, &m_nisCoefUsmTex);   m_nisCoefUsmTex = 0;
+    glDeleteBuffers(1, &m_nisConfigUBO);     m_nisConfigUBO = 0;
+    if (glDeleteSamplers) glDeleteSamplers(1, &m_nisSampler);
+    m_nisSampler = 0;
 }
 
 // Plain copy of a render-resolution image to the current target at its size: bilinear (texture()) or nearest-neighbour
