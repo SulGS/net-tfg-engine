@@ -103,12 +103,14 @@ void RenderSystem::ReInitShadows()
     // Point light shadows
     glDeleteFramebuffers(1, &m_shadowFBO);   m_shadowFBO = 0;
     glDeleteTextures(1, &m_shadowCubeArray); m_shadowCubeArray = 0;
+    glDeleteSamplers(1, &m_shadowCmpSampler); m_shadowCmpSampler = 0;
     glDeleteBuffers(1, &m_shadowDataSSBO);   m_shadowDataSSBO = 0;
     InitShadowCubeArray();
 
     // Directional light shadow (same resolution setting)
     glDeleteFramebuffers(1, &m_dirShadowFBO); m_dirShadowFBO = 0;
     glDeleteTextures(1, &m_dirShadowTex);     m_dirShadowTex = 0;
+    glDeleteSamplers(1, &m_dirShadowCmpSampler); m_dirShadowCmpSampler = 0;
     InitDirShadowMap();
 }
 
@@ -199,7 +201,8 @@ void RenderSystem::Update(EntityManager& entityManager,
         m_shadowCount = 0;
 
     if (rs.getDirShadowsEnabled())
-        DirShadowPass(meshQuery, cameraPos);               // directional light ortho shadow
+        DirShadowPass(meshQuery, view, projection,          // directional light cascaded shadows
+            activeCamera->getNearPlane(), activeCamera->getFarPlane());
 
     // SSAO has no pass of its own on the scene: the materials multiply their ambient by it while shading. To see what it
     // adds, the dump frame is shaded once more first with the AO at 1.0 (as if it were off), then SSAO is recomputed.
@@ -292,12 +295,14 @@ RenderSystem::~RenderSystem()
     glDeleteBuffers(1, &m_lightSSBO);
     glDeleteFramebuffers(1, &m_shadowFBO);
     glDeleteTextures(1, &m_shadowCubeArray);
+    glDeleteSamplers(1, &m_shadowCmpSampler);
     glDeleteBuffers(1, &m_shadowDataSSBO);
     glDeleteProgram(m_shadowShader);
     // Directional light
     glDeleteBuffers(1, &m_dirLightUBO);
     glDeleteFramebuffers(1, &m_dirShadowFBO);
     glDeleteTextures(1, &m_dirShadowTex);
+    glDeleteSamplers(1, &m_dirShadowCmpSampler);
     glDeleteProgram(m_dirShadowShader);
     // GBuffer
     glDeleteFramebuffers(1, &m_gbufferFBO);

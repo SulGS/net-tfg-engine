@@ -31,14 +31,18 @@ struct GPUPointLight {
 struct GPUDirLight {
     glm::vec4 directionIntensity; // xyz = world-space direction (normalised, toward scene), w = intensity
     glm::vec4 colorEnabled;       // rgb = color, a = 1.0 if enabled else 0.0
-    glm::mat4 lightSpaceMatrix;   // ortho VP for shadow map (identity when shadows disabled)
+    glm::mat4 lightSpaceMatrices[RenderSettings::kMaxDirShadowCascades]; // per-cascade ortho VP (world -> NDC)
+    glm::vec4 cascadeTexelWorld;  // world size of one shadow texel, per cascade
+    glm::vec4 cascadeDepthRange;  // world distance spanned by each cascade's [0,1] depth
+    glm::vec4 params;             // x = cascade count (0 = no shadow), y = tan(light angular radius), zw unused
 };
 
 struct GPUShadowData {
     glm::mat4 lightSpaceMatrices[6]; // one per cube face
     int       lightIndex;
     float     farPlane;
-    int       pad[2];
+    float     sourceRadius;          // PointLightComponent::sourceRadius (PCSS light size)
+    int       pad;
 };
 
 // Concrete type for the mesh query used across passes.
@@ -96,6 +100,7 @@ private:
 
     // Point light shadow resources
     GLuint m_shadowCubeArray = 0;
+    GLuint m_shadowCmpSampler = 0;   // depth-compare sampler for the same cube array (hardware PCF taps, unit 8)
     GLuint m_shadowFBO = 0;
     GLuint m_shadowShader = 0;
     GLuint m_shadowDataSSBO = 0;
@@ -105,10 +110,15 @@ private:
     // Directional light UBO (binding 2), one GPUDirLight struct; colorEnabled.a == 0 means the shader skips the term.
     GLuint m_dirLightUBO = 0;
 
-    // Directional light shadow map: a single DEPTH32F texture + FBO, resolution shared with point lights via getShadowResolution().
-    GLuint m_dirShadowTex = 0;   // sampler2D, DEPTH32F
+    // Directional light cascaded shadow maps: one DEPTH32F array layer per cascade. The texture reads raw depth (PCSS
+    // blocker search, unit 9); m_dirShadowCmpSampler reads it with hardware depth compare (PCF taps, unit 6).
+    GLuint m_dirShadowTex = 0;   // sampler2DArray, DEPTH32F
+    GLuint m_dirShadowCmpSampler = 0;
     GLuint m_dirShadowFBO = 0;
     GLuint m_dirShadowShader = 0;
+    int    m_dirShadowRes = 0;          // as allocated (InitDirShadowMap may lower the setting to fit the memory cap)
+    int    m_dirCascadeCount = 0;       // array layers allocated
+    bool   m_dirLightCastsShadows = false;
 
     GPUDirLight m_cpuDirLight{};  // cached copy of the directional light for CPU-side use (e.g. particles)
 
@@ -306,7 +316,7 @@ private:
     void CollectLightsPass(EntityManager& em);  // also handles directional light
     void ShadowPass(EntityManager& em, EntityManager::Query<MeshComponent, Transform>& meshQuery);
     void DirShadowPass(EntityManager::Query<MeshComponent, Transform>& meshQuery,
-        const glm::vec3& cameraPos);
+        const glm::mat4& view, const glm::mat4& projection, float cameraNear, float cameraFar);
     void ShadingPass(EntityManager::Query<MeshComponent, Transform>& meshQuery,
         const glm::mat4& view, const glm::mat4& projection,
         const glm::vec3& cameraPos);

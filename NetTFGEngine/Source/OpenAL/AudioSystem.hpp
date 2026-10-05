@@ -403,6 +403,16 @@ public:
                 }
             }
 
+            // Init failed (no free source, bad WAV): source is 0 and every AL call below would raise AL_INVALID_NAME. That
+            // sticky error made the next WAV load fail too, which left another source at 0, and so on every tick: a
+            // self-sustaining cascade that re-decoded WAVs while holding this EntityManager's mutex and froze the render
+            // thread. Skip it and retry next tick; `play` stays set so a one-shot still sounds once a source frees up.
+            if (!audio->initialized) {
+                if (audio->pendingToDestroy)
+                    entityManager.DestroyEntity(ent);
+                continue;
+            }
+
             updateSourceTransform(*audio, *t);
 
             glm::vec3 sp = t->getPosition();
@@ -437,26 +447,29 @@ public:
         if (ac.initialized)
             return;
 
+        // Source first: with the pool exhausted, loading the buffer first decoded the whole WAV only to unload it again,
+        // on every tick, for every waiting component.
+        const ALuint source = acquireSource();
+        if (source == 0)
+        {
+            Debug::Warning("AudioSystem")
+                << "No free audio sources available\n";
+            return;
+        }
+
         auto reqBuffer =
             AssetManager::instance().loadAsset<AudioBuffer>(ac.filePath);
 
         if (!reqBuffer)
         {
+            releaseSource(source);
             Debug::Error("AudioSystem")
                 << "Failed to load WAV: " << ac.filePath << "\n";
             return;
         }
 
+        ac.source = source;
         ac.buffer = reqBuffer->value;
-
-        ac.source = acquireSource();
-        if (ac.source == 0)
-        {
-            AssetManager::instance().unloadAsset<AudioBuffer>(ac.filePath);
-            Debug::Warning("AudioSystem")
-                << "No free audio sources available\n";
-            return;
-        }
 
         alSourcei(ac.source, AL_BUFFER, ac.buffer);
         alSourcei(ac.source, AL_LOOPING, ac.loop ? AL_TRUE : AL_FALSE);
@@ -508,11 +521,34 @@ public:
     }
 
     // Stops every SFX source directly via the pool (ECS may be unreachable on deactivation); buffer ref-counts are released later by unloadBin, and music is left untouched.
-    void StopAllSources()
+    // `keep`: the EntityManager of a client that stays live (the scene being switched TO), or null. Its initialized
+    // sources are left alone: this runs after the new client is already active, and wiping them left its components
+    // marked initialized on sources the pool had handed back out (shared sources, double releases, buffer ref-counts off).
+    void StopAllSources(EntityManager* keep = nullptr)
     {
+        std::unordered_set<ALuint> keptSources;
+        std::unordered_set<Entity> keptEntities;
+
+        if (keep) {
+            keep->acquireMutex();
+            auto sourceQuery = keep->CreateQuery<AudioSourceComponent, Transform>();
+            for (auto [ent, audio, t] : sourceQuery) {
+                if (audio->initialized && audio->source != 0) {
+                    keptSources.insert(audio->source);
+                    keptEntities.insert(ent);
+                }
+            }
+            keep->releaseMutex();
+        }
+
         for (size_t i = 0; i < sourcePool.size(); ++i)
         {
-            // Stop every source that is still audible, whether the pool slot
+            if (keptSources.count(sourcePool[i])) {
+                sourceInUse[i] = true;
+                continue;
+            }
+
+            // Stop every other source that is still audible, whether the pool slot
             // is marked in-use or not (guards against any leaked acquisitions).
             ALint state;
             alGetSourcei(sourcePool[i], AL_SOURCE_STATE, &state);
@@ -524,12 +560,10 @@ public:
             }
         }
 
-        // The activeAudioEntities set now refers to entities from the closing
-        // client that no longer exist.  Clear it so Update() doesn't try to
-        // walk them on the next tick.
-        activeAudioEntities.clear();
+        // Entities of the closing client no longer exist; keep only the live client's so Update() still cleans those up.
+        activeAudioEntities = std::move(keptEntities);
 
-        Debug::Info("AudioSystem") << "All SFX sources stopped and pool reset\n";
+        Debug::Info("AudioSystem") << "SFX sources stopped and pool reset (kept " << keptSources.size() << " live)\n";
     }
 
 private:
@@ -794,6 +828,10 @@ ALuint loadWavALFromMemory(const uint8_t* data, size_t size)
 
     // channels is guaranteed 1 after the downmix above
     ALenum format = AL_FORMAT_MONO_FLOAT32;
+
+    // AL errors are sticky until read: clear whatever an earlier, unrelated call left behind (another thread's alSource*
+    // on a stale source, an alDeleteBuffers of a still-bound buffer...), or the check below blames this load for it.
+    alGetError();
 
     ALuint buffer = 0;
     alGenBuffers(1, &buffer);

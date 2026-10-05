@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <glm/glm.hpp>
 #include <fstream>
@@ -151,7 +151,7 @@ public:
     void  setShadowBiasUnits(float v) { m_shadowBiasUnits = v; }
     float getShadowBiasUnits()   const { return m_shadowBiasUnits; }
 
-    // RUNTIME — DIRECTIONAL LIGHT SHADOW: independent of point light shadows (getDirShadowsEnabled is a separate master toggle); resolution needs ReInitShadows() after changing, but extent/near/far apply next frame with no GPU recreation. Extent is the ortho frustum half-size; near/far are clip distances with the eye pulled back along -lightDir, centred on the world origin.
+    // RUNTIME — DIRECTIONAL LIGHT SHADOW: independent of point light shadows (getDirShadowsEnabled is a separate master toggle); resolution and cascade count need ReInitShadows() after changing.
 
     void setDirShadowsEnabled(bool v) { m_dirShadowsEnabled = v; }
     bool getDirShadowsEnabled() const { return m_dirShadowsEnabled; }
@@ -161,14 +161,26 @@ public:
     void setDirShadowResolution(int v) { m_dirShadowRes = v; }
     int  getDirShadowResolution() const { return m_dirShadowRes; }
 
-    void  setDirShadowExtent(float v) { m_dirShadowExtent = v; }
-    float getDirShadowExtent()  const { return m_dirShadowExtent; }
+    // Cascaded shadow maps: the camera view from its near plane out to the shadow distance (world units, capped by the
+    // camera's far plane) is split into slices, each with its own map of getDirShadowResolution()^2. Both come from a
+    // single detail level (0 = very low .. 4 = ultra, same tiers as the presets) so the menu offers one choice; needs
+    // ReInitShadows() after changing (the cascade count sizes the texture array).
+    static constexpr int kMaxDirShadowCascades = 4;
+    static constexpr int kDirShadowDetailLevels = 5;
 
-    void  setDirShadowNear(float v) { m_dirShadowNear = v; }
-    float getDirShadowNear()    const { return m_dirShadowNear; }
+    void setDirShadowDetail(int v) { m_dirShadowDetail = std::clamp(v, 0, kDirShadowDetailLevels - 1); }
+    int  getDirShadowDetail() const { return m_dirShadowDetail; }
 
-    void  setDirShadowFar(float v) { m_dirShadowFar = v; }
-    float getDirShadowFar()     const { return m_dirShadowFar; }
+    int getDirShadowCascades() const
+    {
+        static constexpr int kCascades[kDirShadowDetailLevels] = { 1, 2, 3, 4, 4 };
+        return kCascades[m_dirShadowDetail];
+    }
+    float getDirShadowDistance() const
+    {
+        static constexpr float kDistance[kDirShadowDetailLevels] = { 40.0f, 80.0f, 120.0f, 160.0f, 200.0f };
+        return kDistance[m_dirShadowDetail];
+    }
 
     // RUNTIME — HDR / TONEMAPPING
     void  setExposure(float v) { m_exposure = v; }
@@ -369,9 +381,7 @@ public:
 
             else if (k == "dirShadows")           setDirShadowsEnabled(b);
             else if (k == "dirShadowRes")         setDirShadowResolution(i);
-            else if (k == "dirShadowExtent")      setDirShadowExtent(v);
-            else if (k == "dirShadowNear")        setDirShadowNear(v);
-            else if (k == "dirShadowFar")         setDirShadowFar(v);
+            else if (k == "dirShadowDetail")      setDirShadowDetail(i);
 
             else if (k == "exposure")             setExposure(v);
             else if (k == "filmic")               setFilmicEnabled(b);
@@ -459,9 +469,7 @@ public:
 
         f << "dirShadows " << (m_dirShadowsEnabled ? 1 : 0) << "\n";
         f << "dirShadowRes " << m_dirShadowRes << "\n";
-        f << "dirShadowExtent " << m_dirShadowExtent << "\n";
-        f << "dirShadowNear " << m_dirShadowNear << "\n";
-        f << "dirShadowFar " << m_dirShadowFar << "\n";
+        f << "dirShadowDetail " << m_dirShadowDetail << "\n";
 
         f << "exposure " << m_exposure << "\n";
         f << "filmic " << (m_filmicEnabled ? 1 : 0) << "\n";
@@ -587,10 +595,8 @@ private:
             m_shadowBiasFactor = 2.0f;
             m_shadowBiasUnits = 4.0f;
             m_dirShadowsEnabled = false;
-            m_dirShadowRes = 512;
-            m_dirShadowExtent = 30.0f;
-            m_dirShadowNear = -50.0f;
-            m_dirShadowFar = 50.0f;
+            m_dirShadowRes = 256;
+            m_dirShadowDetail = 0;
             m_exposure = 1.0f;
             m_filmicEnabled = false;
             m_gamma = 2.2f;
@@ -615,10 +621,8 @@ private:
             m_shadowBiasFactor = 2.0f;
             m_shadowBiasUnits = 4.0f;
             m_dirShadowsEnabled = true;
-            m_dirShadowRes = 1024;
-            m_dirShadowExtent = 75.0f;
-            m_dirShadowNear = -100.0f;
-            m_dirShadowFar = 100.0f;
+            m_dirShadowRes = 512;
+            m_dirShadowDetail = 1;
             m_exposure = 1.0f;
             m_filmicEnabled = false;
             m_gamma = 2.2f;
@@ -643,10 +647,8 @@ private:
             m_shadowBiasFactor = 2.0f;
             m_shadowBiasUnits = 4.0f;
             m_dirShadowsEnabled = true;
-            m_dirShadowRes = 2048;
-            m_dirShadowExtent = 150.0f;
-            m_dirShadowNear = -100.0f;
-            m_dirShadowFar = 250.0f;
+            m_dirShadowRes = 1024;
+            m_dirShadowDetail = 2;
             m_exposure = 1.0f;
             m_filmicEnabled = true;
             m_filmicShoulder = 0.22f;
@@ -681,10 +683,8 @@ private:
             m_shadowBiasFactor = 2.0f;
             m_shadowBiasUnits = 4.0f;
             m_dirShadowsEnabled = true;
-            m_dirShadowRes = 4096;
-            m_dirShadowExtent = 300.0f;
-            m_dirShadowNear = -100.0f;
-            m_dirShadowFar = 500.0f;
+            m_dirShadowRes = 2048;
+            m_dirShadowDetail = 3;
             m_exposure = 1.0f;
             m_filmicEnabled = true;
             m_filmicShoulder = 0.22f;
@@ -719,11 +719,8 @@ private:
             m_shadowBiasFactor = 2.0f;
             m_shadowBiasUnits = 4.0f;
             m_dirShadowsEnabled = true;
-            m_dirShadowRes = 8192;
-            // Ultra: larger frustum to cover expansive scenes at high res.
-            m_dirShadowExtent = 600.0f;
-            m_dirShadowNear = -150.0f;
-            m_dirShadowFar = 800.0f;
+            m_dirShadowRes = 4096;
+            m_dirShadowDetail = 4;
             m_exposure = 1.2f;
             m_filmicEnabled = true;
             m_filmicShoulder = 0.22f;
@@ -807,9 +804,7 @@ private:
     // Runtime — directional light shadow frustum
     bool  m_dirShadowsEnabled = true;  // independent toggle
     int   m_dirShadowRes = 2048;       // independent resolution
-    float m_dirShadowExtent = 50.0f;
-    float m_dirShadowNear = -100.0f;
-    float m_dirShadowFar = 100.0f;
+    int   m_dirShadowDetail = 3;       // cascades + distance tier, see getDirShadowCascades()
 
     // HDR / Tonemapping
     float m_exposure = 1.0f;

@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <cstring>
+#include <mutex>
 #include "Utils/Debug/Debug.hpp"
 
 #include <AL/al.h>
@@ -80,12 +81,17 @@ public:
     AssetManager(const AssetManager&) = delete;
     AssetManager& operator=(const AssetManager&) = delete;
 
+    // Safe from any thread: the file is read and validated without the lock (the online bin is >100 MB, and the render
+    // and audio threads keep loading assets meanwhile), then installed under it.
     bool loadBin(const std::string& binFile)
     {
-        // binNameToId survives unloadBin(), so an existing entry means already-loaded (data non-empty) or known-but-unloaded (must reload into the same slot below).
-        auto existing = binNameToId.find(binFile);
-        if (existing != binNameToId.end() && !bins[existing->second].data.empty())
-            return true;
+        {
+            std::lock_guard<std::recursive_mutex> lock(mutex_);
+            // binNameToId survives unloadBin(), so an existing entry means already-loaded (data non-empty) or known-but-unloaded (must reload into the same slot below).
+            auto existing = binNameToId.find(binFile);
+            if (existing != binNameToId.end() && !bins[existing->second].data.empty())
+                return true;
+        }
 
         std::ifstream f(binFile, std::ios::binary | std::ios::ate);
         if (!f.is_open()) return false;
@@ -125,6 +131,13 @@ public:
             return false;
         }
 
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+
+        // Looked up again: another thread may have loaded or reserved this bin while the file was being read.
+        auto existing = binNameToId.find(binFile);
+        if (existing != binNameToId.end() && !bins[existing->second].data.empty())
+            return true;
+
         if (existing != binNameToId.end()) {
             // Re-loading a previously unloaded bin: overwrite its reserved
             // slot instead of appending a new one, so its binId (and every
@@ -143,6 +156,7 @@ public:
 
     void unloadBin(const std::string& binFile)
     {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         auto itBin = binNameToId.find(binFile);
         if (itBin == binNameToId.end()) return;
 
@@ -190,6 +204,7 @@ public:
     template<typename Handle>
     std::optional<Handle> loadAsset(const Key& key)
     {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         AssetID id = hashAsset(key);
 
         auto& typeMap = assets[typeid(Handle)];
@@ -261,6 +276,7 @@ public:
     template<typename Handle>
     void unloadAsset(const Key& key)
     {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         auto& typeMap = assets[typeid(Handle)];
         auto it = typeMap.find(hashAsset(key));
         if (it == typeMap.end()) return;
@@ -282,6 +298,7 @@ public:
         std::function<Handle(const uint8_t*, size_t)> loader,
         std::function<void(Handle)> destroyer)
     {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         loaders[typeid(Handle)] = [loader](const AssetLocation& loc, const BinData& bin) {
             const uint64_t available = bin.data.size() - bin.dataOffset;
             if (loc.offset > available || loc.size > available - loc.offset) {
@@ -308,12 +325,14 @@ public:
 
     void setAssetIndex(const std::unordered_map<AssetID, AssetLocation>& idx)
     {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         assetIndex = idx;
     }
 
     template<typename Handle>
     void clearType()
     {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
         auto it = assets.find(typeid(Handle));
         if (it == assets.end()) return;
 
@@ -431,6 +450,12 @@ private:
         size_t refCount = 0;
         uint32_t binId = 0;
     };
+
+    // Guards every member below. Used from the render thread (meshes, textures, shaders, music, unloadBin), the audio
+    // thread (SFX buffers) and the client-activation thread (loadBin); unloadBin() walking the AudioBuffer map while the
+    // audio thread inserted into it was a crash/hang during the switch into the online level. Leaf lock: loaders and
+    // destroyers only call GL/AL/logging, never back into code that takes the EntityManager or audio mutex.
+    mutable std::recursive_mutex mutex_;
 
     std::vector<BinData> bins;
     std::unordered_map<std::string, uint32_t> binNameToId;

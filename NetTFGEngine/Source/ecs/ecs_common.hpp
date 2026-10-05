@@ -132,6 +132,7 @@ struct PointLightComponent : public IComponent {
     glm::vec3 color = glm::vec3(1.0f);
     float     intensity = 1.0f;   // candelas
     float     radius = 10.0f;
+    float     sourceRadius = 0.15f; // physical size of the emitter (world units): sets the shadow penumbra width
     bool      castShadows = true;
 };
 
@@ -140,6 +141,7 @@ struct DirectionalLightComponent : public IComponent {
     glm::vec3 direction = glm::normalize(glm::vec3(-0.3f, -1.0f, -0.5f)); // world-space, points TOWARD the scene
     glm::vec3 color = glm::vec3(1.0f);
     float     intensity = 1.0f;   // lux (scene-scale)
+    float     angularRadius = 0.015f; // radians the light's disc spans: shadows soften by this x the occluder distance
     bool      castShadows = true;
 };
 

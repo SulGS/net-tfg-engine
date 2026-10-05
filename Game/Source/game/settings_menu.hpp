@@ -790,12 +790,23 @@ private:
         // Separadas y no fusionadas: las sombras puntuales se calculan una
         // vez por cara de cubemap y por luz, mucho mas caras que la unica
         // sombra direccional, asi que conviene poder bajarlas por separado.
+        // Resolucion por cascada: 4 cascadas de 4096 ya ocupan lo que antes un unico mapa de 8192.
         AddTierChoice(em, data, baseLayer, TAB_SOMBRAS, row++, "Calidad de sombras direccionales",
-            { 512, 1024, 2048, 4096, 8192 },
+            { 256, 512, 1024, 2048, 4096 },
             []() { return RenderSettings::instance().getDirShadowResolution(); },
             [data](int v)
             {
                 RenderSettings::instance().setDirShadowResolution(v);
+                data->pendingShadowReInit = true;
+            });
+
+        // Un solo nivel para cascadas + distancia: por separado no le dicen nada a un jugador casual.
+        AddChoice(em, data, baseLayer, TAB_SOMBRAS, row++, "Detalle de sombras direccionales",
+            SettingsUI::TierNames(),
+            []() { return RenderSettings::instance().getDirShadowDetail(); },
+            [data](int index)
+            {
+                RenderSettings::instance().setDirShadowDetail(index);
                 data->pendingShadowReInit = true;
             });
 

@@ -75,12 +75,17 @@ public:
         // Block Update() from running while we tear down sources.
         flushing = true;
 
+        // Runs on the game thread while the closing scene may still be mid-Render() on the render thread (it stays in
+        // activeInstances until CloseClient's task runs), so its EntityManager mutex is needed like any other access.
+        // Lock order audioMutex -> EntityManager mutex, same as audioLoop(); Render() never takes audioMutex.
+        em->acquireMutex();
         auto sourceQuery = em->CreateQuery<AudioSourceComponent, Transform>();
         for (auto [ent, audio, t] : sourceQuery) {
             if (audio->initialized) {
                 audioSystem->cleanupSourceAndUntrack(*audio, ent);
             }
         }
+        em->releaseMutex();
 
         // Detach the EM so the audio loop won't call Update() on a
         // destroyed EntityManager on its next tick.
@@ -94,9 +99,11 @@ public:
     }
 
     // Authoritative client-switch cleanup: operates directly on the AL source pool instead of the ECS, since FlushEntities alone can't reach entities when the EntityManager pointer isn't valid (e.g. OnlineClient moves gameLogic_ before teardown).
+    // Call after FlushEntities(closing EM): entityManager is then either null or the scene being switched to, whose live
+    // sources are kept. Lock order audioMutex -> EntityManager mutex, same as audioLoop().
     static void StopAllSources() {
         std::lock_guard<std::mutex> lock(audioMutex);
-        if (audioSystem) audioSystem->StopAllSources();
+        if (audioSystem) audioSystem->StopAllSources(entityManager);
     }
 
     static void PlayMusic(const std::string& file, bool loop = true) {

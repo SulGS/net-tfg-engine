@@ -1,5 +1,5 @@
 #pragma once
-// Engine DEFAULT SURFACE SHADER: GGX/Cook-Torrance PBR, point-light cube shadows (PCSS), directional PCF shadows, glTF PBR
+// Engine DEFAULT SURFACE SHADER: GGX/Cook-Torrance PBR, point-light cube shadows (PCSS), directional cascaded shadows (PCSS), glTF PBR
 // textures. Used by Meshes without a Material; reused by lava/water.frag. Embedded (static lib, no loose files) like
 // RenderSystem_Shaders.cpp; registered in ShaderLoader under the keys below by Mesh::InitDefaultMaterial().
 
@@ -81,7 +81,9 @@ uniform sampler2D      uMRTex;             // unit 2 - G=roughness, B=metallic
 uniform sampler2D      uOcclusionTex;      // unit 3 - R=AO
 uniform sampler2D      uEmissiveTex;       // unit 4 - emissive
 uniform samplerCubeArray uShadowCubeArray; // unit 5 - point light cubemap array
-uniform sampler2DShadow  uDirShadowMap;    // unit 6 - directional light shadow map (hardware PCF)
+uniform samplerCubeArrayShadow uShadowCubeArrayCmp; // unit 8 - same cubemap array, depth-compare sampler (hardware PCF)
+uniform sampler2DArrayShadow uDirShadowMap; // unit 6 - directional light cascades, depth-compare sampler (hardware PCF)
+uniform sampler2DArray uDirShadowDepth;      // unit 9 - same cascades, raw depth (PCSS blocker search)
 uniform sampler2D      uSSAOTex;           // unit 7 - screen-space AO, reduced res (all 1.0 when SSAO is off)
 uniform int            uSSAOScale;         // its resolution divisor (1, 2 or 4)
 
@@ -92,7 +94,7 @@ uniform vec3  uCameraPos;
 uniform int   uShadowCount;
 uniform int   uLightCount;
 uniform int   uShadowRes;       // point light cubemap resolution
-uniform int   uDirShadowRes;    // directional shadow map resolution (independent)
+uniform int   uDirShadowRes;    // directional shadow map resolution, per cascade (independent)
 
 // -------------------------------------------------------
 // Point light SSBO  (binding 0)
@@ -110,17 +112,21 @@ struct ShadowData {
     mat4  lightSpaceMatrices[6];
     int   lightIndex;
     float farPlane;
-    int   pad[2];
+    float sourceRadius;   // light size for PCSS
+    int   pad;
 };
 layout(std430, binding = 1) readonly buffer ShadowBuf { ShadowData shadows[]; };
 
 // ---- Directional light UBO (binding 2) ----
 // colorEnabled.a == 0 -> no directional light (skip term).
-// lightSpaceMatrix transforms world -> shadow NDC for the ortho shadow map.
+// uDirLightSpaceMatrices[c] transforms world -> shadow NDC of cascade c (only the first uDirLightParams.x are valid).
 layout(std140, binding = 2) uniform DirLightBlock {
     vec4 uDirLightDirIntensity;   // xyz = direction (world, toward scene), w = intensity
     vec4 uDirLightColorEnabled;   // rgb = color, a = 1.0 if light exists else 0.0
-    mat4 uDirLightSpaceMatrix;    // ortho VP
+    mat4 uDirLightSpaceMatrices[4]; // per-cascade ortho VP (world -> NDC)
+    vec4 uDirCascadeTexel;          // world size of one shadow texel, per cascade
+    vec4 uDirCascadeDepthRange;     // world distance spanned by each cascade's [0,1] depth
+    vec4 uDirLightParams;           // x = cascade count (0 = no shadow), y = tan(light angular radius)
 };
 
 // -------------------------------------------------------
@@ -186,155 +192,213 @@ vec3 CookTorranceBRDF(vec3 N, vec3 V, vec3 L,
 
     return (diff + spec) * NdotL;
 }
-
-// -------------------------------------------------------
-// Poisson sphere - 32 samples for PCSS
-// -------------------------------------------------------
-const vec3 kPoissonSphere[32] = vec3[](
-    vec3( 0.286,  0.928,  0.238), vec3(-0.612,  0.529, -0.588),
-    vec3( 0.751, -0.432,  0.499), vec3(-0.178, -0.861,  0.477),
-    vec3(-0.823,  0.124,  0.555), vec3( 0.438,  0.322, -0.841),
-    vec3(-0.349, -0.213, -0.912), vec3( 0.918, -0.213, -0.335),
-    vec3( 0.110,  0.623, -0.774), vec3(-0.752, -0.601,  0.271),
-    vec3( 0.571,  0.763,  0.303), vec3( 0.042, -0.487,  0.872),
-    vec3(-0.947,  0.219, -0.232), vec3( 0.687, -0.719,  0.103),
-    vec3(-0.412,  0.786, -0.461), vec3( 0.247, -0.918, -0.308),
-    vec3(-0.134,  0.373,  0.918), vec3( 0.826,  0.528, -0.197),
-    vec3(-0.573, -0.448,  0.686), vec3( 0.358,  0.112,  0.927),
-    vec3(-0.209, -0.761, -0.614), vec3( 0.614,  0.158, -0.773),
-    vec3(-0.772, -0.238, -0.589), vec3( 0.188,  0.961, -0.203),
-    vec3( 0.523, -0.348, -0.778), vec3(-0.466,  0.671,  0.577),
-    vec3( 0.841, -0.421,  0.341), vec3(-0.313, -0.534,  0.786),
-    vec3( 0.138, -0.289, -0.948), vec3(-0.689,  0.348, -0.636),
-    vec3( 0.451,  0.883, -0.132), vec3(-0.871, -0.412,  0.268)
-);
-
+)GLSL" // MSVC caps a single string literal at ~16 KB: the source is split into adjacent literals (concatenated).
+R"GLSL(
 // -------------------------------------------------------
 // PCSS - point lights
 // -------------------------------------------------------
-float ShadowPCSS(int shadowIdx, vec3 fragToLight,
-                 float currentDist, float farPlane,
-                 float lightRadius, float NdotL)
+// Interleaved gradient noise (Jimenez 2014): per-pixel rotation of the sample disks. Screen-stable, so it reads as a
+// fine dither instead of the crawling grain of a world-position hash.
+float InterleavedGradientNoise(vec2 p)
 {
-    float normalizedDist = currentDist / farPlane;
-    float bias           = max(0.005, 0.015 * (1.0 - NdotL));
-    float refDepth       = normalizedDist - bias;
-    float texelScale     = 1024.0 / float(uShadowRes);
+    return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00583715))));
+}
 
+// Vogel (golden-angle spiral) disk: even coverage of the unit disk for any sample count, rotated by phi.
+vec2 VogelDisk(int i, int count, float phi)
+{
+    float r     = sqrt((float(i) + 0.5) / float(count));
+    float theta = float(i) * 2.39996323 + phi;
+    return r * vec2(cos(theta), sin(theta));
+}
+
+// Distance from the light to the receiver's tangent plane along dir: each tap compares against the surface it
+// actually lands on, so wide penumbrae on sloped surfaces don't shadow themselves.
+float ReceiverPlaneDist(vec3 dir, vec3 planeOffset, vec3 Ng, float fallback)
+{
+    float denom = dot(dir, Ng);
+    if (denom > -0.05) return fallback; // grazing / facing away: the plane is no help there
+    return clamp(dot(planeOffset, Ng) / denom, fallback * 0.5, fallback * 2.0);
+}
+
+// Everything is angular: offsets are added to the unit light->fragment direction, in the plane perpendicular to it,
+// so an offset of k equals k / dist world units on the receiver. One cube texel is ~2/res of that.
+float ShadowPCSS(int shadowIdx, vec3 lightPos, float farPlane, float sourceRadius)
+{
     const int kBlockerSamples = 16;
-    float searchRadius = (lightRadius / farPlane)
-                       * (normalizedDist / 1.0)
-                       * texelScale * 3.0;
+    const int kPCFSamples     = 32;
+
+    vec3  Ng       = normalize(vN); // geometric normal: the bias must not follow the normal map
+    vec3  toFrag   = vWorldPos - lightPos;
+    float dist     = length(toFrag);
+    float NdotL    = clamp(dot(Ng, -toFrag / dist), 0.0, 1.0);
+    float sinT     = sqrt(1.0 - NdotL * NdotL);
+
+    float texelAngle = 2.0 / float(uShadowRes);
+    float texelWorld = texelAngle * dist;
+
+    // Normal offset (more at grazing angles) instead of a big depth bias: no acne, no detached "peter pan" shadows.
+    vec3  samplePos   = vWorldPos + Ng * texelWorld * (0.5 + 1.5 * sinT);
+    vec3  fragToLight = samplePos - lightPos;
+    float receiverDist = length(fragToLight);
+    vec3  dir          = fragToLight / receiverDist;
+    float depthBias    = texelWorld * 0.5;
+
+    vec3 up = (abs(dir.y) < 0.99) ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    vec3 T  = normalize(cross(up, dir));
+    vec3 B  = cross(dir, T);
+
+    float phi   = InterleavedGradientNoise(gl_FragCoord.xy) * 6.28318531;
+    float layer = float(shadowIdx);
+
+    // 1) Blocker search over the part of the map the light's disk can be hidden by (covers blockers down to ~1/3 of
+    //    the way to the light; anything closer would need an unbounded region).
+    float searchRadius = clamp(2.0 * sourceRadius / receiverDist, texelAngle * 2.0, 0.3);
 
     float blockerSum   = 0.0;
     int   blockerCount = 0;
-
     for (int i = 0; i < kBlockerSamples; i++)
     {
-        vec3  sampleDir = normalize(fragToLight + kPoissonSphere[i] * searchRadius);
-        float depth     = texture(uShadowCubeArray,
-                                  vec4(sampleDir, float(shadowIdx))).r;
-        if (depth < refDepth) { blockerSum += depth; blockerCount++; }
+        vec2  o     = VogelDisk(i, kBlockerSamples, phi) * searchRadius;
+        vec3  d     = normalize(dir + T * o.x + B * o.y);
+        float ref   = (ReceiverPlaneDist(d, fragToLight, Ng, receiverDist) - depthBias) / farPlane;
+        float depth = texture(uShadowCubeArray, vec4(d, layer)).r;
+        if (depth < ref) { blockerSum += depth; blockerCount++; }
     }
 
-    if (blockerCount == 0)               return 1.0;
-    if (blockerCount == kBlockerSamples) return 0.0;
+    if (blockerCount == 0) return 1.0;
 
-    float avgBlocker = blockerSum / float(blockerCount);
-    float penumbra   = (normalizedDist - avgBlocker) / avgBlocker;
-    penumbra = clamp(penumbra * lightRadius * texelScale * 0.12, 0.0, 0.25);
+    // 2) Penumbra width on the receiver from similar triangles, as an angle from the light. Never below ~1.5 texels so
+    //    contact shadows stay antialiased, never past the region the search looked at.
+    float blockerDist   = max(blockerSum / float(blockerCount) * farPlane, 1e-3);
+    float penumbraWorld = sourceRadius * (receiverDist - blockerDist) / blockerDist;
+    float filterRadius  = clamp(penumbraWorld / receiverDist, texelAngle * 1.5, searchRadius);
 
-    const int kPCFSamples = 32;
-    float angle  = fract(sin(dot(vWorldPos, vec3(12.9898, 78.233, 37.719))) * 43758.5453);
-    float cosA   = cos(angle), sinA = sin(angle);
-
+    // 3) PCF: each tap is a hardware bilinear comparison (unit 8), so even few texels give a smooth edge.
     float shadow = 0.0;
     for (int i = 0; i < kPCFSamples; i++)
     {
-        vec3 offset  = kPoissonSphere[i];
-        vec3 rotated = vec3(
-            cosA * offset.x - sinA * offset.y,
-            sinA * offset.x + cosA * offset.y,
-            offset.z
-        ) * penumbra;
-
-        vec3  sampleDir   = fragToLight + rotated;
-        float storedDepth = texture(uShadowCubeArray,
-                                    vec4(sampleDir, float(shadowIdx))).r;
-        shadow += (storedDepth > refDepth) ? 1.0 : 0.0;
+        vec2  o   = VogelDisk(i, kPCFSamples, phi) * filterRadius;
+        vec3  d   = normalize(dir + T * o.x + B * o.y);
+        float ref = (ReceiverPlaneDist(d, fragToLight, Ng, receiverDist) - depthBias) / farPlane;
+        shadow += texture(uShadowCubeArrayCmp, vec4(d, layer), ref);
     }
     return shadow / float(kPCFSamples);
 }
 
-float GetShadowFactor(int lightBufIndex, vec3 lightPos,
-                      float currentDist, float lightRadius, float NdotL)
+float GetShadowFactor(int lightBufIndex, vec3 lightPos)
 {
     for (int s = 0; s < uShadowCount; s++)
     {
         if (shadows[s].lightIndex == lightBufIndex)
-        {
-            vec3 fragToLight = vWorldPos - lightPos;
-            return ShadowPCSS(s, fragToLight, currentDist,
-                              shadows[s].farPlane, lightRadius, NdotL);
-        }
+            return ShadowPCSS(s, lightPos, shadows[s].farPlane, shadows[s].sourceRadius);
     }
     return 1.0;
 }
+)GLSL"
+R"GLSL(
+// -------------------------------------------------------
+// Directional light - cascaded shadow maps with PCSS
+// -------------------------------------------------------
+// Penumbra = occluder-to-receiver distance x tan(light angular radius), in world units, so it matches across cascades.
+// The blocker search assumes occluders at most this far from the receiver (beyond it the penumbra is underestimated).
+const float kDirOccluderReach = 20.0;
 
-// ---- Directional light PCF shadow ----
-// Ortho projection maps depth to NDC [0,1], so the bias is already scaled (no division by kFar).
-// texelSize uses uDirShadowRes, since the directional map has its own resolution setting.
-const vec2 kPoissonDisk[16] = vec2[](
-    vec2(-0.94201624, -0.39906216),
-    vec2( 0.94558609, -0.76890725),
-    vec2(-0.09418410, -0.92938870),
-    vec2( 0.34495938,  0.29387760),
-    vec2(-0.91588581,  0.45771432),
-    vec2(-0.81544232, -0.87912464),
-    vec2(-0.38277543,  0.27676845),
-    vec2( 0.97484398,  0.75648379),
-    vec2( 0.44323325, -0.97511554),
-    vec2( 0.53742981, -0.47373420),
-    vec2(-0.26496911, -0.41893023),
-    vec2( 0.79197514,  0.19090188),
-    vec2(-0.24188840,  0.99706507),
-    vec2(-0.81409955,  0.91437590),
-    vec2( 0.19984126,  0.78641367),
-    vec2( 0.14383161, -0.14100790)
-);
-
-float DirShadowPCF(vec3 worldPos, vec3 worldNormal)
+// Shadow-map uv (xy) and depth (z) of a world position in cascade c.
+vec3 DirShadowCoord(int c, vec3 p)
 {
-    vec4 lsPos      = uDirLightSpaceMatrix * vec4(worldPos, 1.0);
-    vec3 projCoords = lsPos.xyz / lsPos.w;
-    projCoords      = projCoords * 0.5 + 0.5;
+    vec4 ls = uDirLightSpaceMatrices[c] * vec4(p, 1.0);
+    return ls.xyz / ls.w * 0.5 + 0.5;
+}
 
-    // Outside frustum -> fully lit (border sampler handles this too,
-    // but the explicit check avoids sampling altogether).
-    if (projCoords.x < 0.0 || projCoords.x > 1.0 ||
-        projCoords.y < 0.0 || projCoords.y > 1.0 ||
-        projCoords.z > 1.0)
-        return 1.0;
+float DirShadowCascade(int c, vec3 Ng, float NdotL, float phi)
+{
+    const int kBlockerSamples = 16;
+    const int kPCFSamples     = 24;
 
-    // Normal-scaled bias in NDC [0,1] (ortho already normalises depth, no extra scaling). mix(hi, lo, NdotL):
-    // grazing surfaces get more bias to avoid acne; surfaces facing the light need almost none.
-    vec3  L     = normalize(-uDirLightDirIntensity.xyz);
-    float NdotL = clamp(dot(worldNormal, L), 0.0, 1.0);
-    float bias  = mix(0.002, 0.0002, NdotL);
+    float texelWorld = uDirCascadeTexel[c];
+    float depthRange = uDirCascadeDepthRange[c];
+    float texelUV    = 1.0 / float(uDirShadowRes);
+    float layer      = float(c);
 
-    float compareDepth = projCoords.z - bias;
+    // Normal offset (more at grazing angles) instead of a big depth bias: no acne, no detached shadows.
+    float sinT  = sqrt(1.0 - NdotL * NdotL);
+    vec3  p     = vWorldPos + Ng * texelWorld * (0.5 + 1.5 * sinT);
+    vec3  coord = DirShadowCoord(c, p);
 
-    // texelSize from the directional map's own resolution.
-    const float kSpread  = 2.0;
-    float texelSz = 1.0 / float(uDirShadowRes);
-    float shadow  = 0.0;
-    for (int i = 0; i < 16; i++)
+    // Receiver plane: depth change per unit of uv across the surface, from two points on its tangent plane (analytic,
+    // no screen derivatives). Each tap then compares against the surface it lands on, so wide penumbrae on sloped
+    // surfaces don't shadow themselves. Capped at a slope of 4 so grazing surfaces don't swallow every shadow.
+    vec3  t1  = normalize(cross(Ng, abs(Ng.z) < 0.99 ? vec3(0.0, 0.0, 1.0) : vec3(1.0, 0.0, 0.0)));
+    vec3  t2  = cross(Ng, t1);
+    vec3  a   = DirShadowCoord(c, p + t1) - coord;
+    vec3  b   = DirShadowCoord(c, p + t2) - coord;
+    float det = a.x * b.y - a.y * b.x;
+    vec2  dz  = (abs(det) > 1e-12) ? vec2(a.z * b.y - a.y * b.z, a.x * b.z - a.z * b.x) / det : vec2(0.0);
+    float maxGrad = 4.0 * texelWorld / texelUV / depthRange;
+    if (length(dz) > maxGrad) dz *= maxGrad / length(dz);
+
+    float bias = 0.5 * texelWorld / depthRange;
+
+    // 1) Blocker search.
+    float searchUV = clamp(uDirLightParams.y * kDirOccluderReach / texelWorld, 2.0, 32.0) * texelUV;
+
+    float blockerSum   = 0.0;
+    int   blockerCount = 0;
+    for (int i = 0; i < kBlockerSamples; i++)
     {
-        vec2 offset = kPoissonDisk[i] * texelSz * kSpread;
-        shadow += texture(uDirShadowMap,
-                          vec3(projCoords.xy + offset, compareDepth));
+        vec2  o     = VogelDisk(i, kBlockerSamples, phi) * searchUV;
+        float ref   = coord.z + dot(dz, o) - bias;
+        float depth = texture(uDirShadowDepth, vec3(coord.xy + o, layer)).r;
+        if (depth < ref) { blockerSum += depth; blockerCount++; }
     }
-    return shadow / 16.0;
+
+    if (blockerCount == 0) return 1.0;
+
+    // 2) Penumbra from the average blocker distance; at least 1.5 texels so hard contact edges stay antialiased.
+    float blockerDist = max(coord.z - blockerSum / float(blockerCount), 0.0) * depthRange;
+    float filterUV    = clamp(blockerDist * uDirLightParams.y / texelWorld * texelUV, 1.5 * texelUV, searchUV);
+
+    // 3) PCF: each tap is a hardware bilinear comparison.
+    float shadow = 0.0;
+    for (int i = 0; i < kPCFSamples; i++)
+    {
+        vec2  o   = VogelDisk(i, kPCFSamples, phi) * filterUV;
+        float ref = coord.z + dot(dz, o) - bias;
+        shadow += texture(uDirShadowMap, vec4(coord.xy + o, layer, ref));
+    }
+    return shadow / float(kPCFSamples);
+}
+
+// Picks the first (finest) cascade whose map holds this fragment with room for the filter, and cross-fades into the
+// next one near its border so the resolution change doesn't show as a seam. The last one fades out to unshadowed.
+float DirShadow()
+{
+    int count = int(uDirLightParams.x);
+    if (count == 0) return 1.0;
+
+    vec3  Ng    = normalize(vN); // geometric normal: the bias must not follow the normal map
+    vec3  L     = normalize(-uDirLightDirIntensity.xyz);
+    float NdotL = clamp(dot(Ng, L), 0.0, 1.0);
+    float phi   = InterleavedGradientNoise(gl_FragCoord.xy) * 6.28318531;
+
+    const float kUsable     = 0.94; // past this (0 = map centre, 1 = edge) the filter would read outside the map
+    const float kBlendStart = 0.80;
+
+    for (int c = 0; c < count; c++)
+    {
+        vec3  coord = DirShadowCoord(c, vWorldPos);
+        vec2  e     = abs(coord.xy - 0.5) * 2.0;
+        float edge  = max(e.x, e.y);
+        if (edge >= kUsable || coord.z > 1.0) continue;
+
+        float shadow = DirShadowCascade(c, Ng, NdotL, phi);
+        float w      = smoothstep(kBlendStart, kUsable, edge);
+        if (w > 0.0)
+            shadow = mix(shadow, (c + 1 < count) ? DirShadowCascade(c + 1, Ng, NdotL, phi) : 1.0, w);
+        return shadow;
+    }
+    return 1.0;
 }
 
 // -------------------------------------------------------
@@ -363,7 +427,7 @@ vec3 CalcPointLights(vec3 N, vec3 V,
         atten *= w * w;
 
         vec3  Li     = l.colorIntensity.rgb * atten;
-        float shadow = GetShadowFactor(i, l.posRadius.xyz, dist, l.posRadius.w, NdotL);
+        float shadow = GetShadowFactor(i, l.posRadius.xyz);
 
         vec3 brdf = CookTorranceBRDF(N, V, L, albedo, F0, alpha, metallic);
         result += brdf * Li * shadow * ao;
@@ -387,9 +451,7 @@ vec3 CalcDirLight(vec3 N, vec3 V,
 
     vec3 Li = uDirLightColorEnabled.rgb * uDirLightDirIntensity.w;
 
-    // Pass the world-space normal so DirShadowPCF can compute its own
-    // NdotL for the bias - avoids recomputing it from the UBO direction.
-    float shadow = DirShadowPCF(vWorldPos, N);
+    float shadow = DirShadow();
 
     vec3 brdf = CookTorranceBRDF(N, V, L, albedo, F0, alpha, metallic);
     return brdf * Li * shadow * ao;

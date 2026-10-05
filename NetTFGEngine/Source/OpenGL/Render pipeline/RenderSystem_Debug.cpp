@@ -96,20 +96,18 @@ namespace {
         WritePNG(path, w, h, rgb);
     }
 
-    // Temporarily disables the sampler's comparison mode so glGetTexImage returns raw depth instead of comparison results, then restores it; visualised with auto-ranging.
+    // One cascade (layer) of the directional shadow array, raw depth visualised with auto-ranging.
     static void DumpTexture2D_DirShadow(GLuint tex,
-        int res,
+        int res, int layers, int layer,
         const std::string& path)
     {
-        glBindTexture(GL_TEXTURE_2D, tex);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_NONE);
-
         const int nPix = res * res;
-        std::vector<float> depth(nPix);
-        glGetTexImage(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, GL_FLOAT, depth.data());
-
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
-        glBindTexture(GL_TEXTURE_2D, 0);
+        std::vector<float> all(static_cast<size_t>(nPix) * layers);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, tex);
+        glGetTexImage(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH_COMPONENT, GL_FLOAT, all.data());
+        glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+        const std::vector<float> depth(all.begin() + static_cast<size_t>(nPix) * layer,
+                                       all.begin() + static_cast<size_t>(nPix) * (layer + 1));
 
         // Auto-range (same logic as DumpTexture2D_Depth32F).
         float dMin = 1.0f, dMax = 0.0f;
@@ -501,11 +499,13 @@ void RenderSystem::DumpBuffers(std::string dumpDir) const
         }
     }
 
-    // 9. Directional light shadow map (m_dirShadowTex non-zero implies Init() created it and DirShadowPass() filled it, if enabled)
+    // 9. Directional light shadow cascades (m_dirShadowTex non-zero implies Init() created it and DirShadowPass() filled it, if enabled)
     if (m_dirShadowTex) {
-        const int dirRes = RenderSettings::instance().getDirShadowResolution();
-        DumpTexture2D_DirShadow(m_dirShadowTex, dirRes, path("dir_shadow.png"));
-        Debug::Info("RenderSystem::DumpBuffers") << "Saved dir_shadow.png\n";
+        for (int c = 0; c < m_dirCascadeCount; c++) {
+            const std::string name = "dir_shadow_c" + std::to_string(c) + ".png";
+            DumpTexture2D_DirShadow(m_dirShadowTex, m_dirShadowRes, m_dirCascadeCount, c, path(name));
+            Debug::Info("RenderSystem::DumpBuffers") << "Saved " << name << "\n";
+        }
     }
 
     Debug::Info("RenderSystem::DumpBuffers")

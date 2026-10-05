@@ -57,6 +57,17 @@ void RenderSystem::InitShadowCubeArray()
     glTexParameteri(GL_TEXTURE_CUBE_MAP_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_CUBE_MAP_ARRAY, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
 
+    // The texture itself stays non-comparing (the PCSS blocker search reads raw depth); PCF taps go through this
+    // sampler instead, so each one is a bilinear 2x2 comparison rather than a hard 0/1 step.
+    glGenSamplers(1, &m_shadowCmpSampler);
+    glSamplerParameteri(m_shadowCmpSampler, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glSamplerParameteri(m_shadowCmpSampler, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glSamplerParameteri(m_shadowCmpSampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glSamplerParameteri(m_shadowCmpSampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glSamplerParameteri(m_shadowCmpSampler, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+    glSamplerParameteri(m_shadowCmpSampler, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+    glSamplerParameteri(m_shadowCmpSampler, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
+
     glGenFramebuffers(1, &m_shadowFBO);
     glBindFramebuffer(GL_FRAMEBUFFER, m_shadowFBO);
     glFramebufferTexture(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, m_shadowCubeArray, 0);
@@ -81,30 +92,48 @@ void RenderSystem::InitDirLightUBO()
     glBindBuffer(GL_UNIFORM_BUFFER, 0);
 }
 
-// A single 2-D DEPTH32F texture + FBO for the directional light's orthographic shadow map; resolution is shared with point lights via getShadowResolution().
+// DEPTH32F 2-D array, one layer per cascade, + FBO (DirShadowPass attaches one layer at a time).
 void RenderSystem::InitDirShadowMap()
 {
-    int res = RenderSettings::instance().getDirShadowResolution();
+    const auto& rs = RenderSettings::instance();
+    int res = rs.getDirShadowResolution();
+    const int cascades = rs.getDirShadowCascades();
+
+    // Memory cap: 4 x 4096^2 DEPTH32F = 256 MB, what a single 8192^2 map used before cascades.
+    constexpr long long kMaxTexels = 4LL * 4096 * 4096;
+    while (res > 512 && static_cast<long long>(res) * res * cascades > kMaxTexels)
+        res /= 2;
+    if (res != rs.getDirShadowResolution())
+        Debug::Warning("RenderSystem") << "Dir shadow resolution lowered to " << res << " for " << cascades
+                                       << " cascades (memory cap)\n";
+    m_dirShadowRes = res;
+    m_dirCascadeCount = cascades;
 
     glGenTextures(1, &m_dirShadowTex);
-    glBindTexture(GL_TEXTURE_2D, m_dirShadowTex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32F,
-        res, res, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
-    // Use hardware PCF comparison sampler so the shader can use shadow2D().
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
-    // Fragments outside the frustum are treated as fully lit.
-    float borderColor[] = { 1.0f, 1.0f, 1.0f, 1.0f };
-    glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderColor);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FUNC, GL_LESS);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, m_dirShadowTex);
+    glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_DEPTH_COMPONENT32F,
+        res, res, cascades, 0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
+    // Outside the map counts as lit: border depth 1.0 is never in front of a receiver.
+    const float borderColor[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+    glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    glTexParameterfv(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_BORDER_COLOR, borderColor);
+
+    // PCF taps: bilinear 2x2 comparison per tap.
+    glGenSamplers(1, &m_dirShadowCmpSampler);
+    glSamplerParameteri(m_dirShadowCmpSampler, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glSamplerParameteri(m_dirShadowCmpSampler, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glSamplerParameteri(m_dirShadowCmpSampler, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
+    glSamplerParameteri(m_dirShadowCmpSampler, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
+    glSamplerParameterfv(m_dirShadowCmpSampler, GL_TEXTURE_BORDER_COLOR, borderColor);
+    glSamplerParameteri(m_dirShadowCmpSampler, GL_TEXTURE_COMPARE_MODE, GL_COMPARE_REF_TO_TEXTURE);
+    glSamplerParameteri(m_dirShadowCmpSampler, GL_TEXTURE_COMPARE_FUNC, GL_LEQUAL);
 
     glGenFramebuffers(1, &m_dirShadowFBO);
     glBindFramebuffer(GL_FRAMEBUFFER, m_dirShadowFBO);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT,
-        GL_TEXTURE_2D, m_dirShadowTex, 0);
+    glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, m_dirShadowTex, 0, 0);
     glDrawBuffer(GL_NONE);
     glReadBuffer(GL_NONE);
 
@@ -112,7 +141,7 @@ void RenderSystem::InitDirShadowMap()
         Debug::Error("RenderSystem") << "Dir shadow FBO incomplete\n";
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
 }
 
 void RenderSystem::InitGBufferFBO()

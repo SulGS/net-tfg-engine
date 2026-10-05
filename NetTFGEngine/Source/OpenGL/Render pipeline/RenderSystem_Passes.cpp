@@ -239,6 +239,7 @@ void RenderSystem::CollectLightsPass(EntityManager& em)
 
     auto dirQuery = em.CreateQuery<DirectionalLightComponent>();
     bool foundDir = false;
+    m_dirLightCastsShadows = false;
     for (auto [entity, dirLight] : dirQuery) {
         if (foundDir) break;
         foundDir = true;
@@ -246,9 +247,9 @@ void RenderSystem::CollectLightsPass(EntityManager& em)
         glm::vec3 dir = glm::normalize(dirLight->direction);
         m_cpuDirLight.directionIntensity = glm::vec4(dir, dirLight->intensity);
         m_cpuDirLight.colorEnabled = glm::vec4(dirLight->color, 1.0f);
-        // lightSpaceMatrix filled in DirShadowPass; pre-fill identity so the
-        // shader can read it safely even when shadows are disabled.
-        m_cpuDirLight.lightSpaceMatrix = glm::mat4(1.0f);
+        // Cascade count (params.x) stays 0 = unshadowed until DirShadowPass fills the cascades.
+        m_cpuDirLight.params.y = std::tan(std::max(dirLight->angularRadius, 0.0f));
+        m_dirLightCastsShadows = dirLight->castShadows;
     }
     // If no dir light found, colorEnabled.a stays 0 → shader skips the term.
 
@@ -326,6 +327,8 @@ void RenderSystem::ShadowPass(EntityManager& em, EntityManager::Query<MeshCompon
             for (int f = 0; f < 6; f++) sd.lightSpaceMatrices[f] = views[f];
             sd.lightIndex = lightBufIdx;
             sd.farPlane = farPlane;
+            sd.sourceRadius = light->sourceRadius;
+            sd.pad = 0;
             shadowDataVec.push_back(sd);
             shadowIdx++;
         }
@@ -347,65 +350,109 @@ void RenderSystem::ShadowPass(EntityManager& em, EntityManager::Query<MeshCompon
     glViewport(0, 0, m_screenW, m_screenH);
 }
 
-// Renders the scene from the directional light into a 2-D ortho shadow map, frustum centred on cameraPos. No glPolygonOffset (huge depth range would cause peter panning) — instead GL_DEPTH_CLAMP plus a receiver-side normal-scaled bias in the shading shader.
+// Cascaded shadow maps: the camera frustum from its near plane to the shadow distance is split into slices, and each
+// gets an ortho map fitted to the slice's bounding sphere. A sphere keeps the map size constant however the camera
+// turns, and snapping its centre to whole texels keeps edges from shimmering as the camera moves. No glPolygonOffset:
+// the bias is receiver-side in the shader. GL_DEPTH_CLAMP keeps casters in front of the near plane (outside the view).
 void RenderSystem::DirShadowPass(EntityManager::Query<MeshComponent, Transform>& meshQuery,
-    const glm::vec3& cameraPos)
+    const glm::mat4& view, const glm::mat4& projection, float cameraNear, float cameraFar)
 {
-    // No dir light → nothing to do. Read from CPU cache (no GPU readback stall).
-    if (m_cpuDirLight.colorEnabled.a < 0.5f)
+    // No dir light (or it doesn't cast) → params.x stays 0 and the shader treats it as unshadowed.
+    if (m_cpuDirLight.colorEnabled.a < 0.5f || !m_dirLightCastsShadows || m_dirCascadeCount <= 0)
         return;
 
     const auto& rs = RenderSettings::instance();
-    const int   res = rs.getDirShadowResolution();
-    const float kExtent = rs.getDirShadowExtent();
-    const float kFar = rs.getDirShadowFar();
+    const int   res = m_dirShadowRes;
+    const int   cascades = m_dirCascadeCount;
+    const float shadowFar = std::max(std::min(cameraFar, rs.getDirShadowDistance()), cameraNear + 1.0f);
+
+    // How far beyond each cascade's sphere, toward the light, casters still get their real depth (past that they're
+    // clamped to the near plane: still drawn, only their distance for the penumbra is off).
+    constexpr float kCasterReach = 100.0f;
+    // Split scheme blend: 0 = even slices, 1 = logarithmic (most resolution near the camera).
+    constexpr float kSplitLambda = 0.5f;
 
     glm::vec3 lightDir = glm::normalize(glm::vec3(m_cpuDirLight.directionIntensity));
+    glm::vec3 up = (glm::abs(lightDir.y) > 0.99f) ? glm::vec3(1, 0, 0) : glm::vec3(0, 1, 0);
+    const glm::mat4 lightRot = glm::lookAt(glm::vec3(0.0f), lightDir, up);
+    const glm::mat4 invLightRot = glm::inverse(lightRot);
 
-    glm::vec3 up = (glm::abs(lightDir.y) > 0.99f)
-        ? glm::vec3(1, 0, 0)
-        : glm::vec3(0, 1, 0);
-
-    // Eye pulled back kFar units from cameraPos; depth range [0, kFar*2] puts cameraPos at the midpoint so objects both in front of and behind it are captured.
-    glm::mat4 lightView = glm::lookAt(
-        cameraPos - lightDir * kFar,
-        cameraPos,
-        up);
-
-    glm::mat4 lightProj = glm::ortho(
-        -kExtent, kExtent,
-        -kExtent, kExtent,
-        0.0f, kFar * 2.0f);
-
-    glm::mat4 lightSpace = lightProj * lightView;
-
-    // Patch the computed matrix back into the CPU cache and re-upload the UBO
-    // so ShadingPass can read it without a separate uniform.
-    m_cpuDirLight.lightSpaceMatrix = lightSpace;
-    glBindBuffer(GL_UNIFORM_BUFFER, m_dirLightUBO);
-    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(GPUDirLight), &m_cpuDirLight);
-    glBindBuffer(GL_UNIFORM_BUFFER, 0);
+    // Frustum edges in world space: corner ray i runs from nearC[i] (camera near) to farC[i] (camera far). View depth
+    // is linear along each ray, so a slice [d0, d1] is a lerp between them.
+    const glm::mat4 invVP = glm::inverse(projection * view);
+    const glm::vec2 ndc[4] = { {-1, -1}, {1, -1}, {1, 1}, {-1, 1} };
+    glm::vec3 nearC[4], farC[4];
+    for (int i = 0; i < 4; i++) {
+        glm::vec4 n = invVP * glm::vec4(ndc[i], -1.0f, 1.0f);
+        glm::vec4 f = invVP * glm::vec4(ndc[i], 1.0f, 1.0f);
+        nearC[i] = glm::vec3(n) / n.w;
+        farC[i] = glm::vec3(f) / f.w;
+    }
 
     glBindFramebuffer(GL_FRAMEBUFFER, m_dirShadowFBO);
     glViewport(0, 0, res, res);
-    glClear(GL_DEPTH_BUFFER_BIT);
     glEnable(GL_DEPTH_TEST);
     glDepthMask(GL_TRUE);
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-
-    // GL_DEPTH_CLAMP prevents steep/back-facing casters from being clipped by the near plane; no glPolygonOffset here (bias is applied receiver-side instead).
     glEnable(GL_DEPTH_CLAMP);
-
     glUseProgram(m_dirShadowShader);
-    glUniformMatrix4fv(glGetUniformLocation(m_dirShadowShader, "uLightSpaceMatrix"),
-        1, GL_FALSE, glm::value_ptr(lightSpace));
+    const GLint locLightSpace = glGetUniformLocation(m_dirShadowShader, "uLightSpaceMatrix");
+    const GLint locModel = glGetUniformLocation(m_dirShadowShader, "uModel");
 
-    for (auto [entity, meshC, xf] : meshQuery) {
-        if (!meshC->enabled || !meshC->mesh || !meshC->castShadows || meshC->additive) continue;
-        glUniformMatrix4fv(glGetUniformLocation(m_dirShadowShader, "uModel"),
-            1, GL_FALSE, glm::value_ptr(xf->getModelMatrix()));
-        meshC->mesh->drawDepthOnly(glm::mat4(1.0f), m_dirShadowShader);
+    float sliceNear = cameraNear;
+    for (int c = 0; c < cascades; c++) {
+        const float t = float(c + 1) / float(cascades);
+        const float logSplit = cameraNear * std::pow(shadowFar / cameraNear, t);
+        const float evenSplit = cameraNear + (shadowFar - cameraNear) * t;
+        const float sliceFar = glm::mix(evenSplit, logSplit, kSplitLambda);
+
+        const float t0 = (sliceNear - cameraNear) / (cameraFar - cameraNear);
+        const float t1 = (sliceFar - cameraNear) / (cameraFar - cameraNear);
+        glm::vec3 corners[8];
+        glm::vec3 center(0.0f);
+        for (int i = 0; i < 4; i++) {
+            corners[i] = glm::mix(nearC[i], farC[i], t0);
+            corners[i + 4] = glm::mix(nearC[i], farC[i], t1);
+            center += corners[i] + corners[i + 4];
+        }
+        center /= 8.0f;
+        float radius = 0.0f;
+        for (const glm::vec3& p : corners) radius = std::max(radius, glm::length(p - center));
+        radius = std::ceil(radius * 16.0f) / 16.0f; // quantised: tiny per-frame changes would rescale the texel grid
+
+        const float texelWorld = 2.0f * radius / float(res);
+        glm::vec3 centerLS = glm::vec3(lightRot * glm::vec4(center, 1.0f));
+        centerLS.x = std::floor(centerLS.x / texelWorld) * texelWorld;
+        centerLS.y = std::floor(centerLS.y / texelWorld) * texelWorld;
+        center = glm::vec3(invLightRot * glm::vec4(centerLS, 1.0f));
+
+        const float depthRange = 2.0f * radius + kCasterReach;
+        const glm::mat4 lightView = glm::lookAt(center - lightDir * (radius + kCasterReach), center, up);
+        const glm::mat4 lightProj = glm::ortho(-radius, radius, -radius, radius, 0.0f, depthRange);
+        const glm::mat4 lightSpace = lightProj * lightView;
+
+        m_cpuDirLight.lightSpaceMatrices[c] = lightSpace;
+        m_cpuDirLight.cascadeTexelWorld[c] = texelWorld;
+        m_cpuDirLight.cascadeDepthRange[c] = depthRange;
+
+        glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, m_dirShadowTex, 0, c);
+        glClear(GL_DEPTH_BUFFER_BIT);
+        glUniformMatrix4fv(locLightSpace, 1, GL_FALSE, glm::value_ptr(lightSpace));
+
+        for (auto [entity, meshC, xf] : meshQuery) {
+            if (!meshC->enabled || !meshC->mesh || !meshC->castShadows || meshC->additive) continue;
+            glUniformMatrix4fv(locModel, 1, GL_FALSE, glm::value_ptr(xf->getModelMatrix()));
+            meshC->mesh->drawDepthOnly(glm::mat4(1.0f), m_dirShadowShader);
+        }
+
+        sliceNear = sliceFar;
     }
+    m_cpuDirLight.params.x = float(cascades);
+
+    // Re-upload the UBO with the cascades so ShadingPass reads them without separate uniforms.
+    glBindBuffer(GL_UNIFORM_BUFFER, m_dirLightUBO);
+    glBufferSubData(GL_UNIFORM_BUFFER, 0, sizeof(GPUDirLight), &m_cpuDirLight);
+    glBindBuffer(GL_UNIFORM_BUFFER, 0);
 
     glDisable(GL_DEPTH_CLAMP);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
@@ -441,9 +488,20 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
     glActiveTexture(GL_TEXTURE5);
     glBindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, m_shadowCubeArray);
 
+    // Same cubemap array through a depth-compare sampler — texture unit 8. Unit 5 keeps raw depth for the PCSS
+    // blocker search; unit 8 gives each PCF tap a hardware-filtered (bilinear) comparison.
+    glActiveTexture(GL_TEXTURE8);
+    glBindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, m_shadowCubeArray);
+    glBindSampler(8, m_shadowCmpSampler);
+
     // Directional light shadow map — texture unit 6
     glActiveTexture(GL_TEXTURE6);
-    glBindTexture(GL_TEXTURE_2D, m_dirShadowTex);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, m_dirShadowTex);
+    glBindSampler(6, m_dirShadowCmpSampler);
+
+    // Same cascade array, raw depth (PCSS blocker search) — texture unit 9
+    glActiveTexture(GL_TEXTURE9);
+    glBindTexture(GL_TEXTURE_2D_ARRAY, m_dirShadowTex);
 
     // Screen-space AO (all 1.0 when SSAO is off) — texture unit 7
     glActiveTexture(GL_TEXTURE7);
@@ -457,19 +515,24 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
         if (Material* mat = meshC->mesh->getMaterial()) {
             mat->setVec3IfPresent("uCameraPos", cameraPos);
             mat->setIntIfPresent("uShadowCubeArray", 5);
+            mat->setIntIfPresent("uShadowCubeArrayCmp", 8);
             mat->setIntIfPresent("uDirShadowMap", 6);
+            mat->setIntIfPresent("uDirShadowDepth", 9);
             mat->setIntIfPresent("uSSAOTex", 7);
             mat->setIntIfPresent("uSSAOScale", m_ssaoScale);
             mat->setIntIfPresent("uShadowCount", m_shadowCount);
             mat->setIntIfPresent("uLightCount", m_lightCount);
             mat->setIntIfPresent("uShadowRes", m_shadowRes);
-            mat->setIntIfPresent("uDirShadowRes", rs.getDirShadowResolution());
+            mat->setIntIfPresent("uDirShadowRes", m_dirShadowRes);
         }
 
         glm::mat4 model = transform->getModelMatrix();
         meshC->mesh->bindMaterial(model, view, projection);
         meshC->mesh->draw();
     }
+
+    glBindSampler(8, 0);
+    glBindSampler(6, 0);
 
     glDepthMask(GL_TRUE);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
