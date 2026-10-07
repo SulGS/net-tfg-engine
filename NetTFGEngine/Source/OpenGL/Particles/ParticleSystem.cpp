@@ -5,85 +5,65 @@
 #include <algorithm>
 #include <cmath>
 
-// Vertex shader: reconstructs a camera-facing quad from gl_VertexID.
-// Reads one GPUParticle from the SSBO using gl_InstanceID. Shared by the colour and distortion programs.
+// Vertex shader: one camera-facing quad per instance. The quad corner comes from a static per-vertex buffer, the
+// particle from per-instance attributes (divisor 1) over the frame's upload. Plain instanced attributes rather than an
+// SSBO indexed by gl_InstanceID: an old AMD driver (Radeon 520, 21.19) returned garbage for the SSBO reads in the vertex
+// stage (colourful shredded quads in the particles pass), and attributes work everywhere. Shared by the colour and
+// distortion programs.
 static const char* kParticleVert = R"GLSL(
     #version 430 core
 
-    struct GPUParticle {
-        vec4 positionSize; // xyz = world pos, w = size
-        vec4 color;
-        vec4 velocitySeed; // xyz = world velocity, w = seed
-        vec4 params;       // x = stretch, y = noiseAmount / distortion strength, z = rotation, w = normalised age
-        vec4 flip;         // x = cols, y = rows, z = frame, w = frame count
-    };
-    layout(std430, binding = 1) readonly buffer ParticleBuffer {
-        GPUParticle particles[];
-    };
+    layout(location = 0) in vec4 aCornerUV;     // xy = quad corner (-0.5..0.5), zw = uv
+    layout(location = 1) in vec4 iPositionSize; // xyz = world pos, w = size
+    layout(location = 2) in vec4 iColor;
+    layout(location = 3) in vec4 iVelocitySeed; // xyz = world velocity, w = seed
+    layout(location = 4) in vec4 iParams;       // x = stretch, y = noiseAmount / distortion strength, z = rotation, w = normalised age
+    layout(location = 5) in vec4 iFlip;         // x = cols, y = rows, z = frame, w = frame count
 
     uniform mat4 uView;
     uniform mat4 uProjection;
-    uniform int  uFirst; // this batch's first particle in the SSBO (every batch shares one upload per frame)
 
     out vec2 vUV;
     out vec4 vColor;
     out vec4 vParams; // x = seed, y = noiseAmount / distortion strength, z = rotation, w = normalised age
     out vec4 vFlip;
 
-    const vec2 kCorners[6] = vec2[6](
-        vec2(-0.5,  0.5),
-        vec2(-0.5, -0.5),
-        vec2( 0.5, -0.5),
-        vec2(-0.5,  0.5),
-        vec2( 0.5, -0.5),
-        vec2( 0.5,  0.5)
-    );
-    const vec2 kUVs[6] = vec2[6](
-        vec2(0.0, 1.0),
-        vec2(0.0, 0.0),
-        vec2(1.0, 0.0),
-        vec2(0.0, 1.0),
-        vec2(1.0, 0.0),
-        vec2(1.0, 1.0)
-    );
-
     void main()
     {
-        GPUParticle p  = particles[uFirst + gl_InstanceID];
-        vec3  worldPos = p.positionSize.xyz;
-        float size     = p.positionSize.w;
+        vec3  worldPos = iPositionSize.xyz;
+        float size     = iPositionSize.w;
 
         // Camera right/up from view matrix rows (billboard axes)
         vec3 right = vec3(uView[0][0], uView[1][0], uView[2][0]);
         vec3 up    = vec3(uView[0][1], uView[1][1], uView[2][1]);
 
-        vec2 local = kCorners[gl_VertexID];
+        vec2 local = aCornerUV.xy;
         vec2 corner;
 
         // Streak: elongate the quad along the on-screen velocity (uses the screen-plane
         // component only, so a particle flying at the camera does not turn into a long bar).
-        vec2  vScreen = vec2(dot(p.velocitySeed.xyz, right), dot(p.velocitySeed.xyz, up));
+        vec2  vScreen = vec2(dot(iVelocitySeed.xyz, right), dot(iVelocitySeed.xyz, up));
         float speed   = length(vScreen);
-        if (p.params.x > 0.0 && speed > 0.001)
+        if (iParams.x > 0.0 && speed > 0.001)
         {
             vec2 axis = vScreen / speed;
             vec2 perp = vec2(-axis.y, axis.x);
-            corner = axis * (local.x * (size + p.params.x * speed)) + perp * (local.y * size);
+            corner = axis * (local.x * (size + iParams.x * speed)) + perp * (local.y * size);
         }
         else
         {
             // Spin the sprite in the view plane (rotation is 0 for distortion rings).
-            float cr = cos(p.params.z);
-            float sr = sin(p.params.z);
+            float cr = cos(iParams.z);
+            float sr = sin(iParams.z);
             local  = vec2(cr * local.x - sr * local.y, sr * local.x + cr * local.y);
             corner = local * size;
         }
         vec3 vertPos = worldPos + right * corner.x + up * corner.y;
 
-        vUV         = kUVs[gl_VertexID];
-        vColor      = p.color;
-        vParams     = vec4(p.velocitySeed.w, p.params.y, p.params.z, p.params.w);
-        vFlip       = p.flip;
+        vUV         = aCornerUV.zw;
+        vColor      = iColor;
+        vParams     = vec4(iVelocitySeed.w, iParams.y, iParams.z, iParams.w);
+        vFlip       = iFlip;
         gl_Position = uProjection * uView * vec4(vertPos, 1.0);
     }
 )GLSL";
@@ -260,21 +240,19 @@ void ParticleSystem::Init()
     CompileShaders();
     InitQuadVAO();
 
-    glGenBuffers(1, &m_ssbo);
-    EnsureSSBOCapacity(512);
+    glGenBuffers(1, &m_instanceVBO);
+    EnsureInstanceCapacity(512);
 
     // FIX #6 — cache uniform locations once, not every Draw() call
     m_uView = glGetUniformLocation(m_shader, "uView");
     m_uProjection = glGetUniformLocation(m_shader, "uProjection");
     m_uTex = glGetUniformLocation(m_shader, "uTex");
     m_uAlphaMode = glGetUniformLocation(m_shader, "uAlphaMode");
-    m_uFirst = glGetUniformLocation(m_shader, "uFirst");
 
     m_dView = glGetUniformLocation(m_distShader, "uView");
     m_dProjection = glGetUniformLocation(m_distShader, "uProjection");
     m_dScene = glGetUniformLocation(m_distShader, "uScene");
     m_dViewport = glGetUniformLocation(m_distShader, "uViewport");
-    m_dFirst = glGetUniformLocation(m_distShader, "uFirst");
 }
 
 // Update — advance all emitters in fixed steps, then fill staging buffers
@@ -361,24 +339,23 @@ void ParticleSystem::Draw(const glm::mat4& view, const glm::mat4& projection)
     }
     if (!any) return;
 
-    // Every batch goes up in ONE upload into a freshly orphaned buffer, each draw reading its own slice (uFirst).
-    // Rewriting offset 0 between draws that read it relies on the driver's implicit sync, and some (older Intel on
-    // Windows) get it wrong: batches drawn with another batch's particles, flicker.
+    // Every batch goes up in ONE upload into a freshly orphaned buffer, each draw reading its own slice (the instance
+    // attributes are re-pointed at it in FlushBatch). Rewriting offset 0 between draws that read it relies on the
+    // driver's implicit sync, and some get it wrong: batches drawn with another batch's particles, flicker.
     m_upload.clear();
     for (auto& b : m_batches)
     {
         b.first = static_cast<int>(m_upload.size());
         m_upload.insert(m_upload.end(), b.data.begin(), b.data.end());
     }
-    EnsureSSBOCapacity(static_cast<int>(m_upload.size()));
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_ssbo);
-    glBufferData(GL_SHADER_STORAGE_BUFFER, m_ssboCapacity * sizeof(GPUParticle), nullptr, GL_STREAM_DRAW);
-    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, m_upload.size() * sizeof(GPUParticle), m_upload.data());
+    EnsureInstanceCapacity(static_cast<int>(m_upload.size()));
+    glBindBuffer(GL_ARRAY_BUFFER, m_instanceVBO);
+    glBufferData(GL_ARRAY_BUFFER, m_instanceCapacity * sizeof(GPUParticle), nullptr, GL_STREAM_DRAW);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, m_upload.size() * sizeof(GPUParticle), m_upload.data());
 
     glDepthMask(GL_FALSE);
     glEnable(GL_BLEND);
     glBindVertexArray(m_quadVAO);
-    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_ssbo);
 
     // Distortion first: it refracts the finished scene, and everything drawn after it (smoke, fire) must sit on top of the refracted pixels.
     if (anyDistortion)
@@ -399,7 +376,7 @@ void ParticleSystem::Draw(const glm::mat4& view, const glm::mat4& projection)
 
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         for (const auto& b : m_batches)
-            if (b.key.distortion) FlushBatch(b, m_dFirst);
+            if (b.key.distortion) FlushBatch(b);
     }
 
     glUseProgram(m_shader);
@@ -425,22 +402,29 @@ void ParticleSystem::Draw(const glm::mat4& view, const glm::mat4& projection)
                 glActiveTexture(GL_TEXTURE0);
                 glBindTexture(GL_TEXTURE_2D, b.key.tex);
             }
-            FlushBatch(b, m_uFirst);
+            FlushBatch(b);
         }
     }
 
     glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
     glUseProgram(0);
 }
 
-// FlushBatch — draw one batch from its slice of the frame's upload
-void ParticleSystem::FlushBatch(const Batch& batch, GLint firstLoc)
+// FlushBatch — draw one batch from its slice of the frame's upload: the instance attributes are pointed at its first
+// particle (instead of glDrawArraysInstancedBaseInstance, so nothing depends on base-instance support).
+void ParticleSystem::FlushBatch(const Batch& batch)
 {
     if (batch.data.empty()) return;
 
-    glUniform1i(firstLoc, batch.first);
+    glBindBuffer(GL_ARRAY_BUFFER, m_instanceVBO);
+    const size_t base = static_cast<size_t>(batch.first) * sizeof(GPUParticle);
+    for (GLuint i = 0; i < 5; ++i)
+        glVertexAttribPointer(1 + i, 4, GL_FLOAT, GL_FALSE, sizeof(GPUParticle),
+            reinterpret_cast<const void*>(base + i * sizeof(glm::vec4)));
+
     glDrawArraysInstanced(GL_TRIANGLES, 0, 6,
         static_cast<GLsizei>(batch.data.size()));
 }
@@ -816,9 +800,9 @@ void ParticleSystem::EnsurePool(ParticleEmitterComponent& e)
     }
 }
 
-void ParticleSystem::EnsureSSBOCapacity(int needed)
+void ParticleSystem::EnsureInstanceCapacity(int needed)
 {
-    if (needed <= m_ssboCapacity) return;
+    if (needed <= m_instanceCapacity) return;
 
     // FIX #1 — proper power-of-two round-up.
     // Old code set newCap = max(needed, 512) then looped while (newCap < needed),
@@ -826,12 +810,12 @@ void ParticleSystem::EnsureSSBOCapacity(int needed)
     int newCap = 512;
     while (newCap < needed) newCap *= 2;
 
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_ssbo);
-    glBufferData(GL_SHADER_STORAGE_BUFFER,
+    glBindBuffer(GL_ARRAY_BUFFER, m_instanceVBO);
+    glBufferData(GL_ARRAY_BUFFER,
         newCap * sizeof(GPUParticle), nullptr, GL_STREAM_DRAW);
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
 
-    m_ssboCapacity = newCap;
+    m_instanceCapacity = newCap;
 }
 
 void ParticleSystem::CompileShaders()
@@ -878,8 +862,34 @@ void ParticleSystem::CompileShaders()
 
 void ParticleSystem::InitQuadVAO()
 {
-    // No vertex data — positions built entirely in the vertex shader.
+    // Location 0: the quad's 6 corners (xy) + uv (zw), per vertex. Locations 1-5: one GPUParticle per instance, pointed
+    // at the instance buffer per batch in FlushBatch.
+    static const float kCornerUV[6 * 4] = {
+        -0.5f,  0.5f, 0.0f, 1.0f,
+        -0.5f, -0.5f, 0.0f, 0.0f,
+         0.5f, -0.5f, 1.0f, 0.0f,
+        -0.5f,  0.5f, 0.0f, 1.0f,
+         0.5f, -0.5f, 1.0f, 0.0f,
+         0.5f,  0.5f, 1.0f, 1.0f,
+    };
+
     glGenVertexArrays(1, &m_quadVAO);
+    glBindVertexArray(m_quadVAO);
+
+    glGenBuffers(1, &m_cornerVBO);
+    glBindBuffer(GL_ARRAY_BUFFER, m_cornerVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(kCornerUV), kCornerUV, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 4 * sizeof(float), nullptr);
+
+    for (GLuint i = 1; i <= 5; ++i)
+    {
+        glEnableVertexAttribArray(i);
+        glVertexAttribDivisor(i, 1);
+    }
+
+    glBindVertexArray(0);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
 ParticleSystem::~ParticleSystem()
@@ -892,5 +902,6 @@ ParticleSystem::~ParticleSystem()
     glDeleteProgram(m_shader);
     glDeleteProgram(m_distShader);
     glDeleteVertexArrays(1, &m_quadVAO);
-    glDeleteBuffers(1, &m_ssbo);
+    glDeleteBuffers(1, &m_cornerVBO);
+    glDeleteBuffers(1, &m_instanceVBO);
 }

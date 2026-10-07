@@ -5,6 +5,7 @@
 #include "netcode/client_window.hpp"
 #include "ecs/ecs_gamelogic.hpp"
 #include "OpenGLWindow.hpp"
+#include "GLStateReset.hpp"
 #include "IGameRenderer.hpp"
 #include "Mesh.hpp"
 #include "OpenGL/Render pipeline/RenderSystem.hpp"
@@ -127,6 +128,8 @@ public:
     // Destroys every component in this world, dropping AssetManager ref-counts and GL resources; must run on the render thread and takes the same EntityManager mutex as Render().
     void ReleaseECSAssets() override {
         world.GetEntityManager().acquireMutex();
+        // Nothing of this world may stay bound while its textures/buffers/programs are deleted (see GLStateReset.hpp).
+        ResetGLBindings();
         world.Reset();
         world.GetEntityManager().releaseMutex();
     }

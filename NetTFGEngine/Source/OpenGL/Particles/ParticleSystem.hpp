@@ -11,7 +11,7 @@
 #include <unordered_map>
 #include <vector>
 
-// ECS system: simulates ParticleEmitterComponents on the CPU, uploads live particles to a shared SSBO, and issues one instanced draw call per batch (texture x blend mode). Draw() runs inside RenderSystem after ShadingPass but before BloomPass so emissive particles feed through bloom.
+// ECS system: simulates ParticleEmitterComponents on the CPU, uploads live particles to a shared instance buffer, and issues one instanced draw call per batch (texture x blend mode). Draw() runs inside RenderSystem after ShadingPass but before BloomPass so emissive particles feed through bloom.
 class ParticleSystem : public ISystem {
 public:
     // Call once after the OpenGL context is ready.
@@ -44,20 +44,21 @@ private:
     struct Batch {
         BatchKey                 key;
         std::vector<GPUParticle> data;   // rebuilt every Update
-        int                      first = 0; // index of its first particle in the frame's SSBO upload (set in Draw)
+        int                      first = 0; // index of its first particle in the frame's instance upload (set in Draw)
     };
 
     GLuint m_shader = 0;       // colour sprites (procedural / flipbook)
     GLuint m_distShader = 0;   // screen-space distortion sprites
-    GLuint m_quadVAO = 0;      // empty VAO — positions built in vert shader
-    GLuint m_ssbo = 0;         // resized on demand, orphaned and refilled once per frame with every batch
-    int    m_ssboCapacity = 0; // current GPUParticle capacity of m_ssbo
+    GLuint m_quadVAO = 0;          // quad corners (per vertex) + particle attributes (per instance)
+    GLuint m_cornerVBO = 0;        // the quad's 6 corners + uv
+    GLuint m_instanceVBO = 0;      // GPUParticles, resized on demand, orphaned and refilled once per frame with every batch
+    int    m_instanceCapacity = 0; // current GPUParticle capacity of m_instanceVBO
     std::vector<GPUParticle> m_upload; // all batches back to back, uploaded in one go
 
     // Cached uniform locations (set once in Init after shader compilation)
     GLint m_uView = -1, m_uProjection = -1;
-    GLint m_uTex = -1, m_uAlphaMode = -1, m_uFirst = -1;
-    GLint m_dView = -1, m_dProjection = -1, m_dScene = -1, m_dViewport = -1, m_dFirst = -1;
+    GLint m_uTex = -1, m_uAlphaMode = -1;
+    GLint m_dView = -1, m_dProjection = -1, m_dScene = -1, m_dViewport = -1;
 
     std::vector<Batch> m_batches;
 
@@ -114,9 +115,10 @@ private:
     GLuint GetTexture(const std::string& name);
     void   CopySceneColor(int w, int h);
 
-    void EnsureSSBOCapacity(int needed);
-    // Draw the batch instanced from its slice of the SSBO (uploaded by Draw); program and blend function must already be set.
-    void FlushBatch(const Batch& batch, GLint firstLoc);
+    void EnsureInstanceCapacity(int needed);
+    // Draw the batch instanced from its slice of the instance buffer (uploaded by Draw); program, blend function and the
+    // quad VAO must already be set.
+    void FlushBatch(const Batch& batch);
     void CompileShaders();
     void InitQuadVAO();
 };
