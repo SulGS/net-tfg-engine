@@ -90,8 +90,11 @@ public:
             client->CloseClient();
 
             // unloadBin() runs each freed asset's GL destroyer inline, so it must happen on the render thread, same as CloseClient()'s ReleaseECSAssets().
+            // glFinish around it like IECSGameRenderer::ReleaseECSAssets(): nothing in flight may use what gets deleted.
             ClientWindow::RunOnRenderThread([client]() {
+                glFinish();
                 AssetManager::instance().unloadBin(client->binName);
+                glFinish();
                 });
         }
 

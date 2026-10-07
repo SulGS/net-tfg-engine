@@ -36,6 +36,10 @@ public:
     // Distinct sizes the primary monitor supports (ascending, tiny legacy modes dropped); the windowed choices.
     static std::vector<std::pair<int, int>> getAvailableResolutions();
 
+    // Request a debug context (every driver then reports errors to the log's "[GL]" channel; slower). Must be called
+    // before the window is created; the NETTFG_GL_DEBUG=1 environment variable does the same.
+    static void requestDebugContext(bool enabled) { s_debugContextRequested = enabled; }
+
     // glfwSwapInterval(1)/(0). Reasserted after setWindowMode() too, since
     // glfwSetWindowMonitor can recreate the swap chain (e.g. toggling
     // exclusive fullscreen) and silently reset the driver's interval.
@@ -54,6 +58,8 @@ public:
     bool wasResized();  // returns true once, then resets the flag
 
 private:
+    static inline bool s_debugContextRequested = false;
+
     void initializeGLFW();
     void initializeGLEW();
     void setupOpenGL();

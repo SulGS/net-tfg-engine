@@ -2,7 +2,19 @@
 #define GL_STATE_RESET_HPP
 
 #include "OpenGL/OpenGLIncludes.hpp"
+#include "Utils/Debug/Debug.hpp"
 #include <algorithm>
+
+// Drains glGetError() into the log (a few at most: the queue is short). Catches errors without a debug context, where
+// drivers may report nothing through the debug callback.
+inline void LogGLErrors(const char* where)
+{
+    for (int i = 0; i < 8; ++i) {
+        const GLenum e = glGetError();
+        if (e == GL_NO_ERROR) return;
+        Debug::Warning("GL") << where << ": glGetError 0x" << std::hex << e << std::dec << "\n";
+    }
+}
 
 // Puts every GL binding point a world's renderer uses back to 0: textures on every unit and target, samplers, image
 // units, indexed SSBO/UBO bindings, program, VAO, buffers, framebuffer. Called on the render thread before a world's GL

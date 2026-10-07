@@ -134,8 +134,14 @@ public:
         // Nothing of this world may stay bound while its textures/buffers/programs are deleted (see GLStateReset.hpp).
         ResetGLBindings();
         LogGPUMemory("World teardown, before");
+        // GPU idle before and after the mass delete: no queued frame still references what is deleted, and the driver
+        // has retired the deletions before the next world draws. The Radeon 520 (driver 21.19) crashed inside the
+        // driver in the next world's first draw after a match was torn down (use-after-free-looking write address).
+        glFinish();
         world.Reset();
+        glFinish();
         LogGPUMemory("World teardown, after");
+        LogGLErrors("World teardown");
         world.GetEntityManager().releaseMutex();
     }
 

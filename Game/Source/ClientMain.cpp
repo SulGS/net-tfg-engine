@@ -42,12 +42,17 @@ int main(int argc, char** argv) {
 	RegisterGameActions();
 
 	// Matchmaker address: --matchmaker host:port overrides matchmaking.cfg (created with defaults if missing).
+	// --gl-debug: OpenGL debug context, driver errors go to the log (same as NETTFG_GL_DEBUG=1).
 	MatchmakerAddress matchmaker = LoadMatchmakerAddress();
 	for (int i = 1; i < argc; ++i) {
-		if (std::string(argv[i]) == "--matchmaker" && i + 1 < argc) {
+		const std::string arg = argv[i];
+		if (arg == "--matchmaker" && i + 1 < argc) {
 			if (!ParseHostPort(argv[++i], matchmaker)) {
 				Debug::Error("Client") << "Invalid --matchmaker value, expected host:port\n";
 			}
+		}
+		else if (arg == "--gl-debug") {
+			OpenGLWindow::requestDebugContext(true);
 		}
 	}
 	g_matchmaker.SetServer(matchmaker);

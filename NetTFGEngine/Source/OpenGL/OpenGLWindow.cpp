@@ -260,8 +260,8 @@ void OpenGLWindow::initializeGLFW() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-    // NETTFG_GL_DEBUG=1: debug context, so every driver reports errors through GLDebugCallback (non-debug contexts may
-    // report fewer). Slower, so opt-in.
+    // --gl-debug (requestDebugContext) or NETTFG_GL_DEBUG=1: debug context, so every driver reports errors through
+    // GLDebugCallback (non-debug contexts may report fewer). Slower, so opt-in.
 #ifdef _MSC_VER
 #pragma warning(push)
 #pragma warning(disable : 4996) // getenv: read once at startup, portable to the Linux build
@@ -270,7 +270,7 @@ void OpenGLWindow::initializeGLFW() {
 #ifdef _MSC_VER
 #pragma warning(pop)
 #endif
-    if (dbg && dbg[0] == '1')
+    if (s_debugContextRequested || (dbg && dbg[0] == '1'))
         glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GLFW_TRUE);
     // No dragging the borders nor maximising: the size only changes through the window resolution setting.
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);

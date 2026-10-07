@@ -37,6 +37,11 @@ inline void LogGPUMemory(const char* when)
         glGetIntegerv(GL_GPU_MEMORY_INFO_CURRENT_AVAILABLE_VIDMEM_NVX, &avail);
         Debug::Info("GPUMemory") << when << ": " << avail / 1024 << " / " << total / 1024 << " MB free\n";
     }
+    else {
+        static bool told = false;
+        if (!told) Debug::Info("GPUMemory") << "The driver exposes no free-memory query (ATI_meminfo / NVX)\n";
+        told = true;
+    }
 }
 
 #endif // GPU_MEMORY_LOG_HPP
