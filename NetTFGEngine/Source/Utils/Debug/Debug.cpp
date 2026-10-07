@@ -92,8 +92,8 @@ static void WriteCrashReport(EXCEPTION_POINTERS* ep)
     }
 
     swprintf(path, MAX_PATH + 8, L"%s.txt", g_crashBase);
-    FILE* f = _wfopen(path, L"w");
-    if (!f) return;
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, path, L"w") != 0 || !f) return;
 
     const EXCEPTION_RECORD* rec = ep ? ep->ExceptionRecord : nullptr;
     if (rec) {
@@ -141,6 +141,10 @@ static void WriteCrashReport(EXCEPTION_POINTERS* ep)
         SymCleanup(proc);
     }
     fclose(f);
+
+    // The log's last lines are still queued / buffered: get them (and a pointer to the report) onto the disk.
+    Debug::LogCritical("Unhandled exception, see the crash_*.txt / .dmp next to this log\n", "Crash");
+    LogRouter::Instance().FlushForCrash(2000);
 }
 
 static LONG WINAPI UnhandledFilter(EXCEPTION_POINTERS* ep)

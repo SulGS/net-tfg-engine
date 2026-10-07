@@ -20,6 +20,10 @@ public:
 
     void Enqueue(const LogMessage& msg);
 
+    // From a crash handler: lets the worker write out everything still queued and flush the file, waiting at most
+    // timeoutMs. Logging stops afterwards (the process is going down).
+    void FlushForCrash(unsigned timeoutMs);
+
 private:
     LogRouter();
     ~LogRouter();
@@ -31,6 +35,7 @@ private:
 	bool consoleOutputEnabled = false;
 
     std::atomic<bool> running = false;
+    std::atomic<bool> drained = false; // set by the worker once it has emptied the queue and flushed after a Stop
     std::thread worker;
 
     std::unordered_map<std::string, bool> channelStates;

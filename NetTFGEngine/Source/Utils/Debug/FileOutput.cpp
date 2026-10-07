@@ -25,6 +25,15 @@ void FileOutput::Write(const LogMessage& msg) {
     file << timeBuf << ": " << LevelToString(msg.level) << " ["
         << msg.channel << "] "
         << msg.text;
+
+    // Warnings and errors reach the disk right away: if the process dies next, they are what explains it.
+    if (msg.level != LogLevel::Info)
+        file.flush();
+}
+
+void FileOutput::Flush() {
+    if (file.is_open())
+        file.flush();
 }
 
 void FileOutput::Close() {

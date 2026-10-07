@@ -6,6 +6,7 @@
 #include "ecs/ecs_gamelogic.hpp"
 #include "OpenGLWindow.hpp"
 #include "GLStateReset.hpp"
+#include "GPUMemoryLog.hpp"
 #include "IGameRenderer.hpp"
 #include "Mesh.hpp"
 #include "OpenGL/Render pipeline/RenderSystem.hpp"
@@ -123,6 +124,8 @@ public:
         world.AddSystem(std::make_unique<UIUpdateSystem>(1920, 1080, window->getWindow(), uir->GetFontManager()));
 
         uir->LoadFont("default", "C:/Windows/Fonts/arial.ttf", 32);
+
+        LogGPUMemory("World set up");
     }
 
     // Destroys every component in this world, dropping AssetManager ref-counts and GL resources; must run on the render thread and takes the same EntityManager mutex as Render().
@@ -130,7 +133,9 @@ public:
         world.GetEntityManager().acquireMutex();
         // Nothing of this world may stay bound while its textures/buffers/programs are deleted (see GLStateReset.hpp).
         ResetGLBindings();
+        LogGPUMemory("World teardown, before");
         world.Reset();
+        LogGPUMemory("World teardown, after");
         world.GetEntityManager().releaseMutex();
     }
 

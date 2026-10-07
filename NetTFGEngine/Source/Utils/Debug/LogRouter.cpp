@@ -78,6 +78,16 @@ void LogRouter::SetProductName(const std::string& name) {
 }
 
 
+void LogRouter::FlushForCrash(unsigned timeoutMs) {
+    if (!running)
+        return;
+    // Unlike Stop(), keep `running` true: the worker then pops until the queue is empty (WaitPop only reports
+    // "stopping" once it is) and flushes on the way out. No join: never block a crashing process on another thread.
+    queue.Stop();
+    for (unsigned waited = 0; !drained && waited < timeoutMs; waited += 10)
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+}
+
 void LogRouter::SetChannelEnabled(const std::string& channel, bool enabled) {
     std::unique_lock lock(channelStatesMutex);
     channelStates[channel] = enabled;
@@ -153,4 +163,7 @@ void LogRouter::RouterThread() {
 #endif
         running = false;
     }
+
+    fileOutput.Flush();
+    drained = true;
 }

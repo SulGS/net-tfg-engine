@@ -8,6 +8,7 @@ public:
     FileOutput() = default;
     bool Open(const std::string& filepath);
     void Write(const LogMessage& msg);
+    void Flush();
     void Close();
 
 private:
