@@ -387,7 +387,8 @@ private:
                             uploadH = std::max(1, img.height >> baseMip);
 
                             int scale = 1 << baseMip;
-                            int components = 4; // always RGBA at this point
+                            // RGBA unless an RGB image goes up uncompressed (only then is it not padded above).
+                            int components = (uploadFmt == GL_RGBA) ? 4 : 3;
                             int sampleArea = scale * scale;
                             downsampled.resize(uploadW * uploadH * components);
 
@@ -449,7 +450,49 @@ private:
                         glTexImage2D(GL_TEXTURE_2D, 0, internalFmt,
                             (GLsizei)uploadW, (GLsizei)uploadH,
                             0, uploadFmt, GL_UNSIGNED_BYTE, uploadData);
-                        glGenerateMipmap(GL_TEXTURE_2D);
+
+                        if (useCompression) {
+                            // BC7 is not color-renderable, so glGenerateMipmap on it is INVALID_OPERATION per spec; drivers
+                            // that accept it decompress/recompress internally, and the Radeon 520's 21.19 driver crashed
+                            // inside itself in the first draw after a match's textures were freed. Build the chain on the
+                            // CPU (2x2 box, gamma-aware for sRGB colour) and let the driver compress each level instead.
+                            auto toLinear = [](uint8_t v) { const float f = v / 255.0f; return f * f; };
+                            auto toSRGB = [](float v) {
+                                return static_cast<uint8_t>(sqrtf(glm::clamp(v, 0.0f, 1.0f)) * 255.0f + 0.5f);
+                                };
+
+                            std::vector<uint8_t> prev(uploadData, uploadData + static_cast<size_t>(uploadW) * uploadH * 4);
+                            std::vector<uint8_t> next;
+                            int w = uploadW, h = uploadH, level = 0;
+                            while (w > 1 || h > 1) {
+                                const int nw = std::max(1, w / 2), nh = std::max(1, h / 2);
+                                next.resize(static_cast<size_t>(nw) * nh * 4);
+                                for (int y = 0; y < nh; ++y)
+                                    for (int x = 0; x < nw; ++x)
+                                        for (int c = 0; c < 4; ++c) {
+                                            const int x0 = std::min(2 * x, w - 1), x1 = std::min(2 * x + 1, w - 1);
+                                            const int y0 = std::min(2 * y, h - 1), y1 = std::min(2 * y + 1, h - 1);
+                                            const uint8_t s[4] = {
+                                                prev[(static_cast<size_t>(y0) * w + x0) * 4 + c], prev[(static_cast<size_t>(y0) * w + x1) * 4 + c],
+                                                prev[(static_cast<size_t>(y1) * w + x0) * 4 + c], prev[(static_cast<size_t>(y1) * w + x1) * 4 + c] };
+                                            uint8_t out;
+                                            if (sRGB && c != 3)
+                                                out = toSRGB((toLinear(s[0]) + toLinear(s[1]) + toLinear(s[2]) + toLinear(s[3])) * 0.25f);
+                                            else
+                                                out = static_cast<uint8_t>((s[0] + s[1] + s[2] + s[3] + 2) / 4);
+                                            next[(static_cast<size_t>(y) * nw + x) * 4 + c] = out;
+                                        }
+                                ++level;
+                                glTexImage2D(GL_TEXTURE_2D, level, internalFmt, nw, nh, 0, GL_RGBA, GL_UNSIGNED_BYTE, next.data());
+                                prev.swap(next);
+                                w = nw;
+                                h = nh;
+                            }
+                            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, level);
+                        }
+                        else {
+                            glGenerateMipmap(GL_TEXTURE_2D);
+                        }
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
                         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
