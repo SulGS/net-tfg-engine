@@ -44,18 +44,20 @@ private:
     struct Batch {
         BatchKey                 key;
         std::vector<GPUParticle> data;   // rebuilt every Update
+        int                      first = 0; // index of its first particle in the frame's SSBO upload (set in Draw)
     };
 
     GLuint m_shader = 0;       // colour sprites (procedural / flipbook)
     GLuint m_distShader = 0;   // screen-space distortion sprites
     GLuint m_quadVAO = 0;      // empty VAO — positions built in vert shader
-    GLuint m_ssbo = 0;         // resized on demand, reused each frame
+    GLuint m_ssbo = 0;         // resized on demand, orphaned and refilled once per frame with every batch
     int    m_ssboCapacity = 0; // current GPUParticle capacity of m_ssbo
+    std::vector<GPUParticle> m_upload; // all batches back to back, uploaded in one go
 
     // Cached uniform locations (set once in Init after shader compilation)
     GLint m_uView = -1, m_uProjection = -1;
-    GLint m_uTex = -1, m_uAlphaMode = -1;
-    GLint m_dView = -1, m_dProjection = -1, m_dScene = -1, m_dViewport = -1;
+    GLint m_uTex = -1, m_uAlphaMode = -1, m_uFirst = -1;
+    GLint m_dView = -1, m_dProjection = -1, m_dScene = -1, m_dViewport = -1, m_dFirst = -1;
 
     std::vector<Batch> m_batches;
 
@@ -113,8 +115,8 @@ private:
     void   CopySceneColor(int w, int h);
 
     void EnsureSSBOCapacity(int needed);
-    // Upload the batch to the SSBO and draw it instanced (blend function must already be set).
-    void FlushBatch(const Batch& batch);
+    // Draw the batch instanced from its slice of the SSBO (uploaded by Draw); program and blend function must already be set.
+    void FlushBatch(const Batch& batch, GLint firstLoc);
     void CompileShaders();
     void InitQuadVAO();
 };

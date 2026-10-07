@@ -9,7 +9,7 @@ layout(location = 0) in vec3 aPos;
 uniform mat4 uModel;
 uniform mat4 uView;
 uniform mat4 uProjection;
-uniform vec3 uCameraPos; // world space, set by RenderSystem::AdditivePass
+uniform vec3 uCameraPosLocal; // camera in the mesh's local space, set by RenderSystem::AdditivePass (inverted on the CPU)
 
 out vec3 vLocalPos; // point on the canvas sphere, unit-sphere space
 out vec3 vCamLocal; // camera in the same space (constant across the mesh)
@@ -17,6 +17,6 @@ out vec3 vCamLocal; // camera in the same space (constant across the mesh)
 void main()
 {
     vLocalPos = aPos;
-    vCamLocal = (inverse(uModel) * vec4(uCameraPos, 1.0)).xyz;
+    vCamLocal = uCameraPosLocal;
     gl_Position = uProjection * uView * uModel * vec4(aPos, 1.0);
 }

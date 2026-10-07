@@ -76,7 +76,8 @@ float noise3(vec3 p)
 vec2 shellEmission(vec3 n, float cosT, float radius)
 {
     // Fresnel-ish: bright at grazing angles, nearly clear face-on, so the ship stays visible through the bubble.
-    float rim = 0.10 + 2.6 * pow(1.0 - cosT, 3.0);
+    // Clamped: cosT can round past 1 face-on, and pow with a negative base is undefined (NaN on Intel/AMD).
+    float rim = 0.10 + 2.6 * pow(clamp(1.0 - cosT, 0.0, 1.0), 3.0);
 
     // Globe lines: 4 meridians drifting around the ship's vertical axis, 2 parallels breathing up and down.
     float lon  = atan(n.y, n.x) + uTime * 0.7 + uSeed;
@@ -93,7 +94,8 @@ vec2 shellEmission(vec3 n, float cosT, float radius)
     // Spin-up: the shell exists up to |latitude| < power, with a hot seam on the growing edge.
     float reach  = uPower * 1.15;
     float reveal = 1.0 - smoothstep(reach - 0.12, reach, abs(n.z));
-    float seam   = exp(-pow((abs(n.z) - reach) / 0.05, 2.0)) * (1.0 - smoothstep(0.85, 1.0, uPower));
+    float sd     = (abs(n.z) - reach) / 0.05; // negative inside the revealed band: x*x, not pow
+    float seam   = exp(-sd * sd) * (1.0 - smoothstep(0.85, 1.0, uPower));
 
     // Shatter: the surface breaks into noise cells that drop out as the break progresses.
     float cells   = noise3(n * 5.0 + uSeed * 3.0);

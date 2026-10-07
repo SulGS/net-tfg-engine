@@ -23,6 +23,7 @@ static const char* kParticleVert = R"GLSL(
 
     uniform mat4 uView;
     uniform mat4 uProjection;
+    uniform int  uFirst; // this batch's first particle in the SSBO (every batch shares one upload per frame)
 
     out vec2 vUV;
     out vec4 vColor;
@@ -48,7 +49,7 @@ static const char* kParticleVert = R"GLSL(
 
     void main()
     {
-        GPUParticle p  = particles[gl_InstanceID];
+        GPUParticle p  = particles[uFirst + gl_InstanceID];
         vec3  worldPos = p.positionSize.xyz;
         float size     = p.positionSize.w;
 
@@ -131,15 +132,19 @@ static const char* kParticleFrag = R"GLSL(
     }
 
     // Frame 0 = top-left; the sheet is uploaded with Y inverted, so image top is v = 1.
-    vec4 SampleFrame(float frame, vec2 uv01)
+    // Sampled at an explicit mip, with the cell's border inset by one texel OF THAT MIP: a small sprite picks a low mip,
+    // whose texels mix neighbouring cells, and a fixed inset (only right at mip 0) let them bleed in as square outlines.
+    vec4 SampleFrame(float frame, vec2 uv01, float lod)
     {
         float cols = max(vFlip.x, 1.0);
         float rows = max(vFlip.y, 1.0);
         float col  = mod(frame, cols);
         float row  = floor(frame / cols);
-        uv01 = clamp(uv01, vec2(0.003), vec2(0.997)); // keep bilinear taps inside the cell
+        vec2 cellTexels = vec2(textureSize(uTex, 0)) / vec2(cols, rows);
+        vec2 margin     = min(exp2(lod) / cellTexels, vec2(0.5));
+        uv01 = clamp(uv01, margin, 1.0 - margin);
         vec2 uv = vec2((col + uv01.x) / cols, 1.0 - (row + 1.0 - uv01.y) / rows);
-        return texture(uTex, uv);
+        return textureLod(uTex, uv, lod);
     }
 
     void main()
@@ -150,9 +155,15 @@ static const char* kParticleFrag = R"GLSL(
             float f1 = min(f0 + 1.0, max(vFlip.w - 1.0, 0.0));
             float b  = vFlip.z - f0;
 
-            vec4 t = SampleFrame(f0, vUV);
+            // Mip the hardware would pick (same derivatives for every frame of the sheet), capped so a cell stays at
+            // least 4 texels wide: below that the inset would eat the whole cell.
+            vec2  cellTexels = vec2(textureSize(uTex, 0)) / max(vFlip.xy, vec2(1.0));
+            float maxLod     = max(log2(min(cellTexels.x, cellTexels.y)) - 2.0, 0.0);
+            float lod        = min(textureQueryLod(uTex, vUV / max(vFlip.xy, vec2(1.0))).y, maxLod);
+
+            vec4 t = SampleFrame(f0, vUV, lod);
             if (b > 0.001 && f1 > f0)
-                t = mix(t, SampleFrame(f1, vUV), b);
+                t = mix(t, SampleFrame(f1, vUV, lod), b);
 
             // Black level: texture compression leaves faint non-zero noise where the sheet is black, and HDR tints multiply it into visible square outlines around additive sprites.
             t.rgb = max(t.rgb - vec3(0.03), vec3(0.0)) * (1.0 / 0.97);
@@ -178,11 +189,12 @@ static const char* kParticleFrag = R"GLSL(
             float d     = dist + (n - 0.44) * vParams.y * erode * 1.6;
 
             // Force a fade at the quad border so the noise never shows a hard cut.
-            shape = smoothstep(1.0, 0.35, d) * smoothstep(1.0, 0.8, dist);
+            // 1 - smoothstep(lo, hi): smoothstep with edge0 >= edge1 is undefined in GLSL.
+            shape = (1.0 - smoothstep(0.35, 1.0, d)) * (1.0 - smoothstep(0.8, 1.0, dist));
         }
         else
         {
-            shape = smoothstep(1.0, 0.5, dist);
+            shape = 1.0 - smoothstep(0.5, 1.0, dist);
         }
 
         FragColor = vec4(vColor.rgb, vColor.a * shape);
@@ -256,11 +268,13 @@ void ParticleSystem::Init()
     m_uProjection = glGetUniformLocation(m_shader, "uProjection");
     m_uTex = glGetUniformLocation(m_shader, "uTex");
     m_uAlphaMode = glGetUniformLocation(m_shader, "uAlphaMode");
+    m_uFirst = glGetUniformLocation(m_shader, "uFirst");
 
     m_dView = glGetUniformLocation(m_distShader, "uView");
     m_dProjection = glGetUniformLocation(m_distShader, "uProjection");
     m_dScene = glGetUniformLocation(m_distShader, "uScene");
     m_dViewport = glGetUniformLocation(m_distShader, "uViewport");
+    m_dFirst = glGetUniformLocation(m_distShader, "uFirst");
 }
 
 // Update — advance all emitters in fixed steps, then fill staging buffers
@@ -347,6 +361,20 @@ void ParticleSystem::Draw(const glm::mat4& view, const glm::mat4& projection)
     }
     if (!any) return;
 
+    // Every batch goes up in ONE upload into a freshly orphaned buffer, each draw reading its own slice (uFirst).
+    // Rewriting offset 0 between draws that read it relies on the driver's implicit sync, and some (older Intel on
+    // Windows) get it wrong: batches drawn with another batch's particles, flicker.
+    m_upload.clear();
+    for (auto& b : m_batches)
+    {
+        b.first = static_cast<int>(m_upload.size());
+        m_upload.insert(m_upload.end(), b.data.begin(), b.data.end());
+    }
+    EnsureSSBOCapacity(static_cast<int>(m_upload.size()));
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_ssbo);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, m_ssboCapacity * sizeof(GPUParticle), nullptr, GL_STREAM_DRAW);
+    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, m_upload.size() * sizeof(GPUParticle), m_upload.data());
+
     glDepthMask(GL_FALSE);
     glEnable(GL_BLEND);
     glBindVertexArray(m_quadVAO);
@@ -371,7 +399,7 @@ void ParticleSystem::Draw(const glm::mat4& view, const glm::mat4& projection)
 
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         for (const auto& b : m_batches)
-            if (b.key.distortion) FlushBatch(b);
+            if (b.key.distortion) FlushBatch(b, m_dFirst);
     }
 
     glUseProgram(m_shader);
@@ -397,7 +425,7 @@ void ParticleSystem::Draw(const glm::mat4& view, const glm::mat4& projection)
                 glActiveTexture(GL_TEXTURE0);
                 glBindTexture(GL_TEXTURE_2D, b.key.tex);
             }
-            FlushBatch(b);
+            FlushBatch(b, m_uFirst);
         }
     }
 
@@ -407,18 +435,12 @@ void ParticleSystem::Draw(const glm::mat4& view, const glm::mat4& projection)
     glUseProgram(0);
 }
 
-// FlushBatch — upload one batch and draw
-void ParticleSystem::FlushBatch(const Batch& batch)
+// FlushBatch — draw one batch from its slice of the frame's upload
+void ParticleSystem::FlushBatch(const Batch& batch, GLint firstLoc)
 {
     if (batch.data.empty()) return;
 
-    EnsureSSBOCapacity(static_cast<int>(batch.data.size()));
-
-    glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_ssbo);
-    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0,
-        batch.data.size() * sizeof(GPUParticle),
-        batch.data.data());
-
+    glUniform1i(firstLoc, batch.first);
     glDrawArraysInstanced(GL_TRIANGLES, 0, 6,
         static_cast<GLsizei>(batch.data.size()));
 }
@@ -806,7 +828,7 @@ void ParticleSystem::EnsureSSBOCapacity(int needed)
 
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_ssbo);
     glBufferData(GL_SHADER_STORAGE_BUFFER,
-        newCap * sizeof(GPUParticle), nullptr, GL_DYNAMIC_DRAW);
+        newCap * sizeof(GPUParticle), nullptr, GL_STREAM_DRAW);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 
     m_ssboCapacity = newCap;

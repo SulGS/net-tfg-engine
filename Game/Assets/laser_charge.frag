@@ -79,7 +79,9 @@ void main()
         vec3  dir    = p / max(r, 1e-3);
         float sparks = smoothstep(0.55, 0.85,
             noise3(dir * vec3(9.0, 9.0, 4.0) + vec3(uSeed, uTime * 6.0, -uTime * 4.0)));
-        float shell  = exp(-pow((r - shellR) / 0.035, 2.0)) * (0.1 + 2.2 * sparks);
+        // x*x, not pow(x, 2.0): pow with a negative base is undefined (NaN on Intel/AMD), and x < 0 inside the shell.
+        float sd     = (r - shellR) / 0.035;
+        float shell  = exp(-sd * sd) * (0.1 + 2.2 * sparks);
 
         acc += vec3(halo, core, shell) * dt;
     }

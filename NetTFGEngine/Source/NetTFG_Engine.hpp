@@ -731,12 +731,14 @@ private:
                 TextureID texture;
                 texture.value = 0;
 
+                // No NTSC_SAFE_RGB (clamps to 16..235: black became 0.063, which HDR-tinted additive sprites turn into
+                // visible squares) nor COMPRESS_TO_DXT (block noise on particle sheets and UI images).
                 GLuint textureID = SOIL_load_OGL_texture_from_memory(
                     data,
                     static_cast<int>(size),
                     SOIL_LOAD_AUTO,
                     SOIL_CREATE_NEW_ID,
-                    SOIL_FLAG_MIPMAPS | SOIL_FLAG_INVERT_Y | SOIL_FLAG_NTSC_SAFE_RGB | SOIL_FLAG_COMPRESS_TO_DXT
+                    SOIL_FLAG_MIPMAPS | SOIL_FLAG_INVERT_Y
                 );
 
                 if (textureID == 0) {

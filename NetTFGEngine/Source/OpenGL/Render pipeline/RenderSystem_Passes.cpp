@@ -1,5 +1,6 @@
 #include "RenderSystem.hpp"
 #include <glm/gtc/matrix_transform.hpp>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 
@@ -583,12 +584,26 @@ void RenderSystem::AdditivePass(EntityManager::Query<MeshComponent, Transform>& 
     for (auto [entity, meshC, transform] : meshQuery) {
         if (!meshC->enabled || !meshC->mesh || !meshC->additive) continue;
 
+        const glm::mat4 model = transform->getModelMatrix();
+
         // Set before bind: Material::bind() is what uploads the uniform map. Optional:
         // an additive shader that never looks at the camera is fine too.
-        if (Material* mat = meshC->mesh->getMaterial())
+        if (Material* mat = meshC->mesh->getMaterial()) {
             mat->setVec3IfPresent("uCameraPos", cameraPos);
 
-        meshC->mesh->bindMaterial(transform->getModelMatrix(), view, projection);
+            // Camera in the mesh's local space (raymarched volumes), inverted here in double rather than per vertex in
+            // the shader. A (near-)singular model (zero scale) has no local space: its inverse is inf/NaN, which
+            // additive blending would write into the HDR scene. Such a mesh covers no pixels anyway, so skip it.
+            if (mat->hasUniform("uCameraPosLocal")) {
+                const glm::dmat4 m(model);
+                const double det = glm::determinant(m);
+                if (!std::isfinite(det) || std::abs(det) < 1e-12) continue;
+                const glm::dvec4 camLocal = glm::inverse(m) * glm::dvec4(glm::dvec3(cameraPos), 1.0);
+                mat->setVec3IfPresent("uCameraPosLocal", glm::vec3(camLocal));
+            }
+        }
+
+        meshC->mesh->bindMaterial(model, view, projection);
         meshC->mesh->drawGeometryOnly();
     }
 
