@@ -121,13 +121,14 @@ void RenderSystem::ClearSSAO()
 {
     // No screen-space targets (all their effects off): ShadingPass binds the 1x1 white texture instead. Binding FBO 0
     // here would clear the window.
-    if (!m_ssaoBlurFBO) return;
-    glBindFramebuffer(GL_FRAMEBUFFER, m_ssaoBlurFBO);
-    glViewport(0, 0, m_ssaoW, m_ssaoH);
-    glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (m_ssaoBlurFBO) {
+        glBindFramebuffer(GL_FRAMEBUFFER, m_ssaoBlurFBO);
+        glViewport(0, 0, m_ssaoW, m_ssaoH);
+        glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
     glViewport(0, 0, m_screenW, m_screenH);
     glEnable(GL_DEPTH_TEST);
 }
@@ -136,14 +137,14 @@ void RenderSystem::SSAOPass(const glm::mat4& projection)
 {
     const auto& rs = RenderSettings::instance();
 
-    glViewport(0, 0, m_ssaoW, m_ssaoH);
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_BLEND);
-
     if (!rs.getSSAOEnabled()) {
         ClearSSAO();
         return;
     }
+
+    glViewport(0, 0, m_ssaoW, m_ssaoH);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
 
     const glm::mat4 invProjection = glm::inverse(projection);
     glBindVertexArray(m_quadVAO);
@@ -474,6 +475,8 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
     glBindFramebuffer(GL_FRAMEBUFFER, targetFBO);
     GLenum drawBuf = GL_COLOR_ATTACHMENT0;
     glDrawBuffers(1, &drawBuf);
+    // Own viewport: the passes before it (SSAO, shadows) leave theirs.
+    glViewport(0, 0, m_screenW, m_screenH);
 
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);

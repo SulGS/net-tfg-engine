@@ -45,11 +45,14 @@ void RenderSystem::InitLightSSBO()
 void RenderSystem::InitShadowCubeArray()
 {
     m_shadowRes = RenderSettings::instance().getShadowResolution();
+    // At least one light's worth even with 0 shadow lights (Very Low): a 0-layer cube array and a 0-byte SSBO are legal
+    // but the kind of edge case old drivers mishandle, and both stay bound every frame. 1 x 6 x 128^2 is ~400 KB.
+    const int shadowSlots = std::max(1, MAX_SHADOW_LIGHTS);
 
     glGenTextures(1, &m_shadowCubeArray);
     glBindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, m_shadowCubeArray);
     glTexImage3D(GL_TEXTURE_CUBE_MAP_ARRAY, 0, GL_DEPTH_COMPONENT32F,
-        m_shadowRes, m_shadowRes, MAX_SHADOW_LIGHTS * 6,
+        m_shadowRes, m_shadowRes, shadowSlots * 6,
         0, GL_DEPTH_COMPONENT, GL_FLOAT, nullptr);
     glTexParameteri(GL_TEXTURE_CUBE_MAP_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_CUBE_MAP_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -78,7 +81,7 @@ void RenderSystem::InitShadowCubeArray()
     glGenBuffers(1, &m_shadowDataSSBO);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_shadowDataSSBO);
     glBufferData(GL_SHADER_STORAGE_BUFFER,
-        sizeof(GPUShadowData) * MAX_SHADOW_LIGHTS, nullptr, GL_DYNAMIC_DRAW);
+        sizeof(GPUShadowData) * shadowSlots, nullptr, GL_DYNAMIC_DRAW);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 }
 
