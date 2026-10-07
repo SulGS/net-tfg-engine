@@ -1,6 +1,20 @@
 #include "RenderSystem.hpp"
 #include <cmath>
 
+// Dedicated video memory of the GPU running this GL context, in bytes; 0 if unknown. Defined at the end of the file
+// (it pulls in windows.h/DXGI, whose macros must not reach the code above).
+static long long VideoMemoryBytes();
+
+// Shadow maps are the only allocations whose size the presets push into the gigabytes (Ultra: 16 point lights x 6 faces
+// x 2048^2 x 4 B = 1.5 GB, plus 4096^2 cascades), and a scene switch briefly holds two worlds' worth. On a 2 GB GPU
+// that can't fit, and the Radeon 520's driver handed out unbacked memory (garbage on screen) and then crashed instead
+// of reporting GL_OUT_OF_MEMORY. Their resolution (then the shadow light count) is lowered to fit a share of the VRAM.
+static long long ShadowBudgetBytes(int share)
+{
+    const long long vram = VideoMemoryBytes();
+    return vram > 0 ? vram / share : 256LL << 20;
+}
+
 // Shader compilation helpers (static)
 GLuint RenderSystem::CompileStage(GLenum type, const char* src)
 {
@@ -45,6 +59,20 @@ void RenderSystem::InitLightSSBO()
 void RenderSystem::InitShadowCubeArray()
 {
     m_shadowRes = RenderSettings::instance().getShadowResolution();
+
+    // VRAM cap (see ShadowBudgetBytes): an eighth of the GPU's memory for the point-light cube array.
+    {
+        const long long budget = ShadowBudgetBytes(8);
+        auto bytes = [](int res, int lights) { return 6LL * res * res * 4 * std::max(1, lights); };
+        const int wantRes = m_shadowRes, wantLights = MAX_SHADOW_LIGHTS;
+        while (m_shadowRes > 256 && bytes(m_shadowRes, MAX_SHADOW_LIGHTS) > budget) m_shadowRes /= 2;
+        while (MAX_SHADOW_LIGHTS > 1 && bytes(m_shadowRes, MAX_SHADOW_LIGHTS) > budget) --MAX_SHADOW_LIGHTS;
+        if (m_shadowRes != wantRes || MAX_SHADOW_LIGHTS != wantLights)
+            Debug::Warning("RenderSystem") << "Point shadows lowered to " << MAX_SHADOW_LIGHTS << " lights at "
+                << m_shadowRes << " (asked " << wantLights << " at " << wantRes << ") to fit "
+                << (budget >> 20) << " MB of VRAM\n";
+    }
+
     // At least one light's worth even with 0 shadow lights (Very Low): a 0-layer cube array and a 0-byte SSBO are legal
     // but the kind of edge case old drivers mishandle, and both stay bound every frame. 1 x 6 x 128^2 is ~400 KB.
     const int shadowSlots = std::max(1, MAX_SHADOW_LIGHTS);
@@ -102,13 +130,14 @@ void RenderSystem::InitDirShadowMap()
     int res = rs.getDirShadowResolution();
     const int cascades = rs.getDirShadowCascades();
 
-    // Memory cap: 4 x 4096^2 DEPTH32F = 256 MB, what a single 8192^2 map used before cascades.
-    constexpr long long kMaxTexels = 4LL * 4096 * 4096;
-    while (res > 512 && static_cast<long long>(res) * res * cascades > kMaxTexels)
+    // Memory cap: at most 4 x 4096^2 DEPTH32F = 256 MB (what a single 8192^2 map used before cascades), and at most a
+    // sixteenth of the GPU's memory (see ShadowBudgetBytes).
+    const long long budget = std::min(256LL << 20, ShadowBudgetBytes(16));
+    while (res > 512 && 4LL * res * res * cascades > budget)
         res /= 2;
     if (res != rs.getDirShadowResolution())
         Debug::Warning("RenderSystem") << "Dir shadow resolution lowered to " << res << " for " << cascades
-                                       << " cascades (memory cap)\n";
+                                       << " cascades (" << (budget >> 20) << " MB VRAM cap)\n";
     m_dirShadowRes = res;
     m_dirCascadeCount = cascades;
 
@@ -530,3 +559,60 @@ void RenderSystem::DeleteScaleTargets()
     glDeleteTextures(1, &m_upscaleOutTex);      m_upscaleOutTex = 0;
     m_preScaleW = m_preScaleH = m_upscaleOutW = m_upscaleOutH = 0;
 }
+
+// ---------------------------------------------------------------------------------------------------------------------
+// VideoMemoryBytes: GL has no portable query and the Radeon 520's driver exposes neither GL_ATI_meminfo nor
+// GL_NVX_gpu_memory_info, so on Windows ask DXGI for the adapter of the GL context's vendor. Integrated GPUs report a
+// small dedicated carve-out and use system memory: half of their shared memory counts too. Queried once.
+// ---------------------------------------------------------------------------------------------------------------------
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#include <dxgi.h>
+#include <string>
+#pragma comment(lib, "dxgi.lib")
+
+static long long VideoMemoryBytes()
+{
+    static long long cached = -1;
+    if (cached >= 0) return cached;
+    cached = 0;
+
+    const GLubyte* v = glGetString(GL_VENDOR);
+    const std::string vendor = v ? reinterpret_cast<const char*>(v) : "";
+    UINT wantId = 0;
+    if (vendor.find("ATI") != std::string::npos || vendor.find("AMD") != std::string::npos) wantId = 0x1002;
+    else if (vendor.find("NVIDIA") != std::string::npos)                                     wantId = 0x10DE;
+    else if (vendor.find("Intel") != std::string::npos)                                      wantId = 0x8086;
+
+    IDXGIFactory1* factory = nullptr;
+    if (FAILED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), reinterpret_cast<void**>(&factory))) || !factory)
+        return cached;
+
+    long long best = 0, bestAny = 0;
+    IDXGIAdapter1* adapter = nullptr;
+    for (UINT i = 0; factory->EnumAdapters1(i, &adapter) != DXGI_ERROR_NOT_FOUND; ++i) {
+        DXGI_ADAPTER_DESC1 desc{};
+        if (SUCCEEDED(adapter->GetDesc1(&desc)) && !(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) {
+            long long bytes = static_cast<long long>(desc.DedicatedVideoMemory);
+            if (bytes < (512LL << 20))
+                bytes += static_cast<long long>(desc.SharedSystemMemory) / 2;
+            if (desc.VendorId == wantId) best = std::max(best, bytes);
+            bestAny = std::max(bestAny, bytes);
+        }
+        adapter->Release();
+    }
+    factory->Release();
+
+    cached = best > 0 ? best : bestAny;
+    Debug::Info("RenderSystem") << "Video memory (DXGI): " << (cached >> 20) << " MB\n";
+    return cached;
+}
+#else
+static long long VideoMemoryBytes() { return 0; }
+#endif
