@@ -17,6 +17,10 @@ public:
 			gs->posX[i] = gpd.posX[i];
 			gs->posY[i] = gpd.posY[i];
 			gs->rot[i] = gpd.rot[i];
+			gs->dashTicks[i] = gpd.dashTicks[i];
+			gs->dashCooldown[i] = gpd.dashCooldown[i];
+			gs->shieldTicks[i] = gpd.shieldTicks[i];
+			gs->shieldCooldown[i] = gpd.shieldCooldown[i];
 		}
 		gs->startCountdownTicks = gpd.startCountdownTicks;
 	}
@@ -34,6 +38,10 @@ public:
 			gpd.posX[i] = currGS.posX[i];
 			gpd.posY[i] = currGS.posY[i];
 			gpd.rot[i] = currGS.rot[i];
+			gpd.dashTicks[i] = static_cast<uint16_t>(currGS.dashTicks[i]);
+			gpd.dashCooldown[i] = static_cast<uint16_t>(currGS.dashCooldown[i]);
+			gpd.shieldTicks[i] = static_cast<uint16_t>(currGS.shieldTicks[i]);
+			gpd.shieldCooldown[i] = static_cast<uint16_t>(currGS.shieldCooldown[i]);
 		}
 		gpd.startCountdownTicks = currGS.startCountdownTicks;
 
@@ -55,6 +63,10 @@ public:
 			if (gs.posX[i] != gpd.posX[i]) return false;
 			if (gs.posY[i] != gpd.posY[i]) return false;
 			if (gs.rot[i] != gpd.rot[i]) return false;
+			if (gs.dashTicks[i] != gpd.dashTicks[i]) return false;
+			if (gs.dashCooldown[i] != gpd.dashCooldown[i]) return false;
+			if (gs.shieldTicks[i] != gpd.shieldTicks[i]) return false;
+			if (gs.shieldCooldown[i] != gpd.shieldCooldown[i]) return false;
 		}
 		if (gs.startCountdownTicks != gpd.startCountdownTicks) return false;
 

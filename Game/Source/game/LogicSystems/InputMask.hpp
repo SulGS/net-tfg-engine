@@ -10,7 +10,9 @@ enum InputMask : uint8_t {
     INPUT_RIGHT = 1 << 1,
     INPUT_TOP = 1 << 2,
     INPUT_DOWN = 1 << 3,
-    INPUT_SHOOT = 1 << 4
+    INPUT_SHOOT = 1 << 4,
+    INPUT_DASH = 1 << 5,    // propulsion burst (ability 1)
+    INPUT_SHIELD = 1 << 6   // laser shield (ability 2)
 };
 
 // InputBlob layout (4 bytes):

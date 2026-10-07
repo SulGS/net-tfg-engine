@@ -191,6 +191,36 @@ public:
 // (InputServerSystem), so the bolt continues exactly from where the orb was, not from the ship's center.
 inline constexpr float SHIP_MUZZLE_OFFSET = 2.0f;
 
+// ---- Abilities (InputSystem simulates them on client and server alike; all in ticks) ----
+// Each one is "active" while its *Ticks counter runs, and its cooldown only starts counting down once it has ended
+// (expired, or for the shield also broken by a bullet: see BulletCollidesHandler).
+//
+// Propulsion: an impulse to DASH_PEAK_SPEED along the heading the moment it fires, then the speed decays over DASH_TICKS
+// along an ease-out curve down to the ship's normal top speed, arriving with zero slope so the end of the dash can't
+// be felt (DashSpeed below). ~48 units in all. DASH_PEAK_SPEED must stay below the narrowest thing the ship could skip
+// in one tick, a wall (4 thick) plus the ship's collider (1.8 half-extent): 7.6 per tick.
+inline constexpr int   DASH_TICKS = 4;
+inline constexpr int   DASH_COOLDOWN_TICKS = 10 * TICKS_PER_SECOND;
+inline constexpr float DASH_PEAK_SPEED = 6.5f;
+inline constexpr float DASH_STEER = 0.2f;   // per tick, how far the dash's direction turns towards the current heading
+
+// How much of the dash is left with `ticksLeft` ticks of it remaining (DASH_TICKS on the tick it fires, 1 on its last):
+// 1 .. 0, quadratic, so it sheds most of the speed early and settles gently (zero slope at the end).
+inline float DashStrength(int ticksLeft)
+{
+	const float r = static_cast<float>(ticksLeft - 1) / static_cast<float>(DASH_TICKS - 1);
+	return r * r;
+}
+
+// Dash speed: from DASH_PEAK_SPEED down to `cruiseSpeed` (the normal top speed) along DashStrength.
+inline float DashSpeed(int ticksLeft, float cruiseSpeed)
+{
+	return cruiseSpeed + (DASH_PEAK_SPEED - cruiseSpeed) * DashStrength(ticksLeft);
+}
+// Laser shield: absorbs one bullet hit, then breaks. Walls and the void still kill through it.
+inline constexpr int   SHIELD_TICKS = 5 * TICKS_PER_SECOND;
+inline constexpr int   SHIELD_COOLDOWN_TICKS = 30 * TICKS_PER_SECOND;
+
 class SpaceShip : public IComponent {
 public:
 	int health;
@@ -206,6 +236,11 @@ public:
 	bool isAlive;
 
 	int shipZRotation;
+
+	int dashTicks = 0;        // > 0 while the propulsion burst lasts
+	int dashCooldown = 0;     // ticks until it can be used again (counts once the burst ends)
+	int shieldTicks = 0;      // > 0 while the shield is up
+	int shieldCooldown = 0;   // ticks until it can be raised again (counts once it's down)
 
 	SpaceShip() : health(1), isShooting(false), remainingShootFrames(0), shootCooldown(0), isAlive(true), isMovingForward(false), shipInclination(0), shipZRotation(0), velX(0.0f), velY(0.0f), angularVel(0.0f) {}
 	SpaceShip(int h, int rsf, int cd, bool al) : health(h), isShooting(false), remainingShootFrames(rsf), shootCooldown(cd), isAlive(al), isMovingForward(false), shipInclination(0), shipZRotation(0), velX(0.0f), velY(0.0f), angularVel(0.0f) {}
@@ -239,6 +274,30 @@ public:
 class BulletVisual : public IComponent {
 public:
 	float age = 0.0f; // seconds since the bullet's mesh appeared
+};
+
+// Render-only: the laser shield bubble of one ship (laser_shield.frag), driven by ShieldRenderSystem from the replicated
+// SpaceShip::shieldTicks. Outlives the shield by a moment so it can collapse or shatter instead of popping.
+class ShieldEffect : public IComponent {
+public:
+	int playerId = -1;
+	float power = 0.0f;      // 0..1 spin-up when raised
+	float fadeOut = -1.0f;   // < 0 while up; then seconds since it went down
+	bool broken = false;     // went down to a bullet (shatters) rather than expiring (fades)
+	int lastTicks = 0;       // shieldTicks seen last frame, to tell a break from an expiry
+	ShieldEffect() {}
+	ShieldEffect(int pid) : playerId(pid) {}
+};
+
+// Render-only tag + state for the HUD icons of the local player's abilities (AbilityHudSystem).
+class AbilityHudIcon : public IComponent {
+public:
+	int ability = 0;      // 0 = propulsion, 1 = shield
+	int part = 0;         // 0 = dimmed base icon, 1 = recharge fill, 2 = key label, 3 = seconds left
+	float readyPulse = 0.0f;
+	bool wasReady = true;
+	AbilityHudIcon() {}
+	AbilityHudIcon(int a, int p) : ability(a), part(p) {}
 };
 
 class ChargingShootEffect : public IComponent {

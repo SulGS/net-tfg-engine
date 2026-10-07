@@ -10,6 +10,7 @@
 #include "ecs/ecs_common.hpp"
 #include "ecs/UI/UIButton.hpp"
 #include "ecs/UI/UIImage.hpp"
+#include "ecs/UI/UIScrollView.hpp"
 #include "ecs/UI/UIText.hpp"
 #include "ecs/UI/UIElement.hpp"
 #include "ecs/UI/UISlider.hpp"
@@ -160,6 +161,11 @@ public:
     int tab = 0;
     int tabCount = 1;   // lo rellena SettingsPanel::Build (LB/RB recorren las pestanas)
 
+    // Zona con scroll de las filas (la comparten todas las pestanas: mide solo las filas visibles). Al cambiar de
+    // pestana vuelve arriba.
+    Entity rowsView = 0;
+    int shownTab = -1;
+
     // Capa a la que se sube temporalmente un dropdown abierto para que su
     // popup no quede tapado por las filas de debajo.
     int popupLayer = 0;
@@ -277,6 +283,13 @@ public:
                 return w->vis == SettingsWidget::Vis::Always || w->tab == data->tab;
             };
 
+        if (data->shownTab != data->tab)
+        {
+            data->shownTab = data->tab;
+            if (UIScrollView* view = entityManager.GetComponent<UIScrollView>(data->rowsView))
+                view->ScrollTo(0.0f, true);
+        }
+
         // 1. Visibilidad
         auto elementQuery = entityManager.CreateQuery<UIElement, SettingsWidget>();
         for (auto [entity, element, widget] : elementQuery)
@@ -370,6 +383,12 @@ public:
     static constexpr float ROW_H = 38.0f;
     static constexpr float FOOTER_Y = 280.0f;
 
+    // Ventana de las filas: de media fila por encima de la primera hasta el mensaje de estado del pie (FOOTER_Y - 42,
+    // 24 de alto). Lo que no cabe se desplaza con la rueda, la barra, RePag/AvPag o el stick derecho del mando.
+    static constexpr float ROWS_TOP = FIRST_ROW_Y - ROW_H * 0.5f - 6.0f;
+    static constexpr float ROWS_BOTTOM = FOOTER_Y - 42.0f - 16.0f;
+    static constexpr float ROWS_W = PANEL_W - 16.0f;
+
     static constexpr float LABEL_X = -230.0f;
     static constexpr float LABEL_W = 380.0f;
     static constexpr float ROW_TEXT_H = 26.0f;
@@ -436,6 +455,10 @@ public:
         }
 
         BuildChrome(em, data, baseLayer);
+
+        // Todo lo que se cree con Vis::Tab mientras s_rowsView este puesto entra en la zona con scroll (ver Tag).
+        data->rowsView = BuildRowsView(em, baseLayer);
+        s_rowsView = data->rowsView;
         BuildQualityTab(em, data, baseLayer);
         BuildSoundTab(em, data, baseLayer);
         BuildControlsTab(em, data, baseLayer);
@@ -443,12 +466,36 @@ public:
         BuildImageTab(em, data, baseLayer);
         BuildEffectsTab(em, data, baseLayer);
         BuildAdvancedTab(em, data, baseLayer);
+        s_rowsView = 0;
+
         BuildFooter(em, data, baseLayer);
 
         return data;
     }
 
 private:
+    inline static Entity s_rowsView = 0;
+
+    // Zona con scroll de las filas. Capa por encima de las filas (baseLayer + 2) para que la barra quede delante.
+    static Entity BuildRowsView(EntityManager& em, int baseLayer)
+    {
+        Entity e = em.CreateEntity();
+
+        UIElement* el = em.AddComponent<UIElement>(e, UIElement{});
+        el->anchor = UIAnchor::CENTER;
+        el->position = glm::vec2(0.0f, (ROWS_TOP + ROWS_BOTTOM) * 0.5f);
+        el->size = glm::vec2(ROWS_W, ROWS_BOTTOM - ROWS_TOP);
+        el->pivot = glm::vec2(0.5f, 0.5f);
+        el->isVisible = false;
+        el->layer = baseLayer + 3;
+
+        UIScrollView* view = em.AddComponent<UIScrollView>(e, UIScrollView{});
+        view->contentPadding = 10.0f;
+
+        Tag(em, e, SettingsWidget::Vis::Always, 0, baseLayer + 3);
+        return e;
+    }
+
     // Cabecera, pestanas y pie
 
     static void BuildChrome(EntityManager& em, SettingsPanelData* data, int baseLayer)
@@ -1110,6 +1157,9 @@ private:
         w->readText = std::move(readText);
         w->readSlider = std::move(readSlider);
         w->readChoice = std::move(readChoice);
+
+        if (vis == SettingsWidget::Vis::Tab && s_rowsView != 0)
+            UIScroll::Attach(em, e, s_rowsView);
     }
 
     static Entity MakeText(EntityManager& em,

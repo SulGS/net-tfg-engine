@@ -13,6 +13,8 @@ namespace GameAction {
         Pause,
         SpectatePrev,
         SpectateNext,
+        Dash,
+        Shield,
     };
 }
 
@@ -31,6 +33,10 @@ inline void RegisterGameActions()
         B::Key(GLFW_KEY_W), B::PadAxis(GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER, 1), true);
     map.RegisterAction(GameAction::Shoot, "shoot", "Disparar",
         B::Key(GLFW_KEY_SPACE), B::PadButton(GLFW_GAMEPAD_BUTTON_A), true);
+    map.RegisterAction(GameAction::Dash, "dash", "Propulsión",
+        B::Key(GLFW_KEY_LEFT_SHIFT), B::PadButton(GLFW_GAMEPAD_BUTTON_X), true);
+    map.RegisterAction(GameAction::Shield, "shield", "Escudo láser",
+        B::Key(GLFW_KEY_E), B::PadButton(GLFW_GAMEPAD_BUTTON_B), true);
 
     // Not gameplay: Pause has to work while the pause menu blocks gameplay, and spectating happens once dead.
     map.RegisterAction(GameAction::Pause, "pause", "Menú de pausa",

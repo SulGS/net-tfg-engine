@@ -18,6 +18,7 @@
 #include "ecs/UI/UITextField.hpp"
 #include "ecs/UI/UIRenderSystem.hpp"
 #include "ecs/UI/UIUpdateSystem.hpp"
+#include "ecs/UI/UIScrollView.hpp"
 #include "ecs/UI/DebugOverlay.hpp"
 #include "OpenAL/AudioManager.hpp"
 #include "Utils/Input.hpp"
@@ -79,6 +80,7 @@ public:
         world.GetEntityManager().RegisterComponentType<UITextField>();
 		world.GetEntityManager().RegisterComponentType<UISlider>();
 		world.GetEntityManager().RegisterComponentType<UIDropdown>();
+		UIScroll::Register(world.GetEntityManager());
 
         world.GetEntityManager().RegisterComponentType<DirectionalLightComponent>();
         world.GetEntityManager().RegisterComponentType<PointLightComponent>();

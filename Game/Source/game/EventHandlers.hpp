@@ -182,8 +182,14 @@ public:
         for (auto [entity, play, ship] : query2) {
 
             if (play->playerId == coll_ev.playerId && ship->isAlive) {
+                // A raised shield takes the hit and breaks (both sides: the event reaches clients too, so their
+                // prediction drops it at the same frame); its cooldown, armed when it was raised, starts now.
+                if (ship->shieldTicks > 0)
+                {
+                    ship->shieldTicks = 0;
+                }
                 // One-hit kill — emit death immediately
-                if (isServer)
+                else if (isServer)
                 {
                     EventEntry deathEvent;
                     deathEvent.event.type = AsteroidEventMask::DEATH;

@@ -147,11 +147,17 @@ void UIUpdateSystem::Update(EntityManager& entityManager, std::vector<EventEntry
         if (Input::LastDevice() == Input::Device::Gamepad) navActive = true;
     }
 
+    // Scroll views first: everything below hit tests (and the renderer draws) the children where this lays them out.
+    UpdateScrollViews(entityManager, refMouse, mouseIsDown, deltaTime);
+
     // Dropdowns and sliders get the click first: an open popup is drawn on top
-    // of the rest of the UI, so it must also be hit tested first.
+    // of the rest of the UI, so it must also be hit tested first. Then scroll bars, which sit over their content.
     bool clickConsumed = false;
     if (mouseJustPressed) {
         clickConsumed = HandleDropdownClick(entityManager, refMouse);
+        if (!clickConsumed) {
+            clickConsumed = HandleScrollBarClick(entityManager, refMouse);
+        }
         if (!clickConsumed) {
             clickConsumed = HandleSliderClick(entityManager, refMouse);
         }
@@ -169,7 +175,7 @@ void UIUpdateSystem::Update(EntityManager& entityManager, std::vector<EventEntry
         auto buttonQuery = entityManager.CreateQuery<UIElement, UIButton>();
         for (auto [entity, element, button] : buttonQuery) {
             if (!element->isVisible || !button->isInteractable) continue;
-            if (element->Contains({ refMouseX, refMouseY }, refWidth, refHeight)) {
+            if (HitTest(entityManager, entity, element, refMouse)) {
                 navFocus = entity;
                 if (button->onClick) button->onClick();
                 clickedButton = true;
@@ -182,7 +188,7 @@ void UIUpdateSystem::Update(EntityManager& entityManager, std::vector<EventEntry
             auto query = entityManager.CreateQuery<UIElement, UITextField>();
             for (auto [entity, element, textField] : query) {
                 if (!element->isVisible || !textField->isInteractable) continue;
-                if (element->Contains({ refMouseX, refMouseY }, refWidth, refHeight)) {
+                if (HitTest(entityManager, entity, element, refMouse)) {
                     clickedAnyField = true;
                     clickedField = entity;
                     break;
@@ -226,7 +232,7 @@ void UIUpdateSystem::Update(EntityManager& entityManager, std::vector<EventEntry
         // Navigating: the focused button is the "hovered" one, wherever the (maybe hidden) pointer is.
         bool isInside = navActive
             ? (entity == navFocus)
-            : element->Contains({ refMouseX, refMouseY }, refWidth, refHeight);
+            : HitTest(entityManager, entity, element, refMouse);
         ButtonState previousState = button->state;
 
         if (mouseIsDown && isInside && !navActive) {
@@ -637,7 +643,7 @@ bool UIUpdateSystem::HandleDropdownClick(EntityManager& entityManager, const glm
     auto query = entityManager.CreateQuery<UIElement, UIDropdown>();
     for (auto [entity, element, dropdown] : query) {
         if (!element->isVisible || !dropdown->isInteractable) continue;
-        if (!element->Contains(refMouse, refWidth, refHeight)) continue;
+        if (!HitTest(entityManager, entity, element, refMouse)) continue;
 
         navFocus = entity;
         dropdown->Open();
@@ -686,7 +692,7 @@ void UIUpdateSystem::UpdateDropdowns(EntityManager& entityManager, const glm::ve
 
         if (openDropdown == entity) openDropdown = 0;
 
-        bool isInside = (openDropdown == 0) && element->Contains(refMouse, refWidth, refHeight);
+        bool isInside = (openDropdown == 0) && HitTest(entityManager, entity, element, refMouse);
         dropdown->state = isInside ? DropdownState::HOVERED : DropdownState::NORMAL;
     }
 }
@@ -743,6 +749,7 @@ bool UIUpdateSystem::HandleSliderClick(EntityManager& entityManager, const glm::
 
         glm::vec2 pos = element->GetScreenPosition(refWidth, refHeight);
         if (!slider->ContainsPoint(refMouse, pos, element->size)) continue;
+        if (!UIScroll::IsPointVisible(entityManager, entity, refMouse, refWidth, refHeight)) continue;
 
         activeSlider = entity;
         focusedSlider = entity;
@@ -792,7 +799,8 @@ void UIUpdateSystem::UpdateSliders(EntityManager& entityManager, const glm::vec2
 
         glm::vec2 pos = element->GetScreenPosition(refWidth, refHeight);
         bool isInside = (openDropdown == 0) &&
-            slider->ContainsPoint(refMouse, pos, element->size);
+            slider->ContainsPoint(refMouse, pos, element->size) &&
+            UIScroll::IsPointVisible(entityManager, entity, refMouse, refWidth, refHeight);
 
         slider->state = isInside ? SliderState::HOVERED : SliderState::NORMAL;
     }
@@ -858,6 +866,8 @@ Entity UIUpdateSystem::PickNavTarget(EntityManager& entityManager, const glm::ve
     auto query = entityManager.CreateQuery<UIElement>();
     for (auto [entity, element] : query) {
         if (!IsNavigable(entityManager, entity)) continue;
+        // Picked from scratch: only what can be seen. (Scrolled-away widgets stay reachable by moving onto them.)
+        if (UIScroll::IsFullyClipped(entityManager, entity, refWidth, refHeight)) continue;
 
         const glm::vec2 pos = element->GetScreenPosition(refWidth, refHeight);
 
@@ -961,6 +971,23 @@ void UIUpdateSystem::UpdateNavigation(EntityManager& entityManager) {
         return;
     }
 
+    // The focus was scrolled out of sight (wheel, right stick, bar): same as above, it comes back on something visible
+    // in that view, nearest to where it left, instead of moving relative to a widget the player can't see.
+    if (UIScroll::IsFullyClipped(entityManager, navFocus, refWidth, refHeight)) {
+        glm::vec2 nearPoint(0.0f);
+        GetNavCenter(entityManager, navFocus, nearPoint);
+        glm::vec4 clip;
+        if (UIScroll::GetClipRect(entityManager, navFocus, refWidth, refHeight, clip)) {
+            nearPoint.y = std::clamp(nearPoint.y, clip.y, clip.y + clip.w);
+        }
+        const Entity visible = PickNavTarget(entityManager, &nearPoint);
+        if (visible != 0) {
+            navFocus = visible;
+            hasLastNavCenter = GetNavCenter(entityManager, navFocus, lastNavCenter);
+            return;
+        }
+    }
+
     // Along the widget's own axis, arrows change its value instead of moving away.
     if (UISlider* slider = entityManager.GetComponent<UISlider>(navFocus)) {
         if (slider->orientation == SliderOrientation::HORIZONTAL && dx != 0) {
@@ -986,6 +1013,7 @@ void UIUpdateSystem::UpdateNavigation(EntityManager& entityManager) {
         const Entity next = FindNavNeighbour(entityManager, navFocus,
             glm::vec2(static_cast<float>(dx), static_cast<float>(dy)));
         if (next != 0) navFocus = next;
+        ScrollNavFocusIntoView(entityManager);
     }
 
     hasLastNavCenter = GetNavCenter(entityManager, navFocus, lastNavCenter);
@@ -1024,4 +1052,143 @@ void UIUpdateSystem::ApplyNavHighlight(EntityManager& entityManager) {
         if (!dropdown->isInteractable || dropdown->isOpen) continue;
         dropdown->state = (entity == navFocus) ? DropdownState::HOVERED : DropdownState::NORMAL;
     }
+}
+// ---------------------------------------------------------------------------
+// Scroll views
+// ---------------------------------------------------------------------------
+
+bool UIUpdateSystem::HitTest(EntityManager& entityManager, Entity entity, const UIElement* element,
+    const glm::vec2& refMouse) const {
+    return element->Contains(refMouse, refWidth, refHeight)
+        && UIScroll::IsPointVisible(entityManager, entity, refMouse, refWidth, refHeight);
+}
+
+void UIUpdateSystem::UpdateScrollViews(EntityManager& entityManager, const glm::vec2& refMouse, bool mouseIsDown,
+    float deltaTime) {
+    double wheelX = 0.0, wheelY = 0.0;
+    Input::GetScrollDelta(wheelX, wheelY);
+
+    InputMap& in = InputMap::Get();
+    // Right stick: up scrolls towards the top. Analog, so a light push reads slowly.
+    const float stick = in.Value(UIAction::ScrollDown) - in.Value(UIAction::ScrollUp);
+    // An open popup, a text field or a slider drag own the input: the view stays put under them.
+    const bool inputFree = openDropdown == 0 && focusedTextField == 0 && activeSlider == 0;
+
+    auto viewQuery = entityManager.CreateQuery<UIElement, UIScrollView>();
+    for (auto [viewEntity, viewElement, view] : viewQuery) {
+        const glm::vec2 viewPos = viewElement->GetScreenPosition(refWidth, refHeight);
+        const glm::vec2 viewSize = viewElement->size;
+
+        // Measure the content: the bottom of the lowest visible child, at scroll 0, below the view's top edge.
+        if (view->autoContentHeight) {
+            float bottom = 0.0f;
+            auto childQuery = entityManager.CreateQuery<UIElement, UIScrollChild>();
+            for (auto [childEntity, element, child] : childQuery) {
+                if (child->view != viewEntity || !element->isVisible) continue;
+                const float baseY = element->GetScreenPosition(refWidth, refHeight).y
+                    - element->position.y + child->basePosition.y;
+                bottom = std::max(bottom, baseY + element->size.y - viewPos.y);
+            }
+            view->contentHeight = bottom > 0.0f ? bottom + view->contentPadding : 0.0f;
+        }
+
+        const float maxScroll = view->MaxScroll(viewSize.y);
+        const bool active = viewElement->isVisible && view->isInteractable && view->CanScroll(viewSize.y);
+
+        if (!active) {
+            view->thumbDragging = false;
+            view->thumbHovered = false;
+        }
+        else {
+            const glm::vec4 thumb = view->ThumbRect(viewPos, viewSize);
+            view->thumbHovered = inputFree && UIScroll::RectContains(thumb, refMouse);
+
+            if (view->thumbDragging) {
+                if (!mouseIsDown) {
+                    view->thumbDragging = false;
+                }
+                else {
+                    const glm::vec4 track = view->TrackRect(viewPos, viewSize);
+                    const float travel = std::max(track.w - thumb.w, 1.0f);
+                    const float t = std::clamp((refMouse.y - view->dragGrab - track.y) / travel, 0.0f, 1.0f);
+                    view->ScrollTo(t * maxScroll, true);   // the thumb sticks to the pointer: no easing
+                }
+            }
+            else if (inputFree) {
+                const bool overView = UIScroll::RectContains(glm::vec4(viewPos, viewSize), refMouse);
+                if (overView && wheelY != 0.0) view->ScrollBy(-static_cast<float>(wheelY) * view->wheelStep);
+                if (stick != 0.0f) view->ScrollBy(stick * view->stickSpeed * deltaTime);
+                // Page keys act on any visible view (they aren't tied to the pointer).
+                if (Input::KeyTapped(GLFW_KEY_PAGE_DOWN)) view->ScrollBy(viewSize.y * 0.9f);
+                if (Input::KeyTapped(GLFW_KEY_PAGE_UP))   view->ScrollBy(-viewSize.y * 0.9f);
+            }
+        }
+
+        // Ease towards the target (both kept in range: the content can shrink, e.g. on a tab switch).
+        view->targetScroll = std::clamp(view->targetScroll, 0.0f, maxScroll);
+        if (view->smoothing <= 0.0f || std::abs(view->targetScroll - view->scroll) < 0.5f) {
+            view->scroll = view->targetScroll;
+        }
+        else {
+            const float k = 1.0f - std::exp(-view->smoothing * deltaTime);
+            view->scroll += (view->targetScroll - view->scroll) * k;
+        }
+        view->scroll = std::clamp(view->scroll, 0.0f, maxScroll);
+    }
+
+    // Lay the children out. Whole pixels: text and 1px borders would shimmer at fractional offsets while easing.
+    auto childQuery = entityManager.CreateQuery<UIElement, UIScrollChild>();
+    for (auto [childEntity, element, child] : childQuery) {
+        const UIScrollView* view = entityManager.GetComponent<UIScrollView>(child->view);
+        const float offset = view ? std::round(view->scroll) : 0.0f;
+        element->position = glm::vec2(child->basePosition.x, child->basePosition.y - offset);
+    }
+}
+
+bool UIUpdateSystem::HandleScrollBarClick(EntityManager& entityManager, const glm::vec2& refMouse) {
+    auto viewQuery = entityManager.CreateQuery<UIElement, UIScrollView>();
+    for (auto [viewEntity, viewElement, view] : viewQuery) {
+        if (!viewElement->isVisible || !view->isInteractable || !view->CanScroll(viewElement->size.y)) continue;
+
+        const glm::vec2 viewPos = viewElement->GetScreenPosition(refWidth, refHeight);
+        const glm::vec4 track = view->TrackRect(viewPos, viewElement->size);
+        // A little wider than the bar: an 8px target is fiddly to hit.
+        const glm::vec4 hitTrack(track.x - 4.0f, track.y, track.z + 8.0f, track.w);
+        if (!UIScroll::RectContains(hitTrack, refMouse)) continue;
+
+        const glm::vec4 thumb = view->ThumbRect(viewPos, viewElement->size);
+        if (refMouse.y >= thumb.y && refMouse.y <= thumb.y + thumb.w) {
+            view->thumbDragging = true;
+            view->dragGrab = refMouse.y - thumb.y;
+        }
+        else {
+            // Track: one page towards the click.
+            view->ScrollBy((refMouse.y < thumb.y ? -1.0f : 1.0f) * viewElement->size.y * 0.9f);
+        }
+        return true;
+    }
+    return false;
+}
+
+void UIUpdateSystem::ScrollNavFocusIntoView(EntityManager& entityManager) {
+    const UIScrollChild* child = entityManager.GetComponent<UIScrollChild>(navFocus);
+    if (!child) return;
+    const UIElement* element = entityManager.GetComponent<UIElement>(navFocus);
+    const UIElement* viewElement = entityManager.GetComponent<UIElement>(child->view);
+    UIScrollView* view = entityManager.GetComponent<UIScrollView>(child->view);
+    if (!element || !viewElement || !view) return;
+
+    // The focused widget's span in content coordinates (from the top of the content, scroll 0).
+    const float viewTop = viewElement->GetScreenPosition(refWidth, refHeight).y;
+    const float top = element->GetScreenPosition(refWidth, refHeight).y - element->position.y
+        + child->basePosition.y - viewTop;
+    const float bottom = top + element->size.y;
+    const float viewHeight = viewElement->size.y;
+    const float pad = view->contentPadding;
+
+    // Least movement that shows it whole, with a margin; nothing if it already is.
+    float target = view->targetScroll;
+    if (top - pad < target) target = top - pad;
+    else if (bottom + pad > target + viewHeight) target = bottom + pad - viewHeight;
+    view->targetScroll = std::clamp(target, 0.0f, view->MaxScroll(viewHeight));
 }

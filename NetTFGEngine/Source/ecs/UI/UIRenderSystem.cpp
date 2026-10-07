@@ -1,6 +1,7 @@
 #include "UIRenderSystem.hpp"
 #include <iostream>
 #include <algorithm>
+#include <cmath>
 #include "Utils/Debug/Debug.hpp"
 #include "Utils/AssetManager.hpp"
 #include "Utils/Utf8.hpp"
@@ -12,12 +13,13 @@ layout (location = 1) in vec2 aTexCoord;
 
 uniform mat4 uProjection;
 uniform mat4 uModel;
+uniform vec4 uUVRect; // sub-rectangle of the texture shown: xy = offset, zw = size (UIImage::uvRect)
 
 out vec2 TexCoord;
 
 void main() {
     gl_Position = uProjection * uModel * vec4(aPos, 0.0, 1.0);
-    TexCoord = aTexCoord;
+    TexCoord = uUVRect.xy + aTexCoord * uUVRect.zw;
 }
 )";
 
@@ -133,8 +135,18 @@ void UIRenderSystem::Update(EntityManager& entityManager, std::vector<EventEntry
     std::vector<std::pair<const UIElement*, const UIDropdown*>> openDropdowns;
     const UIElement* navFocusedElement = nullptr;
 
+    Entity navFocusedEntity = 0;
+
     for (const auto& [entity, element, layer] : uiElements) {
-        if (element->navFocused) navFocusedElement = element;
+        // Scroll view children: skipped when scrolled fully out of their viewport, clipped to it otherwise.
+        glm::vec4 clip;
+        const bool clipped = UIScroll::GetClipRect(entityManager, entity, refWidth, refHeight, clip);
+        if (clipped) {
+            if (UIScroll::IsFullyClipped(entityManager, entity, refWidth, refHeight)) continue;
+            BeginClip(clip);
+        }
+
+        if (element->navFocused) { navFocusedElement = element; navFocusedEntity = entity; }
 
         UIButton* button = entityManager.GetComponent<UIButton>(entity);
         if (button) {
@@ -185,14 +197,26 @@ void UIRenderSystem::Update(EntityManager& entityManager, std::vector<EventEntry
                 openDropdowns.push_back({ element, dropdown });
             }
         }
+
+        if (clipped) EndClip();
+
+        // The bar of a scroll view, at the view's own layer (keep it above its children's).
+        UIScrollView* scrollView = entityManager.GetComponent<UIScrollView>(entity);
+        if (scrollView) {
+            RenderScrollBar(element, scrollView);
+        }
     }
 
     // Keyboard/gamepad focus (UIUpdateSystem): a ring just outside the element, over the rest of the UI.
     if (navFocusedElement) {
+        glm::vec4 clip;
+        const bool clipped = UIScroll::GetClipRect(entityManager, navFocusedEntity, refWidth, refHeight, clip);
+        if (clipped) BeginClip(clip);
         const float gap = 4.0f;
         const glm::vec2 pos = navFocusedElement->GetScreenPosition(refWidth, refHeight) - glm::vec2(gap);
         RenderBorder(pos, navFocusedElement->size + glm::vec2(2.0f * gap),
             glm::vec4(1.0f, 0.78f, 0.2f, navFocusedElement->opacity), 3.0f);
+        if (clipped) EndClip();
     }
 
     // Second pass: open dropdown lists on top of everything else
@@ -530,6 +554,7 @@ void UIRenderSystem::RenderQuad(const glm::vec2& position, const glm::vec2& size
             glm::scale(glm::mat4(1.0f), glm::vec3(size, 1.0f))
         ));
     glUniform4fv(glGetUniformLocation(shaderProgram, "uColor"), 1, glm::value_ptr(color));
+    glUniform4fv(glGetUniformLocation(shaderProgram, "uUVRect"), 1, glm::value_ptr(uvRect));
 
     if (textureID) {
         glUniform1i(glGetUniformLocation(shaderProgram, "uUseTexture"), 1);
@@ -730,6 +755,42 @@ void UIRenderSystem::UpdateButton(Entity entity, UIElement* element, UIButton* b
 }
 
 // Shared drawing helpers
+
+void UIRenderSystem::RenderScrollBar(const UIElement* element, const UIScrollView* view) {
+    if (!view->CanScroll(element->size.y)) return;
+
+    const glm::vec2 pos = element->GetScreenPosition(refWidth, refHeight);
+    const glm::vec4 track = view->TrackRect(pos, element->size);
+    const glm::vec4 thumb = view->ThumbRect(pos, element->size);
+    const glm::vec4 opacity(1.0f, 1.0f, 1.0f, element->opacity);
+
+    const glm::vec4 thumbColor = view->thumbDragging ? view->thumbDragColor
+        : view->thumbHovered ? view->thumbHoverColor
+        : view->thumbColor;
+
+    RenderQuad(glm::vec2(track.x, track.y), glm::vec2(track.z, track.w), view->trackColor * opacity);
+    RenderQuad(glm::vec2(thumb.x, thumb.y), glm::vec2(thumb.z, thumb.w), thumbColor * opacity);
+}
+
+void UIRenderSystem::BeginClip(const glm::vec4& refRect) {
+    // Reference space -> the current viewport (the projection stretches reference space over it), GL's y going up.
+    GLint vp[4];
+    glGetIntegerv(GL_VIEWPORT, vp);
+    const float sx = static_cast<float>(vp[2]) / static_cast<float>(refWidth);
+    const float sy = static_cast<float>(vp[3]) / static_cast<float>(refHeight);
+
+    const int x0 = vp[0] + static_cast<int>(std::floor(refRect.x * sx));
+    const int x1 = vp[0] + static_cast<int>(std::ceil((refRect.x + refRect.z) * sx));
+    const int y0 = vp[1] + vp[3] - static_cast<int>(std::ceil((refRect.y + refRect.w) * sy));
+    const int y1 = vp[1] + vp[3] - static_cast<int>(std::floor(refRect.y * sy));
+
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(x0, y0, std::max(0, x1 - x0), std::max(0, y1 - y0));
+}
+
+void UIRenderSystem::EndClip() {
+    glDisable(GL_SCISSOR_TEST);
+}
 
 void UIRenderSystem::RenderBorder(const glm::vec2& position, const glm::vec2& size,
     const glm::vec4& color, float thickness) {

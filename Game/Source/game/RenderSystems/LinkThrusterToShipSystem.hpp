@@ -82,7 +82,14 @@ public:
                 }
                 else
                 {
-                    thrusterEmitter->enabled = ship->isMovingForward;   // exhaust when moving
+                    // Exhaust when moving; during a propulsion burst it flares into a long, dense jet that dies down with
+                    // the dash's speed. dashTicks is the local player's predicted value (see Interpolate), so the
+                    // flare starts on the key press.
+                    const bool dashing = ship->dashTicks > 0;
+                    const float flare = dashing ? DashStrength(ship->dashTicks) : 0.0f;
+                    thrusterEmitter->enabled = ship->isMovingForward || dashing;
+                    thrusterEmitter->startLifetime = 0.05f + 0.11f * flare;
+                    thrusterEmitter->emissionRate = 300.0f + 600.0f * flare;
                     thrusterTransform->setRotation(glm::vec3(
                         90.0f,
                         shipTransform->getRotation().z,

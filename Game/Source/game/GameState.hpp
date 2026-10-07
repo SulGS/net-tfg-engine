@@ -38,6 +38,12 @@ struct AsteroidShooterGameState {
 
     int shootCooldown[NUM_PLAYERS];
 
+    // Abilities, see SpaceShip. Piggybacked on GamePositionsDelta every tick, so a misprediction gets corrected like a position.
+    int dashTicks[NUM_PLAYERS];
+    int dashCooldown[NUM_PLAYERS];
+    int shieldTicks[NUM_PLAYERS];
+    int shieldCooldown[NUM_PLAYERS];
+
     Bullet bullets[MAX_BULLETS];
     int bulletCount;  // Number of active bullets (for quick iteration)
 

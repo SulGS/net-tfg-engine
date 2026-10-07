@@ -187,6 +187,8 @@ namespace UIAction {
         Back,
         PrevTab,
         NextTab,
+        ScrollUp,     // scroll views (UIScrollView): right stick, analog (Value() is the speed)
+        ScrollDown,
         Count
     };
 }
@@ -480,6 +482,8 @@ private:
         RegisterBuiltin(UIAction::Back, "ui_back", B::Key(GLFW_KEY_ESCAPE), B::PadButton(GLFW_GAMEPAD_BUTTON_B));
         RegisterBuiltin(UIAction::PrevTab, "ui_prev_tab", B{}, B::PadButton(GLFW_GAMEPAD_BUTTON_LEFT_BUMPER));
         RegisterBuiltin(UIAction::NextTab, "ui_next_tab", B{}, B::PadButton(GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER));
+        RegisterBuiltin(UIAction::ScrollUp, "ui_scroll_up", B{}, B::PadAxis(GLFW_GAMEPAD_AXIS_RIGHT_Y, -1));
+        RegisterBuiltin(UIAction::ScrollDown, "ui_scroll_down", B{}, B::PadAxis(GLFW_GAMEPAD_AXIS_RIGHT_Y, 1));
 
         // The left stick navigates too, and the keypad Enter accepts.
         AddFixedBinding(UIAction::Up, B::PadAxis(GLFW_GAMEPAD_AXIS_LEFT_Y, -1));

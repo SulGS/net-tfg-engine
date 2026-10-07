@@ -72,3 +72,40 @@ inline MeshComponent* AddChargeOrbMesh(EntityManager& em, Entity orb, int player
     mc->additive = true;
     return mc;
 }
+
+// ---- Laser shield (laser_shield.frag) ---- Same glow canvas, scaled to a sphere around the ship: the shell sits at 0.82 of
+// it, ~4.3 units, just clear of the hull (collider half-extents 1.8 x 2.5) and of the charge orb at the muzzle. Cyan/blue,
+// so it never reads as the red walls or the orange bolts.
+inline constexpr float SHIELD_RADIUS = 5.2f;
+inline const glm::vec3 SHIELD_COLOR(0.12f, 0.55f, 1.0f);
+inline const glm::vec3 SHIELD_HOT_COLOR(0.65f, 0.92f, 1.0f);
+
+// Its light on the floor/ship; no shadows (few, expensive cube-map slots; see AddLaserBoltLight).
+inline constexpr float SHIELD_LIGHT_INTENSITY = 60.0f;
+inline constexpr float SHIELD_LIGHT_RADIUS = 22.0f;
+
+inline MeshComponent* AddShieldMesh(EntityManager& em, Entity shield, int playerId)
+{
+    auto mat = std::make_shared<Material>("glow_volume.vert", "laser_shield.frag");
+    mat->setVec3("uColor", SHIELD_COLOR);
+    mat->setVec3("uHotColor", SHIELD_HOT_COLOR);
+    mat->setFloat("uGlowStrength", 1.4f);
+    mat->setFloat("uCoreStrength", 2.4f);
+    mat->setFloat("uSeed", playerId * 4.3f);
+
+    MeshComponent* mc = em.AddComponent<MeshComponent>(shield,
+        MeshComponent(new Mesh(GLOW_VOLUME_MESH, mat)));
+    mc->castShadows = false;
+    mc->additive = true;
+    return mc;
+}
+
+inline PointLightComponent* AddShieldLight(EntityManager& em, Entity shield)
+{
+    PointLightComponent* light = em.AddComponent<PointLightComponent>(shield, PointLightComponent{});
+    light->color = SHIELD_COLOR;
+    light->intensity = 0.0f;
+    light->radius = SHIELD_LIGHT_RADIUS;
+    light->castShadows = false;
+    return light;
+}

@@ -9,6 +9,7 @@
 #include "UITextField.hpp"
 #include "UISlider.hpp"
 #include "UIDropdown.hpp"
+#include "UIScrollView.hpp"
 #include "Utils/FontManager.hpp"
 #include "OpenGL/OpenGLIncludes.hpp"
 #include <map>
@@ -66,6 +67,10 @@ private:
     void RenderUIDropdown(const UIElement* element, const UIDropdown* dropdown);
     // Popup list: drawn in a second pass so it always sits on top of the UI
     void RenderUIDropdownList(const UIElement* element, const UIDropdown* dropdown);
+    void RenderScrollBar(const UIElement* element, const UIScrollView* view);
+    // Scissor to a reference-space rectangle (x, y, w, h): scroll view children are clipped to their viewport.
+    void BeginClip(const glm::vec4& refRect);
+    void EndClip();
     void RenderQuad(const glm::vec2& position, const glm::vec2& size,
         const glm::vec4& color, GLuint textureID = 0,
         const glm::vec4& uvRect = glm::vec4(0, 0, 1, 1));

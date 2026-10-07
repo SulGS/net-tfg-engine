@@ -39,6 +39,20 @@ public:
                 if (ship->remainingShootFrames == 0) ship->isShooting = false;
             }
 
+            // Abilities (see Components.hpp). Holding the key re-fires as soon as the cooldown is over, like shooting.
+            // The cooldown is armed here but only counts down once the ability has ended (timers at the end of the tick).
+            if ((m & INPUT_DASH) && ship->dashTicks == 0 && ship->dashCooldown == 0)
+            {
+                ship->dashTicks = DASH_TICKS;
+                ship->dashCooldown = DASH_COOLDOWN_TICKS;
+            }
+            if ((m & INPUT_SHIELD) && ship->shieldTicks == 0 && ship->shieldCooldown == 0)
+            {
+                ship->shieldTicks = SHIELD_TICKS;
+                ship->shieldCooldown = SHIELD_COOLDOWN_TICKS;
+            }
+            const bool dashing = ship->dashTicks > 0;
+
             bool notRotating = !(m & INPUT_LEFT) && !(m & INPUT_RIGHT);
 
             // Analog intensity (InputMask.hpp): 1.0 exactly for keys, so keyboard play is unchanged. A half-pushed
@@ -111,6 +125,29 @@ public:
                 ship->velY *= scale;
             }
 
+            // Propulsion: the speed follows DashSpeed exactly, peak on the first tick, easing down to MAX_SPEED by the
+            // last, where the cap above takes over with no seam. Its direction starts on the heading and keeps turning
+            // towards it (DASH_STEER), so rotating during the dash curves it instead of the ship sliding sideways.
+            if (dashing)
+            {
+                float dirX = fwdX, dirY = fwdY;
+                if (ship->dashTicks < DASH_TICKS && speed > 1e-3f)
+                {
+                    const float current = std::min(speed, MAX_SPEED);   // |vel| after the cap above
+                    const float vx = ship->velX / current;
+                    const float vy = ship->velY / current;
+                    dirX = vx + (fwdX - vx) * DASH_STEER;
+                    dirY = vy + (fwdY - vy) * DASH_STEER;
+                    const float len = sqrt(dirX * dirX + dirY * dirY);
+                    if (len > 1e-3f) { dirX /= len; dirY /= len; }
+                    else { dirX = fwdX; dirY = fwdY; }
+                }
+                const float dashSpeed = DashSpeed(ship->dashTicks, MAX_SPEED);
+                ship->velX = dirX * dashSpeed;
+                ship->velY = dirY * dashSpeed;
+                ship->isMovingForward = true;   // exhaust on (see LinkThrusterToShipSystem)
+            }
+
             transform->setPosition(transform->getPosition() + glm::vec3(ship->velX, ship->velY, 0.0f));
 
             // Charging no longer freezes the ship (see InputServerSystem for the
@@ -121,6 +158,12 @@ public:
                 ship->remainingShootFrames = CHARGE_SHOOT_FRAMES;
                 ship->isShooting = true;
             }
+
+            // Ability timers: the active phase runs out first, then the cooldown.
+            if (ship->dashTicks > 0) ship->dashTicks--;
+            else if (ship->dashCooldown > 0) ship->dashCooldown--;
+            if (ship->shieldTicks > 0) ship->shieldTicks--;
+            else if (ship->shieldCooldown > 0) ship->shieldCooldown--;
         }
     }
 };

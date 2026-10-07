@@ -15,7 +15,17 @@ struct GamePositionsDelta {
     // Piggybacked here because this handler already sends every tick — exactly the cadence the countdown
     // needs for smooth display and for client prediction to unblock input in step with the server.
     int startCountdownTicks;
+
+    // Ability timers (all fit 16 bits: the longest is a 12 s cooldown = 360 ticks). Predicted from inputs on the client,
+    // but a dropped/late input or a shield broken by a bullet the client didn't see coming would otherwise never heal:
+    // being here, they're compared every tick and a mismatch triggers the same reconciliation as a position.
+    uint16_t dashTicks[NUM_PLAYERS];
+    uint16_t dashCooldown[NUM_PLAYERS];
+    uint16_t shieldTicks[NUM_PLAYERS];
+    uint16_t shieldCooldown[NUM_PLAYERS];
 };
+
+static_assert(sizeof(GamePositionsDelta) <= 1024, "GamePositionsDelta no longer fits in a DeltaStateBlob");
 
 // Full boolean-grid snapshot: DELTA_WALL_STATE "mode 0" payload (see WallStateDeltaHandler). Only sent as a
 // periodic keyframe or when a tick changes more edges than the sparse budget.

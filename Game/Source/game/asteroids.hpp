@@ -43,6 +43,8 @@
 #include "RenderSystems/ThrustersSoundSystem.hpp"
 #include "RenderSystems/FluidAnimationSystem.hpp"
 #include "RenderSystems/DestroyTimerSystem.hpp"
+#include "RenderSystems/ShieldRenderSystem.hpp"
+#include "RenderSystems/AbilityHudSystem.hpp"
 #include "Explosion.hpp"
 #include "PauseMenu.hpp"
 #include "Events.hpp"
@@ -165,6 +167,8 @@ public:
             buf.data[INPUT_BYTE_THRUST] = EncodeInputIntensity(in.Value(GameAction::Thrust));
         }
         if (in.Down(GameAction::Shoot)) m |= INPUT_SHOOT;
+        if (in.Down(GameAction::Dash)) m |= INPUT_DASH;
+        if (in.Down(GameAction::Shield)) m |= INPUT_SHIELD;
         buf.data[0] = m;
         return buf;
     }
@@ -188,6 +192,10 @@ public:
             ship->velX = s.velX[p];
             ship->velY = s.velY[p];
             ship->angularVel = s.angularVel[p];
+            ship->dashTicks = s.dashTicks[p];
+            ship->dashCooldown = s.dashCooldown[p];
+            ship->shieldTicks = s.shieldTicks[p];
+            ship->shieldCooldown = s.shieldCooldown[p];
         }
 
         // Collect active bullet IDs from ECS
@@ -310,6 +318,10 @@ public:
             s.velX[p] = ship->velX;
             s.velY[p] = ship->velY;
             s.angularVel[p] = ship->angularVel;
+            s.dashTicks[p] = ship->dashTicks;
+            s.dashCooldown[p] = ship->dashCooldown;
+            s.shieldTicks[p] = ship->shieldTicks;
+            s.shieldCooldown[p] = ship->shieldCooldown;
         }
 
         auto bulletQuery = world.GetEntityManager().CreateQuery<Transform, ECSBullet>();
@@ -409,6 +421,11 @@ public:
             s->shootCooldown[i] = 0;
             s->health[i] = 1;
             s->alive[i] = true;
+
+            s->dashTicks[i] = 0;
+            s->dashCooldown[i] = 0;
+            s->shieldTicks[i] = 0;
+            s->shieldCooldown[i] = 0;
         }
 
         for (int i = 0; i < MAX_BULLETS; i++) {
@@ -832,6 +849,10 @@ public:
             ship->velX = s.velX[p];
             ship->velY = s.velY[p];
             ship->angularVel = s.angularVel[p];
+            ship->dashTicks = s.dashTicks[p];
+            ship->dashCooldown = s.dashCooldown[p];
+            ship->shieldTicks = s.shieldTicks[p];
+            ship->shieldCooldown = s.shieldCooldown[p];
         }
 
         // Bullets — collect ECS ids
@@ -978,6 +999,8 @@ public:
 		world.GetEntityManager().RegisterComponentType<LaserWallVisual>();
 		world.GetEntityManager().RegisterComponentType<BulletVisual>();
 		world.GetEntityManager().RegisterComponentType<GameStatusText>();
+		world.GetEntityManager().RegisterComponentType<ShieldEffect>();
+		world.GetEntityManager().RegisterComponentType<AbilityHudIcon>();
 		RegisterPauseMenuComponents(world.GetEntityManager());
 		world.GetEntityManager().RegisterComponentType<MatchStartTimer>();
 
@@ -1103,6 +1126,9 @@ public:
         // DebugOverlay's UIText, so the render systems' UIText queries
         // (REMAINING/YOU DIED/WINS) don't also reposition the debug HUD.
         world.GetEntityManager().AddComponent<GameStatusText>(healthText, GameStatusText{});
+
+        // Ability icons (propulsion / laser shield) with their cooldowns, bottom centre.
+        AbilityHud::Build(world.GetEntityManager());
 
 		// Exit flag, synced to the logic side below; the pause menu is the only way to set it.
 		Entity exitCheckerEntity = world.GetEntityManager().CreateEntity();
@@ -1367,12 +1393,14 @@ public:
         world.AddSystem(std::make_unique<MatchStartCountdownRenderSystem>());
         world.AddSystem(std::make_unique<ChargingBulletRenderSystem>());
         world.AddSystem(std::make_unique<BulletRenderSystem>());
+        world.AddSystem(std::make_unique<ShieldRenderSystem>());
         world.AddSystem(std::make_unique<LinkThrusterToShipSystem>());
         world.AddSystem(std::make_unique<LaserWallRenderSystem>());
 		world.AddSystem(std::make_unique<UpdateListenerTransformSystem>());
 		world.AddSystem(std::make_unique<ThrustersSoundSystem>());
         world.AddSystem(std::make_unique<FluidAnimationSystem>());
         world.AddSystem(std::make_unique<DestroyTimerSystem>());
+        world.AddSystem(std::make_unique<AbilityHudSystem>());
         world.AddSystem(std::make_unique<PauseMenuSystem>());
 
         AudioManager::PlayMusic("lava_sound.wav", true);
@@ -1425,6 +1453,14 @@ public:
             rend.velX[i] = currServer.velX[i];
             rend.velY[i] = currServer.velY[i];
             rend.angularVel[i] = currServer.angularVel[i];
+
+            // Abilities: the local player's from its own prediction, like its position, so the shield goes up and the
+            // HUD reacts on the key press instead of a round trip later; everyone else's at server time.
+            const AsteroidShooterGameState& abilitySrc = (playerId == i) ? currLocal : currServer;
+            rend.dashTicks[i] = abilitySrc.dashTicks[i];
+            rend.dashCooldown[i] = abilitySrc.dashCooldown[i];
+            rend.shieldTicks[i] = abilitySrc.shieldTicks[i];
+            rend.shieldCooldown[i] = abilitySrc.shieldCooldown[i];
         }
 
         // Bullets

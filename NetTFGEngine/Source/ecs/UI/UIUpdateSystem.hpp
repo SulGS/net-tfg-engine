@@ -7,6 +7,7 @@
 #include "UIButton.hpp"
 #include "UISlider.hpp"
 #include "UIDropdown.hpp"
+#include "UIScrollView.hpp"
 #include "Utils/FontManager.hpp"
 #include "OpenGL/OpenGLIncludes.hpp"
 
@@ -110,6 +111,15 @@ private:
     void HandleSliderKeyboard(EntityManager& entityManager);
     void HandleDropdownKeyboard(EntityManager& entityManager);
     void EndSliderDrag(EntityManager& entityManager);
+
+    // Scroll views (UIScrollView): measure, take wheel/stick/keys/thumb drag, ease, and lay the children out.
+    void UpdateScrollViews(EntityManager& entityManager, const glm::vec2& refMouse, bool mouseIsDown, float deltaTime);
+    // A press on a scroll bar (thumb: drag; track: one page). True when consumed.
+    bool HandleScrollBarClick(EntityManager& entityManager, const glm::vec2& refMouse);
+    // Scrolls the navigation focus into view if it sits in a scroll view.
+    void ScrollNavFocusIntoView(EntityManager& entityManager);
+    // Hit test that respects scroll view clipping.
+    bool HitTest(EntityManager& entityManager, Entity entity, const UIElement* element, const glm::vec2& refMouse) const;
 
     // Navigation
     void UpdateNavigation(EntityManager& entityManager);
