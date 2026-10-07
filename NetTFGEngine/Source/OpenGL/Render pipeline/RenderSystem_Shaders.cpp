@@ -1000,7 +1000,7 @@ void RenderSystem::CompileNISShader()
 
     // Every NIS_* option the header tests is defined explicitly (an undefined name in #if isn't portable in GLSL).
     // The constants block mirrors NISConfig: std140 packs scalars at 4 bytes like the C++ struct.
-    const std::string src =
+    std::string src =
         "#version 430 core\n"
         "#define NIS_GLSL 1\n"
         "#define NIS_HLSL 0\n"
@@ -1067,6 +1067,21 @@ void RenderSystem::CompileNISShader()
             NVScaler(gl_WorkGroupID.xy, gl_LocalInvocationID.x);
         }
         )GLSL";
+
+    // Bounds-checked stores. With NIS_VIEWPORT_SUPPORT 0 the SDK writes every pixel of every dispatched block, and the
+    // dispatch is rounded up to whole blocks (1366 wide / 32 = 43 blocks -> columns up to 1375): those stores fall
+    // outside out_texture. GL says they have no effect and NVIDIA honours that; the Radeon 520's 21.19 driver showed
+    // garbage blocks over the whole image and then crashed inside the driver in unrelated draws. Patched here rather
+    // than in the generated NIS_GLSL.inl, so re-running Scripts/embed_nis_sdk.py keeps it.
+    {
+        const std::string store = "#define NVTEX_STORE(x, pos, v) imageStore(x, NVI2(pos), v)";
+        const size_t at = src.find(store);
+        if (at != std::string::npos)
+            src.replace(at, store.size(),
+                "#define NVTEX_STORE(x, pos, v) { if (all(lessThan(uvec2(NVI2(pos)), uvec2(imageSize(x))))) imageStore(x, NVI2(pos), v); }");
+        else
+            Debug::Warning("RenderSystem") << "NIS: NVTEX_STORE not found in the SDK source, stores stay unchecked\n";
+    }
 
     GLuint prog = LinkProgram({ CompileStage(GL_COMPUTE_SHADER, src.c_str()) });
     GLint ok = 0;
