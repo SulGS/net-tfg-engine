@@ -119,6 +119,9 @@ void RenderSystem::LinearDepthPass(const glm::mat4& projection, GLuint fbo, int 
 // Disabled: the blurred target is just cleared to 1.0 so the materials' multiply becomes a no-op.
 void RenderSystem::ClearSSAO()
 {
+    // No screen-space targets (all their effects off): ShadingPass binds the 1x1 white texture instead. Binding FBO 0
+    // here would clear the window.
+    if (!m_ssaoBlurFBO) return;
     glBindFramebuffer(GL_FRAMEBUFFER, m_ssaoBlurFBO);
     glViewport(0, 0, m_ssaoW, m_ssaoH);
     glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
@@ -504,9 +507,9 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
     glActiveTexture(GL_TEXTURE9);
     glBindTexture(GL_TEXTURE_2D_ARRAY, m_dirShadowTex);
 
-    // Screen-space AO (all 1.0 when SSAO is off) — texture unit 7
+    // Screen-space AO (all 1.0 when SSAO is off; the 1x1 white texture when its targets aren't allocated) — unit 7
     glActiveTexture(GL_TEXTURE7);
-    glBindTexture(GL_TEXTURE_2D, m_ssaoBlurTex);
+    glBindTexture(GL_TEXTURE_2D, m_ssaoBlurTex ? m_ssaoBlurTex : m_whiteTex);
 
     for (auto [entity, meshC, transform] : meshQuery) {
         if (!meshC->enabled || !meshC->mesh || meshC->additive) continue; // additive ones: see AdditivePass

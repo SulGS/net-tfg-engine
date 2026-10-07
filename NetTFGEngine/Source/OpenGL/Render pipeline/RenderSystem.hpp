@@ -221,6 +221,9 @@ private:
     GLuint m_ldrFBO = 0;
     GLuint m_ldrTex = 0;
 
+    // 1x1 white R8, bound as the AO texture while SSAO's targets aren't allocated (AO = 1 everywhere).
+    GLuint m_whiteTex = 0;
+
     // Scaling targets for the Nearest, FSR 1 and NIS modes (Bilinear needs none). Created on first use and recreated
     // whenever the render or output size changes, so they cost nothing in Bilinear. Pre-scale: FXAA's output at render
     // resolution (anti-aliasing must run before the scale); upscale output (FSR/NIS only): the upscaled image at output
@@ -272,9 +275,17 @@ private:
     void InitMSAAFBO();
     void InitHDRFBO();
     void InitBloom();
+    void DeleteBloom();
     void InitLDRFBO();
     void InitScreenSpace(); // reduced-res linear depth + SSAO + SSR targets (at the settings' scales), motion blur
     void DeleteScreenSpace();
+    // Bloom and screen-space (SSAO / SSR / motion blur) targets exist only while one of their effects is enabled:
+    // allocated when it is switched on, freed when switched off. Disabled, they were ~50 MB of VRAM per world at
+    // 1366x768 for nothing, twice over while two worlds coexist during a scene switch.
+    void EnsureEffectTargets();
+    // Deletes every GL object this system owns and zeroes the names; the destructor, and Update() before re-running
+    // Init() on needsReinit (which used to allocate a whole second set over the first, leaking it).
+    void ReleaseGPUResources();
     void InitScreenQuad();
     // (Re)creates the pre-scale target, and the upscale output one if withOutput, when missing or the render/output
     // size changed.

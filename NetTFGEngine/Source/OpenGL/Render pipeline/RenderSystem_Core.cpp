@@ -25,9 +25,19 @@ void RenderSystem::Init(int screenW, int screenH, int outputW, int outputH)
     InitMSAAFBO();
     InitHDRFBO();
     InitGBufferFBO();
-    InitBloom();
     InitLDRFBO();
-    InitScreenSpace();
+
+    {
+        const uint8_t white = 255;
+        glGenTextures(1, &m_whiteTex);
+        glBindTexture(GL_TEXTURE_2D, m_whiteTex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, 1, 1, 0, GL_RED, GL_UNSIGNED_BYTE, &white);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glBindTexture(GL_TEXTURE_2D, 0);
+    }
+    EnsureEffectTargets();
+
     InitLightSSBO();
     InitShadowCubeArray();
     InitDirLightUBO();
@@ -80,16 +90,10 @@ void RenderSystem::Resize(int screenW, int screenH, int outputW, int outputH)
     glDeleteTextures(1, &m_gbufferDepthTex);     m_gbufferDepthTex = 0;
     InitGBufferFBO();
 
+    // Recreated at the new size, if their effects are on.
     DeleteScreenSpace();
-    InitScreenSpace();
-
-    glDeleteFramebuffers(1, &m_bloomThreshFBO); m_bloomThreshFBO = 0;
-    glDeleteFramebuffers(1, &m_bloomPingFBO);   m_bloomPingFBO = 0;
-    glDeleteFramebuffers(1, &m_bloomPongFBO);   m_bloomPongFBO = 0;
-    glDeleteTextures(1, &m_bloomThreshTex);     m_bloomThreshTex = 0;
-    glDeleteTextures(1, &m_bloomPingTex);       m_bloomPingTex = 0;
-    glDeleteTextures(1, &m_bloomPongTex);       m_bloomPongTex = 0;
-    InitBloom();
+    DeleteBloom();
+    EnsureEffectTargets();
 
     glDeleteFramebuffers(1, &m_ldrFBO); m_ldrFBO = 0;
     glDeleteTextures(1, &m_ldrTex);     m_ldrTex = 0;
@@ -120,10 +124,12 @@ void RenderSystem::Update(EntityManager& entityManager,
     float deltaTime)
 {
 	if (needsReinit) {
+        // Free the current set first: Init() generates every object anew (shadow maps included, at the new settings).
+        ReleaseGPUResources();
         Init(m_screenW, m_screenH, m_outputW, m_outputH);
-		ReInitShadows();
         needsReinit = false;
 	}
+    EnsureEffectTargets();
 
 
 
@@ -170,7 +176,8 @@ void RenderSystem::Update(EntityManager& entityManager,
         m_stageDumpDir = MakeDumpDir();
 
     // SSAO/SSR resolution changed in the settings: rebuild their targets (cheap, only screen-space ones).
-    if (rs.getSSAOResolutionScale() != m_ssaoScale || rs.getSSRResolutionScale() != m_ssrScale) {
+    // Only when they exist (EnsureEffectTargets builds them at the current scales when an effect is switched on).
+    if (m_linearDepthTex && (rs.getSSAOResolutionScale() != m_ssaoScale || rs.getSSRResolutionScale() != m_ssrScale)) {
         DeleteScreenSpace();
         InitScreenSpace();
     }
@@ -292,68 +299,101 @@ void RenderSystem::Update(EntityManager& entityManager,
 
 RenderSystem::~RenderSystem()
 {
-    glDeleteBuffers(1, &m_lightSSBO);
-    glDeleteFramebuffers(1, &m_shadowFBO);
-    glDeleteTextures(1, &m_shadowCubeArray);
-    glDeleteSamplers(1, &m_shadowCmpSampler);
-    glDeleteBuffers(1, &m_shadowDataSSBO);
-    glDeleteProgram(m_shadowShader);
-    // Directional light
-    glDeleteBuffers(1, &m_dirLightUBO);
-    glDeleteFramebuffers(1, &m_dirShadowFBO);
-    glDeleteTextures(1, &m_dirShadowTex);
-    glDeleteSamplers(1, &m_dirShadowCmpSampler);
-    glDeleteProgram(m_dirShadowShader);
+    ReleaseGPUResources();
+}
+
+void RenderSystem::ReleaseGPUResources()
+{
+    // Every name goes back to 0: Init() regenerates them, and a stale non-zero name deleted again later would destroy
+    // whatever object the driver has handed that name to since (another world's, typically).
+    auto tex  = [](GLuint& n) { if (n) glDeleteTextures(1, &n);      n = 0; };
+    auto fbo  = [](GLuint& n) { if (n) glDeleteFramebuffers(1, &n);  n = 0; };
+    auto buf  = [](GLuint& n) { if (n) glDeleteBuffers(1, &n);       n = 0; };
+    auto smp  = [](GLuint& n) { if (n) glDeleteSamplers(1, &n);      n = 0; };
+    auto prog = [](GLuint& n) { if (n) glDeleteProgram(n);           n = 0; };
+
+    // Point / directional light shadows
+    buf(m_lightSSBO);
+    fbo(m_shadowFBO);
+    tex(m_shadowCubeArray);
+    smp(m_shadowCmpSampler);
+    buf(m_shadowDataSSBO);
+    prog(m_shadowShader);
+    buf(m_dirLightUBO);
+    fbo(m_dirShadowFBO);
+    tex(m_dirShadowTex);
+    smp(m_dirShadowCmpSampler);
+    prog(m_dirShadowShader);
     // GBuffer
-    glDeleteFramebuffers(1, &m_gbufferFBO);
-    glDeleteTextures(1, &m_gbufferNormalTex);
-    glDeleteTextures(1, &m_gbufferMaterialTex);
-    glDeleteTextures(1, &m_gbufferAlbedoTex);
-    glDeleteTextures(1, &m_gbufferVelocityTex);
-    glDeleteTextures(1, &m_gbufferDepthTex);
-    glDeleteProgram(m_gbufferShader);
-    // SSAO / SSR
+    fbo(m_gbufferFBO);
+    tex(m_gbufferNormalTex);
+    tex(m_gbufferMaterialTex);
+    tex(m_gbufferAlbedoTex);
+    tex(m_gbufferVelocityTex);
+    tex(m_gbufferDepthTex);
+    prog(m_gbufferShader);
+    // SSAO / SSR / motion blur
     DeleteScreenSpace();
-    glDeleteProgram(m_linearDepthShader);
-    glDeleteProgram(m_ssaoShader);
-    glDeleteProgram(m_ssaoBlurShader);
-    glDeleteProgram(m_ssrShader);
-    glDeleteProgram(m_ssrCopyShader);
-    glDeleteProgram(m_ssrCompositeShader);
-    glDeleteProgram(m_mbVelocityShader);
-    glDeleteProgram(m_mbTileMaxShader);
-    glDeleteProgram(m_mbNeighborMaxShader);
-    glDeleteProgram(m_mbGatherShader);
+    prog(m_linearDepthShader);
+    prog(m_ssaoShader);
+    prog(m_ssaoBlurShader);
+    prog(m_ssrShader);
+    prog(m_ssrCopyShader);
+    prog(m_ssrCompositeShader);
+    prog(m_mbVelocityShader);
+    prog(m_mbTileMaxShader);
+    prog(m_mbNeighborMaxShader);
+    prog(m_mbGatherShader);
     // FSR / NIS
     DeleteScaleTargets();
-    glDeleteProgram(m_fsrEasuShader);
-    glDeleteProgram(m_fsrRcasShader);
+    prog(m_fsrEasuShader);
+    prog(m_fsrRcasShader);
     DeleteNIS();
     // MSAA
-    glDeleteFramebuffers(1, &m_msaaFBO);
-    glDeleteTextures(1, &m_msaaColorTex);
-    glDeleteTextures(1, &m_msaaDepthTex);
+    fbo(m_msaaFBO);
+    tex(m_msaaColorTex);
+    tex(m_msaaDepthTex);
     // HDR
-    glDeleteFramebuffers(1, &m_hdrFBO);
-    glDeleteTextures(1, &m_hdrColorTex);
-    glDeleteTextures(1, &m_hdrDepthTex);
+    fbo(m_hdrFBO);
+    tex(m_hdrColorTex);
+    tex(m_hdrDepthTex);
     // Post-process shaders
-    glDeleteProgram(m_tonemapShader);
-    glDeleteProgram(m_bloomThreshShader);
-    glDeleteProgram(m_bloomKawaseShader);
-    glDeleteProgram(m_fxaaShader);
-    glDeleteProgram(m_copyShader);
-    // Bloom
-    glDeleteFramebuffers(1, &m_bloomThreshFBO);
-    glDeleteFramebuffers(1, &m_bloomPingFBO);
-    glDeleteFramebuffers(1, &m_bloomPongFBO);
-    glDeleteTextures(1, &m_bloomThreshTex);
-    glDeleteTextures(1, &m_bloomPingTex);
-    glDeleteTextures(1, &m_bloomPongTex);
-    // LDR
-    glDeleteFramebuffers(1, &m_ldrFBO);
-    glDeleteTextures(1, &m_ldrTex);
+    prog(m_tonemapShader);
+    prog(m_bloomThreshShader);
+    prog(m_bloomKawaseShader);
+    prog(m_fxaaShader);
+    prog(m_copyShader);
+    // Bloom, LDR, AO fallback
+    DeleteBloom();
+    fbo(m_ldrFBO);
+    tex(m_ldrTex);
+    tex(m_whiteTex);
     // Quad
-    glDeleteVertexArrays(1, &m_quadVAO);
-    glDeleteBuffers(1, &m_quadVBO);
+    if (m_quadVAO) glDeleteVertexArrays(1, &m_quadVAO);
+    m_quadVAO = 0;
+    buf(m_quadVBO);
+}
+
+void RenderSystem::DeleteBloom()
+{
+    glDeleteFramebuffers(1, &m_bloomThreshFBO); m_bloomThreshFBO = 0;
+    glDeleteFramebuffers(1, &m_bloomPingFBO);   m_bloomPingFBO = 0;
+    glDeleteFramebuffers(1, &m_bloomPongFBO);   m_bloomPongFBO = 0;
+    glDeleteTextures(1, &m_bloomThreshTex);     m_bloomThreshTex = 0;
+    glDeleteTextures(1, &m_bloomPingTex);       m_bloomPingTex = 0;
+    glDeleteTextures(1, &m_bloomPongTex);       m_bloomPongTex = 0;
+}
+
+void RenderSystem::EnsureEffectTargets()
+{
+    const auto& rs = RenderSettings::instance();
+
+    const bool bloom = rs.getBloomEnabled();
+    if (bloom && !m_bloomThreshTex)      InitBloom();
+    else if (!bloom && m_bloomThreshTex) DeleteBloom();
+
+    // One set for the three: SSAO and SSR share the linear depth, and the motion blur gather reads it too.
+    const bool screenSpace = rs.getSSAOEnabled() || rs.getSSREnabled() || rs.getMotionBlurEnabled();
+    if (screenSpace && !m_linearDepthTex)      InitScreenSpace();
+    else if (!screenSpace && m_linearDepthTex) DeleteScreenSpace();
 }
