@@ -83,7 +83,8 @@ void Mesh::bindMaterial(const glm::mat4& model,
 
 void Mesh::draw() const
 {
-    if (!buffer || !material) return;
+    // No program (shader failed to compile): drawing would reuse whatever program is bound.
+    if (!buffer || !material || !material->getProgram()) return;
 
     // Which PBR texture slots this shader actually uses. Unread samplers are stripped by the compiler (e.g. lava/water
     // have none), so binding them would be wasted work and, without this check, a "uniform not found" warning per frame.

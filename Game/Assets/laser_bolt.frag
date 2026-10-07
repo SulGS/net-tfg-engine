@@ -31,7 +31,7 @@ float hash13(vec3 p)
     return fract((p.x + p.y) * p.z);
 }
 
-float noise3(vec3 p)
+float valueNoise3(vec3 p)
 {
     vec3 i = floor(p);
     vec3 f = fract(p);
@@ -62,7 +62,7 @@ vec2 boltDensity(vec3 p, float spawnFlash)
     // and denser closer to the head, and is torn up by noise scrolling backwards.
     float tx   = smoothstep(-1.0, HEAD_X, x);
     float w    = mix(0.05, 0.30, tx);
-    float turb = noise3(vec3(x * 3.0 + uTime * 12.0 + uSeed, p.y * 4.0, p.z * 4.0));
+    float turb = valueNoise3(vec3(x * 3.0 + uTime * 12.0 + uSeed, p.y * 4.0, p.z * 4.0));
     float tail = exp(-r2 / (w * w)) * tx * tx * (0.45 + 1.1 * turb)
                * (1.0 - smoothstep(HEAD_X - 0.03, HEAD_X + 0.12, x));
 

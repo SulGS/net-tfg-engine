@@ -29,7 +29,7 @@ float hash13(vec3 p)
     return fract((p.x + p.y) * p.z);
 }
 
-float noise3(vec3 p)
+float valueNoise3(vec3 p)
 {
     vec3 i = floor(p);
     vec3 f = fract(p);
@@ -78,7 +78,7 @@ void main()
         // pattern appears to be sucked towards the centre).
         vec3  dir    = p / max(r, 1e-3);
         float sparks = smoothstep(0.55, 0.85,
-            noise3(dir * vec3(9.0, 9.0, 4.0) + vec3(uSeed, uTime * 6.0, -uTime * 4.0)));
+            valueNoise3(dir * vec3(9.0, 9.0, 4.0) + vec3(uSeed, uTime * 6.0, -uTime * 4.0)));
         // x*x, not pow(x, 2.0): pow with a negative base is undefined (NaN on Intel/AMD), and x < 0 inside the shell.
         float sd     = (r - shellR) / 0.035;
         float shell  = exp(-sd * sd) * (0.1 + 2.2 * sparks);

@@ -40,7 +40,7 @@ float hash11(float p)
     return fract(p);
 }
 
-float noise1(float x)
+float valueNoise1(float x)
 {
     float i = floor(x);
     float f = fract(x);
@@ -55,7 +55,7 @@ float hash13(vec3 p)
     return fract((p.x + p.y) * p.z);
 }
 
-float noise3(vec3 p)
+float valueNoise3(vec3 p)
 {
     vec3 i = floor(p);
     vec3 f = fract(p);
@@ -88,7 +88,7 @@ vec2 shellEmission(vec3 n, float cosT, float radius)
     float lines = exp(-pow(mer / lineW, 2.0)) + exp(-pow(par / lineW, 2.0));
 
     // Energy flow scrolling over the surface: a shimmer between dim and bright patches, like the walls'.
-    float flow    = noise3(n * 3.5 + vec3(uSeed, uSeed * 0.7, -uTime * 1.8));
+    float flow    = valueNoise3(n * 3.5 + vec3(uSeed, uSeed * 0.7, -uTime * 1.8));
     float shimmer = mix(0.45, 1.4, smoothstep(0.25, 0.8, flow));
 
     // Spin-up: the shell exists up to |latitude| < power, with a hot seam on the growing edge.
@@ -98,7 +98,7 @@ vec2 shellEmission(vec3 n, float cosT, float radius)
     float seam   = exp(-sd * sd) * (1.0 - smoothstep(0.85, 1.0, uPower));
 
     // Shatter: the surface breaks into noise cells that drop out as the break progresses.
-    float cells   = noise3(n * 5.0 + uSeed * 3.0);
+    float cells   = valueNoise3(n * 5.0 + uSeed * 3.0);
     float shatter = (uBreak > 0.0) ? smoothstep(uBreak * 1.15 - 0.08, uBreak * 1.15, cells) : 1.0;
 
     float glow = rim * shimmer * reveal * shatter;
@@ -148,7 +148,7 @@ void main()
 
     // Running out: irregular stutter whose off-time grows as the end nears (mirror of laser_wall.frag's warning, which
     // goes from mostly-off to mostly-on).
-    float stutterOn = smoothstep(0.0, 0.12, noise1(uTime * 11.0 + uSeed * 17.0) - mix(0.15, 0.6, uExpire));
+    float stutterOn = smoothstep(0.0, 0.12, valueNoise1(uTime * 11.0 + uSeed * 17.0) - mix(0.15, 0.6, uExpire));
     float stutter   = (uExpire > 0.0) ? mix(1.0, 0.25 + 0.75 * stutterOn, smoothstep(0.0, 0.2, uExpire)) : 1.0;
 
     // Break flash: a white-hot burst over the whole bubble, gone in the first part of the shatter.

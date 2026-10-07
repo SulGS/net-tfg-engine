@@ -586,9 +586,14 @@ void RenderSystem::AdditivePass(EntityManager::Query<MeshComponent, Transform>& 
 
         const glm::mat4 model = transform->getModelMatrix();
 
+        // A material whose shader failed to compile binds nothing: drawing anyway would run the PREVIOUS program with
+        // this mesh and garbage uniforms (colourful blobs on drivers that reject the shader). Skip it.
+        Material* mat = meshC->mesh->getMaterial();
+        if (!mat || !mat->getProgram()) continue;
+
         // Set before bind: Material::bind() is what uploads the uniform map. Optional:
         // an additive shader that never looks at the camera is fine too.
-        if (Material* mat = meshC->mesh->getMaterial()) {
+        {
             mat->setVec3IfPresent("uCameraPos", cameraPos);
 
             // Camera in the mesh's local space (raymarched volumes), inverted here in double rather than per vertex in

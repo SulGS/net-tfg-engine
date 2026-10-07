@@ -42,7 +42,7 @@ float hash11(float p)
     return fract(p);
 }
 
-float noise1(float x)
+float valueNoise1(float x)
 {
     float i = floor(x);
     float f = fract(x);
@@ -127,7 +127,7 @@ void main()
     float band = 0.88 + 0.12 * sin(vAlong * 0.55 - t * 5.5 + uSeed * 3.0);
 
     // Rare, short dips in the supply.
-    float mains = 1.0 - 0.28 * smoothstep(0.82, 1.0, noise1(t * 13.0 + uSeed * 31.0));
+    float mains = 1.0 - 0.28 * smoothstep(0.82, 1.0, valueNoise1(t * 13.0 + uSeed * 31.0));
 
     // Slightly hotter at the ends, where the beam leaves its emitter.
     float ends = smoothstep(0.80, 1.0, abs(vEnd));
@@ -135,7 +135,7 @@ void main()
     // ---- Warning look ---- Irregular stutter instead of a square blink. The on-threshold falls as the window
     // runs out, so it starts mostly dark and ends mostly lit — the beam "wants" to fire.
     float stutterOn = smoothstep(0.0, 0.12,
-        noise1(t * 11.0 + uSeed * 17.0) - mix(0.75, 0.25, uWarnTension));
+        valueNoise1(t * 11.0 + uSeed * 17.0) - mix(0.75, 0.25, uWarnTension));
     float stutter   = mix(1.0, 0.2 + 0.8 * stutterOn, uWarning);
 
     vec3 beamCol = mix(uBeamColor, uWarnColor, uWarning);
