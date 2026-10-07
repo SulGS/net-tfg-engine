@@ -2,6 +2,37 @@
 #include <iostream>
 #include <stdexcept>
 #include <algorithm>
+#include <cstdlib>
+#include <mutex>
+#include <unordered_map>
+#include "Utils/Debug/Debug.hpp"
+
+// Driver-reported GL errors / undefined behaviour into the engine log (otherwise silent: NVIDIA tolerates things other
+// vendors reject, and the symptom shows up far from the call). Synchronous, so it fires inside the offending call on the
+// render thread. Each message id is logged a few times only: a per-frame error would otherwise flood the log.
+static void APIENTRY GLDebugCallback(GLenum source, GLenum type, GLuint id, GLenum severity,
+    GLsizei /*length*/, const GLchar* message, const void* /*user*/)
+{
+    if (severity == GL_DEBUG_SEVERITY_NOTIFICATION) return;
+    if (type != GL_DEBUG_TYPE_ERROR && type != GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR && severity == GL_DEBUG_SEVERITY_LOW) return;
+
+    static std::mutex m;
+    static std::unordered_map<GLuint, int> seen;
+    {
+        std::lock_guard<std::mutex> lock(m);
+        int& n = seen[id];
+        if (++n > 5) return;
+    }
+
+    const char* t = type == GL_DEBUG_TYPE_ERROR ? "ERROR"
+        : type == GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR ? "UNDEFINED"
+        : type == GL_DEBUG_TYPE_DEPRECATED_BEHAVIOR ? "DEPRECATED"
+        : type == GL_DEBUG_TYPE_PORTABILITY ? "PORTABILITY"
+        : type == GL_DEBUG_TYPE_PERFORMANCE ? "PERFORMANCE" : "OTHER";
+    const char* sev = severity == GL_DEBUG_SEVERITY_HIGH ? "high" : severity == GL_DEBUG_SEVERITY_MEDIUM ? "medium" : "low";
+    Debug::Warning("GL") << t << " (" << sev << ", id " << id << ", source 0x" << std::hex << source << std::dec
+        << "): " << (message ? message : "") << "\n";
+}
 
 OpenGLWindow::OpenGLWindow(int width, int height, const std::string& title)
     : window(nullptr)
@@ -223,9 +254,24 @@ void OpenGLWindow::initializeGLFW() {
     if (!glfwInit())
         throw std::runtime_error("Failed to initialize GLFW");
 
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    // 4.3: the renderer needs SSBOs (lights, shadows, particles), compute (NIS), textureQueryLod and debug output, and
+    // every shader is #version 430. Asking for 3.3 got exactly 3.3 on NVIDIA, which tolerates 4.3 features in it anyway;
+    // other drivers don't have to.
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    // NETTFG_GL_DEBUG=1: debug context, so every driver reports errors through GLDebugCallback (non-debug contexts may
+    // report fewer). Slower, so opt-in.
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable : 4996) // getenv: read once at startup, portable to the Linux build
+#endif
+    const char* dbg = std::getenv("NETTFG_GL_DEBUG");
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+    if (dbg && dbg[0] == '1')
+        glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GLFW_TRUE);
     // No dragging the borders nor maximising: the size only changes through the window resolution setting.
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
 }
@@ -246,6 +292,19 @@ void OpenGLWindow::setVSync(bool enabled)
 
 void OpenGLWindow::setupOpenGL()
 {
+    auto glStr = [](GLenum e) { const GLubyte* v = glGetString(e); return v ? reinterpret_cast<const char*>(v) : "?"; };
+    GLint flags = 0;
+    glGetIntegerv(GL_CONTEXT_FLAGS, &flags);
+    Debug::Info("OpenGLWindow") << "GL vendor: " << glStr(GL_VENDOR) << " | renderer: " << glStr(GL_RENDERER)
+        << " | version: " << glStr(GL_VERSION) << " | GLSL: " << glStr(GL_SHADING_LANGUAGE_VERSION)
+        << ((flags & GL_CONTEXT_FLAG_DEBUG_BIT) ? " | debug context" : "") << "\n";
+
+    if (glDebugMessageCallback) {
+        glEnable(GL_DEBUG_OUTPUT);
+        glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
+        glDebugMessageCallback(GLDebugCallback, nullptr);
+    }
+
     // Default off: the FPS limit has its own microsecond pacer in ClientWindow::renderLoop(), and the driver default (often
     // vsync on) would clamp to the monitor refresh rate whatever the target (e.g. 144Hz never reaching 165/240).
     // ClientWindow::startRenderThread() applies the saved RenderSettings value right after construction.
