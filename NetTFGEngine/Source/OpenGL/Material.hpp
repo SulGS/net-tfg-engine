@@ -39,6 +39,7 @@ public:
     bool hasUniform(const std::string& name);
     void setIntIfPresent(const std::string& name, int value);
     void setVec3IfPresent(const std::string& name, const glm::vec3& value);
+    void setFloatIfPresent(const std::string& name, float value);
 
     // Bind the shader and push all uniforms to the GPU.
     // Engine uniforms (model/view/projection) are passed in here so they

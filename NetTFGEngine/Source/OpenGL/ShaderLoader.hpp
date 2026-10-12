@@ -11,6 +11,12 @@ public:
     // Registers shader source that is compiled into the engine (see DefaultShader.hpp), as opposed to the game assets packed in the .bin files. createProgram() looks a key up here before asking the AssetManager, so a Material can name a built-in shader like any other. Keys start with "engine/" to keep them apart from game asset names. Needs no GL context; call it before the first Material that uses the key is created.
     static void registerBuiltIn(const std::string& key, const char* source);
 
+    // GLSL has no #include: every source createProgram() compiles has its `#include "key"` lines replaced by the
+    // built-in registered under that key (nested includes too). Shared GLSL libraries (e.g. the engine's environment
+    // lighting, EnvLighting.hpp) are registered this way and included by the engine and game shaders alike.
+    // Returns false (and logs) when a key isn't registered.
+    static bool expandIncludes(std::string& code, const std::string& sourceName);
+
     // Cached path: looks up or compiles a program keyed on asset paths, incrementing its ref count. This is what Material should call.
     static GLuint createProgram(const std::string& vertexAssetKey,
         const std::string& fragmentAssetKey);

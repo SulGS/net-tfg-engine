@@ -2,6 +2,7 @@
 #define COMPONENTS_ASTEROIDS
 
 #include "ecs/ecs_common.hpp"
+#include "OpenAL/AudioComponents.hpp"
 #include "GameState.hpp"
 #include <unordered_set>
 
@@ -313,10 +314,19 @@ public:
 	DestroyTimer(float s) : secondsRemaining(s) {}
 };
 
+// How long the camera stays on the local ship's explosion after it dies, before spectating (or the winner zoom).
+inline constexpr float DEATH_CAM_SECONDS = 3.0f;
+
+// Renderer-only death bookkeeping, per ship. Maintained by OnDeathRenderSystem.
 class JustDeathChecker : public IComponent {
 public:
-	bool notExecuted;
-	JustDeathChecker() : notExecuted(true) {}
+	bool notExecuted;            // true until this death has been handled (explosion spawned)
+	float secondsSinceDeath;     // 0 while alive
+	glm::vec3 deathPosition;     // where the ship exploded (valid once notExecuted is false)
+	JustDeathChecker() : notExecuted(true), secondsSinceDeath(0.0f), deathPosition(0.0f) {}
+
+	// Still showing the explosion: the death hasn't been handled yet (this very frame) or happened < DEATH_CAM_SECONDS ago.
+	bool InDeathCam() const { return notExecuted || secondsSinceDeath < DEATH_CAM_SECONDS; }
 };
 
 class ExplosionPlayerID : public IComponent {
@@ -326,12 +336,19 @@ public:
 	ExplosionPlayerID(int pid) : playerId(pid) {}
 };
 
-class LinkAudioToBullet : public IComponent {
-public:
-	int bulletId;
-	LinkAudioToBullet() : bulletId(-1) {}
-	LinkAudioToBullet(int bid) : bulletId(bid) {}
-};
+// 3D sound falloff for the arena, in world units (tiles are 80 wide; the camera shows roughly 60 x 35 around its target,
+// where the listener sits). Full volume within about a ship's length, still clearly audible at the screen edge, fading
+// to silence a couple of tiles away. Linear model, see AudioSourceComponent.
+inline constexpr float ARENA_SFX_REFERENCE_DISTANCE = 10.0f;
+inline constexpr float ARENA_SFX_MAX_DISTANCE = 160.0f;
+inline constexpr float ARENA_EXPLOSION_MAX_DISTANCE = 240.0f;   // a ship dying is worth hearing from further away
+
+inline void ApplyArenaAttenuation(AudioSourceComponent& audio, float maxDistance = ARENA_SFX_MAX_DISTANCE)
+{
+	audio.referenceDistance = ARENA_SFX_REFERENCE_DISTANCE;
+	audio.maxDistance = maxDistance;
+	audio.rolloffFactor = 1.0f;
+}
 
 class ExitButtonChecker : public IComponent {
 public:

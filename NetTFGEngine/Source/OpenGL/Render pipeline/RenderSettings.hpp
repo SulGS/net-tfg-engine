@@ -285,6 +285,36 @@ public:
     void  setSSRIntensity(float v) { m_ssrIntensity = v; }
     float getSSRIntensity()      const { return m_ssrIntensity; }
 
+    // RUNTIME — ENVIRONMENT LIGHTING (image-based lighting): a prefiltered cube map of the sky (EnvironmentSkyComponent)
+    // and of each ReflectionProbeComponent's capture gives every surface ambient light (diffuse, from spherical
+    // harmonics) and reflections (specular, split-sum GGX). This is what metals reflect when SSR is off or misses; with
+    // SSR on, its hits replace that share.
+    void setEnvLightingEnabled(bool v) { m_envLightingEnabled = v; }
+    bool getEnvLightingEnabled()       const { return m_envLightingEnabled; }
+
+    // Scales the whole environment term, reflections and ambient light alike.
+    void  setEnvIntensity(float v) { m_envIntensity = std::max(0.0f, v); }
+    float getEnvIntensity()            const { return m_envIntensity; }
+
+    // One quality tier (0 = very low .. 4 = ultra, like the presets) for what a player can't judge separately: the cube
+    // face size of the sky/probe maps and whether reflection probes are captured at all. Changing it re-captures
+    // everything over the next frames. Memory: (1 + probes) x 6 faces x res^2 x 8 B x 4/3 (the arena's 25 probes:
+    // ~27 MB at 128, ~110 MB at 256, ~440 MB at 512).
+    static constexpr int kEnvQualityLevels = 5;
+    void setEnvQuality(int v) { m_envQuality = std::clamp(v, 0, kEnvQualityLevels - 1); }
+    int  getEnvQuality()               const { return m_envQuality; }
+
+    int getEnvMapResolution() const
+    {
+        static constexpr int kRes[kEnvQualityLevels] = { 64, 128, 128, 256, 512 };
+        return kRes[m_envQuality];
+    }
+    bool getEnvProbesEnabled() const { return m_envQuality >= 2; }   // below: sky reflections only
+
+    // Debug: surfaces show only the environment term (no direct lights, no emissive). Not saved.
+    void setEnvDebugView(bool v) { m_envDebugView = v; }
+    bool getEnvDebugView()             const { return m_envDebugView; }
+
     // RUNTIME — MOTION BLUR: camera + per-object, reconstructed from a velocity buffer (McGuire-style tile/neighbour
     // max, so blur spills past silhouettes). Strength is the shutter time as a fraction of a 1/60 s frame (0.5 = the
     // classic 180° shutter at 60 FPS); the blur length is independent of the actual frame rate. Samples per pixel.
@@ -419,6 +449,10 @@ public:
             else if (k == "ssrMaxRoughness")      setSSRMaxRoughness(v);
             else if (k == "ssrIntensity")         setSSRIntensity(v);
 
+            else if (k == "envLighting")          setEnvLightingEnabled(b);
+            else if (k == "envIntensity")         setEnvIntensity(v);
+            else if (k == "envQuality")           setEnvQuality(i);
+
             else if (k == "motionBlur")           setMotionBlurEnabled(b);
             else if (k == "motionBlurStrength")   setMotionBlurStrength(v);
             else if (k == "motionBlurSamples")    setMotionBlurSamples(i);
@@ -506,6 +540,10 @@ public:
         f << "ssrThickness " << m_ssrThickness << "\n";
         f << "ssrMaxRoughness " << m_ssrMaxRoughness << "\n";
         f << "ssrIntensity " << m_ssrIntensity << "\n";
+
+        f << "envLighting " << (m_envLightingEnabled ? 1 : 0) << "\n";
+        f << "envIntensity " << m_envIntensity << "\n";
+        f << "envQuality " << m_envQuality << "\n";
 
         f << "motionBlur " << (m_motionBlurEnabled ? 1 : 0) << "\n";
         f << "motionBlurStrength " << m_motionBlurStrength << "\n";
@@ -605,6 +643,7 @@ private:
             m_ssaoEnabled = false;
             m_ssrEnabled = false;
             applyScreenSpaceDefaults(16, 4, 32, 4, false, 8);
+            applyEnvDefaults(0);
             break;
 
         case QualityPreset::Low:
@@ -631,6 +670,7 @@ private:
             m_ssaoEnabled = false;
             m_ssrEnabled = false;
             applyScreenSpaceDefaults(16, 4, 32, 4, false, 8);
+            applyEnvDefaults(1);
             break;
 
         case QualityPreset::Medium:
@@ -667,6 +707,7 @@ private:
             m_ssaoEnabled = true;
             m_ssrEnabled = false;
             applyScreenSpaceDefaults(16, 2, 32, 4, false, 8);
+            applyEnvDefaults(2);
             break;
 
         case QualityPreset::High:
@@ -703,6 +744,7 @@ private:
             m_ssaoEnabled = true;
             m_ssrEnabled = true;
             applyScreenSpaceDefaults(32, 2, 48, 2, true, 12);
+            applyEnvDefaults(3);
             break;
 
         case QualityPreset::Ultra:
@@ -739,6 +781,7 @@ private:
             m_ssaoEnabled = true;
             m_ssrEnabled = true;
             applyScreenSpaceDefaults(64, 1, 96, 1, true, 16);
+            applyEnvDefaults(4);
             break;
         }
     }
@@ -765,6 +808,14 @@ private:
         m_ssrThickness = 1.5f;
         m_ssrMaxRoughness = 0.6f;
         m_ssrIntensity = 1.0f;
+    }
+
+    // Environment lighting is on in every preset (a handful of texture reads per pixel); only its quality tier scales.
+    void applyEnvDefaults(int quality)
+    {
+        m_envLightingEnabled = true;
+        m_envIntensity = 1.0f;
+        m_envQuality = std::clamp(quality, 0, kEnvQualityLevels - 1);
     }
 
     // Quality preset
@@ -846,6 +897,12 @@ private:
     float m_ssrThickness = 1.5f;
     float m_ssrMaxRoughness = 0.6f;
     float m_ssrIntensity = 1.0f;
+
+    // Environment lighting (IBL)
+    bool  m_envLightingEnabled = true;
+    float m_envIntensity = 1.0f;
+    int   m_envQuality = 3;
+    bool  m_envDebugView = false;
 
     // Motion blur
     bool  m_motionBlurEnabled = true;

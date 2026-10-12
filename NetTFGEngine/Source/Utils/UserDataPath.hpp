@@ -1,9 +1,16 @@
 #pragma once
 
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <string>
 #include <system_error>
+
+#ifdef _WIN32
+#include <process.h>   // _getpid: avoids pulling <windows.h> into every includer
+#else
+#include <unistd.h>
+#endif
 
 // Per-user writable storage (settings, logs): Windows %LOCALAPPDATA%\NetTFGEngine\<product>\, Linux
 // $HOME/.NetTFGEngine/<product>/, so the game works installed in a read-only location (e.g. Program Files).
@@ -46,6 +53,33 @@ namespace UserDataPath
     {
         auto dir = Directory();
         return dir.empty() ? dir : dir / "logs";
+    }
+
+    // This run's own folder inside LogsDirectory(): logs/<YYYYMMDD_HHMMSS>_PID<pid>/, so every launch (and every
+    // client/server instance started together) keeps its log and crash reports apart. Fixed on the first call, which
+    // must come after SetProductName (Debug::Initialize does both). Not created here; empty if LogsDirectory() is.
+    inline std::filesystem::path SessionLogsDirectory()
+    {
+        static const std::filesystem::path dir = []() -> std::filesystem::path
+        {
+            const auto logs = LogsDirectory();
+            if (logs.empty())
+                return {};
+
+            const std::time_t now = std::time(nullptr);
+            std::tm tm{};
+#ifdef _WIN32
+            localtime_s(&tm, &now);
+            const unsigned long pid = static_cast<unsigned long>(_getpid());
+#else
+            localtime_r(&now, &tm);
+            const unsigned long pid = static_cast<unsigned long>(getpid());
+#endif
+            char stamp[32];
+            std::strftime(stamp, sizeof(stamp), "%Y%m%d_%H%M%S", &tm);
+            return logs / (std::string(stamp) + "_PID" + std::to_string(pid));
+        }();
+        return dir;
     }
 
     // Full path for a file inside Directory(), creating the folder if needed.

@@ -39,6 +39,7 @@
 #include "RenderSystems/BulletRenderSystem.hpp"
 #include "RenderSystems/LinkThrusterToShipSystem.hpp"
 #include "RenderSystems/LaserWallRenderSystem.hpp"
+#include "RenderSystems/ReflectionProbeRefreshSystem.hpp"
 #include "RenderSystems/UpdateListenerTransformSystem.hpp"
 #include "RenderSystems/ThrustersSoundSystem.hpp"
 #include "RenderSystems/FluidAnimationSystem.hpp"
@@ -914,16 +915,22 @@ public:
                 AddLaserBoltMesh(em, newBullet, b.id);
                 AddLaserBoltLight(em, newBullet);
 
+                // The shot sounds where it was fired: at the shooter's ship. The bullet is only first seen here a
+                // round trip after it left the muzzle (for remote shots, plus their latency), already 150 u/s further on.
+                glm::vec3 shotPos(b.posX, b.posY, 0.0f);
+                if (b.ownerId >= 0 && b.ownerId < NUM_PLAYERS)
+                    shotPos = glm::vec3(s.posX[b.ownerId], s.posY[b.ownerId], 0.0f);
+
                 Entity bulletSound = em.CreateEntity();
                 Transform* st = em.AddComponent<Transform>(bulletSound, Transform{});
-                st->setPosition(glm::vec3(b.posX, b.posY, 0.0f));
+                st->setPosition(shotPos);
                 DestroyTimer* dt = em.AddComponent<DestroyTimer>(bulletSound, DestroyTimer{});
                 dt->secondsRemaining = 3.0f;
                 AudioSourceComponent* audio = em.AddComponent<AudioSourceComponent>(
                     bulletSound, AudioSourceComponent("shoot.wav", AudioChannel::SFX, false));
                 audio->play = true;
 				audio->gain = 1.0f;
-				LinkAudioToBullet* link = em.AddComponent<LinkAudioToBullet>(bulletSound, LinkAudioToBullet{ b.id });
+				ApplyArenaAttenuation(*audio);
             }
         }
 
@@ -992,7 +999,6 @@ public:
 		world.GetEntityManager().RegisterComponentType<JustDeathChecker>();
 		RegisterExplosionComponents(world.GetEntityManager());
 		PreloadExplosionAssets(world.GetEntityManager());
-		world.GetEntityManager().RegisterComponentType<LinkAudioToBullet>();
 		world.GetEntityManager().RegisterComponentType<ExitButtonChecker>();
 		world.GetEntityManager().RegisterComponentType<ThrusterSound>();
 		world.GetEntityManager().RegisterComponentType<FluidSurface>();
@@ -1013,6 +1019,23 @@ public:
         DirectionalLightComponent* sunLight =
             world.GetEntityManager().AddComponent<DirectionalLightComponent>(sunEntity, DirectionalLightComponent{});
         sunLight->color = glm::vec3(1.0f, 0.95f, 0.8f);
+        // Where the sky panorama's sun is (after its rotation below): azimuth 73 deg, 16 deg above the horizon. Low, so
+        // shadows run long across the arena; matching it keeps reflections of the sun on the same spot as the light's
+        // highlights. Points from the sun toward the scene.
+        sunLight->direction = glm::normalize(glm::vec3(-0.2760f, -0.9198f, -0.2790f));
+
+        // Sky for the environment lighting: what the ships' and pillars' metal reflects wherever no probe sees the arena
+        // (mostly straight up, the camera looks down), and the ambient light. planeta_lava_4k.hdr (listed in
+        // online_level.ntfg) is an equirectangular panorama of a lava plain under a dark sky, authored Y-up like any
+        // HDRI; the arena is Z-up, hence upAxis. Its sun sits at azimuth ~141 deg / elevation ~16 deg with no rotation;
+        // -68 deg turns it to azimuth 73 deg, where the directional light above was aimed (same elevation), so the sun
+        // seen in reflections and the light's highlights and shadows coincide.
+        EnvironmentSkyComponent* sky =
+            world.GetEntityManager().AddComponent<EnvironmentSkyComponent>(sunEntity, EnvironmentSkyComponent{});
+        sky->setEquirect("planeta_lava_4k.hdr");
+        sky->upAxis = glm::vec3(0.0f, 0.0f, 1.0f);
+        sky->rotationDegrees = -68.0f;
+        sky->intensity = 1.0f;
 
         // Players
         for (int i = 0; i < NUM_PLAYERS; ++i)
@@ -1027,8 +1050,9 @@ public:
             world.GetEntityManager().AddComponent<Playable>(
                 player, Playable{ i, MakeZeroInputBlob(), (i == playerId) });
             world.GetEntityManager().AddComponent<SpaceShip>(player, SpaceShip{ 1, -1, 0, true });
-            world.GetEntityManager().AddComponent<MeshComponent>(
+            MeshComponent* shipMesh = world.GetEntityManager().AddComponent<MeshComponent>(
                 player, MeshComponent(new Mesh("ship_low.glb")));
+            shipMesh->reflectionProbeVisible = false;   // moves: would stay frozen in the probe captures
 
 			world.GetEntityManager().AddComponent<JustDeathChecker>(player, JustDeathChecker{});
 
@@ -1048,6 +1072,7 @@ public:
 			audio->gain = 0.0f; // Start muted, will be unmuted when moving
 			audio->play = true;
 			audio->loop = true;
+			ApplyArenaAttenuation(*audio);
 			world.GetEntityManager().AddComponent<ThrusterSound>(thrusterSoundEntity, ThrusterSound{ i });
 
             // Thrusters for this player
@@ -1212,6 +1237,31 @@ public:
                 em.AddComponent<TileID>(e, TileID{ cellId });
                 em.AddComponent<MeshComponent>(e, MeshComponent(new Mesh("tile.glb")));
             }
+
+        // Reflection probes: one per cell, at ship height over its centre. Influence = the cell plus an 8-unit overlap
+        // into the neighbours (they cross-fade there) and deep enough below to cover the tiles and the lava; parallax
+        // proxy = the cell itself from the tile surface up, where the pillars and walls actually stand. Re-captured
+        // around a tile when it drops out (ReflectionProbeRefreshSystem).
+        {
+            constexpr float kCellHalf = 40.0f;
+            constexpr float kBlend = 8.0f;
+            for (int cx = 0; cx < x_size; ++cx)
+                for (int cy = 0; cy < y_size; ++cy)
+                {
+                    const glm::vec2 c((2 * cx + 1 - x_size) * 40.0f - 40.0f, (2 * cy + 1 - y_size) * 40.0f - 40.0f);
+                    Entity e = em.CreateEntity();
+                    Transform* t = em.AddComponent<Transform>(e, Transform{});
+                    t->setPosition(glm::vec3(c, 2.0f));
+                    ReflectionProbeComponent* probe = em.AddComponent<ReflectionProbeComponent>(e, ReflectionProbeComponent{});
+                    probe->boxMin = glm::vec3(c - glm::vec2(kCellHalf + kBlend), -20.0f);
+                    probe->boxMax = glm::vec3(c + glm::vec2(kCellHalf + kBlend), 40.0f);
+                    probe->blendDistance = kBlend;
+                    probe->parallaxBoxMin = glm::vec3(c - glm::vec2(kCellHalf), -4.0f);
+                    probe->parallaxBoxMax = glm::vec3(c + glm::vec2(kCellHalf), 30.0f);
+                    probe->captureNear = 0.5f;
+                    probe->captureFar = 1000.0f;
+                }
+        }
 
         // Pillars
         for (int px = 0; px <= 2 * x_size; ++px)
@@ -1396,6 +1446,7 @@ public:
         world.AddSystem(std::make_unique<ShieldRenderSystem>());
         world.AddSystem(std::make_unique<LinkThrusterToShipSystem>());
         world.AddSystem(std::make_unique<LaserWallRenderSystem>());
+        world.AddSystem(std::make_unique<ReflectionProbeRefreshSystem>());   // after the tiles' visibility is updated
 		world.AddSystem(std::make_unique<UpdateListenerTransformSystem>());
 		world.AddSystem(std::make_unique<ThrustersSoundSystem>());
         world.AddSystem(std::make_unique<FluidAnimationSystem>());

@@ -4,6 +4,7 @@
 // RenderSystem_Shaders.cpp; registered in ShaderLoader under the keys below by Mesh::InitDefaultMaterial().
 
 #include "OpenGL/ShaderLoader.hpp"
+#include "EnvLighting.hpp"
 
 namespace DefaultShader
 {
@@ -128,6 +129,9 @@ layout(std140, binding = 2) uniform DirLightBlock {
     vec4 uDirCascadeDepthRange;     // world distance spanned by each cascade's [0,1] depth
     vec4 uDirLightParams;           // x = cascade count (0 = no shadow), y = tan(light angular radius)
 };
+
+// Ambient light + reflections from the sky / reflection probes (units 10-11, SSBO binding 3). See EnvLighting.hpp.
+#include "engine/env_lighting.glsl"
 
 // -------------------------------------------------------
 // Constants
@@ -484,7 +488,14 @@ void main()
     vec3 color = CalcPointLights(N, V, albedo, F0, alpha, metallic, ao)
                + CalcDirLight   (N, V, albedo, F0, alpha, metallic, ao);
 
+    // Ambient + reflections: what a metal shows wherever no light's highlight lands (with SSR on, its hits replace
+    // this share; the GBuffer flags it, see GBufferPass). The unclamped roughness: the 0.089 floor only protects the
+    // analytic highlight, the prefiltered map can't overflow.
+    vec3 env = EnvLighting(vWorldPos, N, normalize(vN), V, albedo, F0, clamp(mr.x, 0.0, 1.0), metallic, ao);
+    color += env;
+
     color += texture(uEmissiveTex, vUV).rgb;
+    if (uEnvDebugView == 1) color = env;
 
     // Last line of defence against inf in the RGBA16F target (max 65504): a light right next to a smooth metal can
     // still get there. Normal values are far below this, so it changes nothing else.
@@ -497,5 +508,7 @@ void main()
     {
         ShaderLoader::registerBuiltIn(VertexKey, VertexSource);
         ShaderLoader::registerBuiltIn(FragmentKey, FragmentSource);
+        // Before any program is compiled: this one and the game's lit materials #include it.
+        ShaderLoader::registerBuiltIn(EnvLighting::IncludeKey, EnvLighting::Source);
     }
 }

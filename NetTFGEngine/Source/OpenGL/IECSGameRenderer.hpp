@@ -86,6 +86,8 @@ public:
 
         world.GetEntityManager().RegisterComponentType<DirectionalLightComponent>();
         world.GetEntityManager().RegisterComponentType<PointLightComponent>();
+        world.GetEntityManager().RegisterComponentType<EnvironmentSkyComponent>();
+        world.GetEntityManager().RegisterComponentType<ReflectionProbeComponent>();
 
         world.GetEntityManager().RegisterComponentType<AudioSourceComponent>();
         world.GetEntityManager().RegisterComponentType<AudioListenerComponent>();

@@ -176,6 +176,54 @@ namespace {
         WritePNG(path, res, res, rgb);
     }
 
+    // Prefiltered environment array (RGBA16F cube map array, `layerFaces` = layers * 6), mip `mip`: one tonemapped PNG
+    // per layer as a horizontal strip of its 6 faces (+X -X +Y -Y +Z -Z).
+    static void DumpEnvCubeArrayMip(GLuint tex, int size, int mip, int layerFaces,
+        float exposure, float gamma, const std::string& pathPrefix)
+    {
+        const int n = std::max(1, size >> mip);
+        std::vector<float> pixels((size_t)n * n * layerFaces * 4);
+        glBindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, tex);
+        glGetTexImage(GL_TEXTURE_CUBE_MAP_ARRAY, mip, GL_RGBA, GL_FLOAT, pixels.data());
+        glBindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, 0);
+
+        const float invGamma = 1.0f / gamma;
+        for (int layer = 0; layer < layerFaces / 6; ++layer) {
+            const int w = n * 6;
+            std::vector<uint8_t> rgb((size_t)w * n * 3);
+            for (int face = 0; face < 6; ++face) {
+                const float* src = pixels.data() + (size_t)(layer * 6 + face) * n * n * 4;
+                for (int y = 0; y < n; ++y)
+                    for (int x = 0; x < n; ++x) {
+                        // Row 0 is the bottom of the capture camera's view, as in any framebuffer: WritePNG's
+                        // vertical flip shows each face as that camera saw it.
+                        const float* t = src + ((size_t)y * n + x) * 4;
+                        uint8_t* d = &rgb[((size_t)y * w + face * n + x) * 3];
+                        for (int c = 0; c < 3; ++c) d[c] = TonemapChannel(t[c], exposure, invGamma);
+                    }
+            }
+            const std::string path = pathPrefix + "_L" + std::to_string(layer) + "_mip" + std::to_string(mip) + ".png";
+            WritePNG(path, w, n, rgb);
+        }
+    }
+
+    // RG16F split-sum LUT as R = scale, G = bias, linear 0..1 (x = NdotV, y = roughness, origin bottom-left).
+    static void DumpBrdfLUT(GLuint tex, int size, const std::string& path)
+    {
+        std::vector<float> pixels((size_t)size * size * 2);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RG, GL_FLOAT, pixels.data());
+        glBindTexture(GL_TEXTURE_2D, 0);
+
+        std::vector<uint8_t> rgb((size_t)size * size * 3);
+        for (size_t i = 0; i < (size_t)size * size; ++i) {
+            rgb[i * 3 + 0] = static_cast<uint8_t>(std::clamp(pixels[i * 2 + 0], 0.0f, 1.0f) * 255.0f + 0.5f);
+            rgb[i * 3 + 1] = static_cast<uint8_t>(std::clamp(pixels[i * 2 + 1], 0.0f, 1.0f) * 255.0f + 0.5f);
+            rgb[i * 3 + 2] = 0;
+        }
+        WritePNG(path, size, size, rgb);
+    }
+
     static void DumpTexture2D_RGBA8(GLuint tex,
         int w, int h,
         const std::string& path)
@@ -506,6 +554,27 @@ void RenderSystem::DumpBuffers(std::string dumpDir) const
             DumpTexture2D_DirShadow(m_dirShadowTex, m_dirShadowRes, m_dirCascadeCount, c, path(name));
             Debug::Info("RenderSystem::DumpBuffers") << "Saved " << name << "\n";
         }
+    }
+
+    // 10. Environment lighting: split-sum LUT, and each layer of the prefiltered array (0 = sky, i = probe i) at mip 0
+    // (the mirror reflection), a middle mip and the last one (fully rough).
+    if (m_envBrdfLUT) {
+        GLint lutSize = 0;
+        glBindTexture(GL_TEXTURE_2D, m_envBrdfLUT);
+        glGetTexLevelParameteriv(GL_TEXTURE_2D, 0, GL_TEXTURE_WIDTH, &lutSize);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        if (lutSize > 0) {
+            DumpBrdfLUT(m_envBrdfLUT, lutSize, path("env_brdf_lut.png"));
+            Debug::Info("RenderSystem::DumpBuffers") << "Saved env_brdf_lut.png\n";
+        }
+    }
+    if (m_envPrefiltered && m_envSkyReady) {
+        const int mips[3] = { 0, m_envMips / 2, m_envMips - 1 };
+        for (int i = 0; i < 3; ++i) {
+            if (i > 0 && mips[i] == mips[i - 1]) continue;
+            DumpEnvCubeArrayMip(m_envPrefiltered, m_envRes, mips[i], m_envLayers * 6, exposure, gamma, path("env"));
+        }
+        Debug::Info("RenderSystem::DumpBuffers") << "Saved env_L*_mip*.png (" << m_envLayers << " layer(s))\n";
     }
 
     Debug::Info("RenderSystem::DumpBuffers")

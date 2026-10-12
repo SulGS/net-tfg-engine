@@ -155,6 +155,12 @@ void Material::setVec3IfPresent(const std::string& name, const glm::vec3& value)
     if (loc != -1) uniforms[name] = { loc, value };
 }
 
+void Material::setFloatIfPresent(const std::string& name, float value)
+{
+    const GLint loc = lookup(name);
+    if (loc != -1) uniforms[name] = { loc, value };
+}
+
 void Material::uploadUniform(GLint location, const UniformValue& value)
 {
     std::visit([location](const auto& v) {

@@ -8,6 +8,8 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <algorithm>
 #include <cmath>
+#include <array>
+#include <string>
 
 class Transform : public IComponent {
 public:
@@ -143,6 +145,67 @@ struct DirectionalLightComponent : public IComponent {
     float     intensity = 1.0f;   // lux (scene-scale)
     float     angularRadius = 0.015f; // radians the light's disc spans: shadows soften by this x the occluder distance
     bool      castShadows = true;
+};
+
+// Sky cube map that RenderSystem turns into the global environment map (image-based lighting: ambient light and
+// reflections for every surface, see RenderSystem_Environment.cpp). It is also the background of the reflection probe
+// captures. Set by the game when it builds its scene (InitECSRenderer); only the first entity carrying it is used.
+// Without one (or if a face fails to load) the sky is black: probes still work, everything else gets no ambient.
+//
+// The sky comes either from six face images or from one panorama (the format HDRI sites publish), as asset names
+// listed in the scene's .ntfg:
+//   faces:    GL order +X, -X, +Y, -Y, +Z, -Z, square and all the same size, authored the usual skybox way: +Y is up,
+//             each image as seen from inside the cube, first row = top.
+//   equirect: one equirectangular (latitude/longitude) panorama, 2:1, +Y up: top row = straight up, bottom row = straight
+//             down, its centre column looking toward -Z and +X to the right of it. Converted to a cube map on load
+//             (faces width / 4 wide, at most 2048). Takes precedence over faces when set.
+// .hdr images are read as linear HDR radiance; anything else (.png, .jpg...) as sRGB, converted to linear. (.exr is
+// not supported: convert it to .hdr.)
+// The values are radiance in the lights' units: irradiance from a uniform sky of radiance L is pi * L, so an LDR sky
+// near white is far brighter than a sun of intensity 1. Scale it with `intensity`.
+// Changing any field (or the directional light) re-builds the environment and re-captures every probe: fine once per
+// level, not per frame. Changing `faces` / `equirect` also re-loads the images.
+struct EnvironmentSkyComponent : public IComponent {
+    std::array<std::string, 6> faces;
+    std::string equirect;
+    float     intensity = 1.0f;
+    glm::vec3 upAxis = glm::vec3(0.0f, 1.0f, 0.0f);   // world direction the cube map's +Y (its "up") is turned to
+    float     rotationDegrees = 0.0f;                  // then spun this much around that axis
+
+    // faces = <base>_px<ext>, <base>_nx<ext>, <base>_py<ext>, <base>_ny<ext>, <base>_pz<ext>, <base>_nz<ext>.
+    void setFaces(const std::string& base, const std::string& ext)
+    {
+        static const char* kSuffix[6] = { "_px", "_nx", "_py", "_ny", "_pz", "_nz" };
+        for (int i = 0; i < 6; ++i) faces[i] = base + kSuffix[i] + ext;
+        equirect.clear();
+    }
+
+    void setEquirect(const std::string& panorama)
+    {
+        equirect = panorama;
+        faces = {};
+    }
+};
+
+// Reflection probe: RenderSystem renders the static scene into a cube map from this entity's Transform position and
+// prefilters it like the sky, so surfaces inside `boxMin..boxMax` reflect the actual level (floor, pillars, lava...)
+// instead of just the sky. Captured once when it appears (and again when the probes, the sky or the env map settings
+// change, or when `recapture` is set). Only MeshComponents with reflectionProbeVisible are drawn into it: moving
+// objects would stay frozen in the reflections where they were at capture time.
+// boxMin..boxMax is the influence volume: near its faces the probe fades out over blendDistance into neighbouring
+// probes, or the sky (so neighbours should overlap by about blendDistance). The parallax box is the proxy of the
+// captured geometry: reflections are re-projected as if the scene lay on its faces, which keeps them anchored to the
+// walls/floor as the camera moves; fit it to the room (left empty, min >= max, it is the influence box).
+struct ReflectionProbeComponent : public IComponent {
+    glm::vec3 boxMin = glm::vec3(-10.0f);
+    glm::vec3 boxMax = glm::vec3(10.0f);
+    float     blendDistance = 5.0f;
+    bool      parallaxCorrection = true;
+    glm::vec3 parallaxBoxMin = glm::vec3(0.0f);
+    glm::vec3 parallaxBoxMax = glm::vec3(0.0f);
+    float     captureNear = 0.1f;
+    float     captureFar = 1000.0f;
+    bool      recapture = false;         // set to force a new capture next frame (cleared by RenderSystem)
 };
 
 
@@ -341,6 +404,8 @@ public:
 	// (SRC_ALPHA, ONE), depth test without write, so order doesn't matter. Unlit shader: only uCameraPos and
 	// uModel/uView/uProjection, no texture units bound.
 	bool additive = false;
+	// Drawn into reflection probe captures (see ReflectionProbeComponent). Turn off for anything that moves.
+	bool reflectionProbeVisible = true;
     MeshComponent() : mesh(nullptr), enabled(true), castShadows(true) {}
     MeshComponent(Mesh* m) : mesh(m), enabled(true), castShadows(true) {}
 };

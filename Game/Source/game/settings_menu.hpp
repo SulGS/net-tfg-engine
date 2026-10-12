@@ -751,6 +751,14 @@ private:
         addChannelSlider("Efectos", AudioChannel::SFX);
         addChannelSlider("Voz", AudioChannel::VOICE);
         addChannelSlider("Interfaz", AudioChannel::UI);
+
+        // Como se reproduce el sonido 3D: HRTF binaural con auriculares, panorama con altavoces. Se aplica en el
+        // siguiente tick del hilo de audio, reiniciando el dispositivo sin cortar lo que suena (AudioSystem::applyOutputMode).
+        // El orden debe coincidir con enum class AudioOutputMode (es el valor guardado en audio_settings.cfg).
+        AddChoice(em, data, baseLayer, TAB_SONIDO, row++, "Salida de audio",
+            { "Automática", "Auriculares (3D)", "Altavoces estéreo", "Envolvente 5.1", "Envolvente 7.1" },
+            []() { return static_cast<int>(AudioManager::GetOutputMode()); },
+            [](int idx) { AudioManager::SetOutputMode(static_cast<AudioOutputMode>(idx)); });
     }
 
     // CONTROLES: una fila por accion reasignable (InputMap), con un boton por dispositivo. Al pulsarlo espera la
@@ -934,6 +942,22 @@ private:
             []() { return SettingsUI::IndexOfScreenSpaceScale(RenderSettings::instance().getSSRResolutionScale()); },
             [](int idx) { RenderSettings::instance().setSSRResolutionScale(SettingsUI::ScreenSpaceScaleAt(idx)); });
 
+        // Reflejos del cielo y del nivel (mapas de entorno / IBL) aunque SSR este apagado, y la luz ambiente que dan.
+        // La calidad agrupa la resolucion de los mapas y las sondas del nivel; todo en runtime, se recaptura solo.
+        AddToggle(em, baseLayer, TAB_EFECTOS, row++, "Reflejos de entorno",
+            []() { return RenderSettings::instance().getEnvLightingEnabled(); },
+            [](bool v) { RenderSettings::instance().setEnvLightingEnabled(v); });
+
+        AddSlider(em, baseLayer, TAB_EFECTOS, row++, "Reflejos de entorno: intensidad",
+            0.0f, 2.0f, 0.05f, 2, "",
+            []() { return RenderSettings::instance().getEnvIntensity(); },
+            [](float v) { RenderSettings::instance().setEnvIntensity(v); });
+
+        AddChoice(em, data, baseLayer, TAB_EFECTOS, row++, "Reflejos de entorno: calidad",
+            SettingsUI::TierNames(),
+            []() { return RenderSettings::instance().getEnvQuality(); },
+            [](int idx) { RenderSettings::instance().setEnvQuality(idx); });
+
         AddToggle(em, baseLayer, TAB_EFECTOS, row++, "Desenfoque de movimiento",
             []() { return RenderSettings::instance().getMotionBlurEnabled(); },
             [](bool v) { RenderSettings::instance().setMotionBlurEnabled(v); });
@@ -954,6 +978,11 @@ private:
         AddToggle(em, baseLayer, TAB_AVANZADO, row++, "Modo Debug (FPS / latencia)",
             []() { return RenderSettings::instance().getDebugModeEnabled(); },
             [](bool v) { RenderSettings::instance().setDebugModeEnabled(v); });
+
+        // Solo depuración (no se guarda): las superficies muestran únicamente lo que aportan los reflejos de entorno.
+        AddToggle(em, baseLayer, TAB_AVANZADO, row++, "Debug: solo reflejos de entorno",
+            []() { return RenderSettings::instance().getEnvDebugView(); },
+            [](bool v) { RenderSettings::instance().setEnvDebugView(v); });
 
         AddTierChoice(em, data, baseLayer, TAB_AVANZADO, row++, "Cantidad de luces",
             { 64, 128, 256, 512, 1024 },

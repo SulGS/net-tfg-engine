@@ -2,6 +2,7 @@
 #define AUDIO_MANAGER_HPP
 
 #include "AudioSystem.hpp"
+#include "AudioOutput.hpp"
 #include "ecs/ecs.hpp"
 #include "Utils/Debug/Debug.hpp"
 #include "Utils/UserDataPath.hpp"
@@ -13,8 +14,9 @@
 #include <fstream>
 #include <algorithm>
 
-const int AUDIO_TICKS_PER_SECOND = 30;
-const int AUDIO_MS_PER_TICK = 1000 / AUDIO_TICKS_PER_SECOND;
+const int AUDIO_TICKS_PER_SECOND = 60;
+// Nanoseconds, not ms: 1000 / 60 truncates to 16 ms, which would really tick at 62.5 Hz.
+const std::chrono::nanoseconds AUDIO_TICK_DURATION(1000000000LL / AUDIO_TICKS_PER_SECOND);
 
 class AudioManager {
 private:
@@ -140,7 +142,17 @@ public:
         return AudioChannelManager::instance().GetVolumeRaw(channel);
     }
 
-    // PERSISTENCE: audio_settings.cfg holds the five channel volumes. Saved
+    // Speakers / headphones / surround. Lock-free like SetChannelVolume (same lock-order reason): the audio thread picks
+    // the change up on its next tick and resets the device in place (AudioSystem::applyOutputMode).
+    static void SetOutputMode(AudioOutputMode mode) {
+        AudioOutputSettings::instance().SetMode(mode);
+    }
+
+    static AudioOutputMode GetOutputMode() {
+        return AudioOutputSettings::instance().GetMode();
+    }
+
+    // PERSISTENCE: audio_settings.cfg holds the five channel volumes and the output mode. Saved
     // from the settings menu's footer alongside RenderSettings; loaded once,
     // right after the audio thread creates its AudioSystem (Start() above).
     static bool SaveAudioSettings() {
@@ -152,6 +164,7 @@ public:
         f << "sfx "    << GetChannelVolume(AudioChannel::SFX)    << "\n";
         f << "voice "  << GetChannelVolume(AudioChannel::VOICE)  << "\n";
         f << "ui "     << GetChannelVolume(AudioChannel::UI)     << "\n";
+        f << "output " << static_cast<int>(GetOutputMode())    << "\n";
 
         return f.good();
     }
@@ -165,6 +178,12 @@ public:
         bool applied = false;
 
         while (f >> key >> value) {
+            if (key == "output") {
+                SetOutputMode(static_cast<AudioOutputMode>(static_cast<int>(value)));   // SetMode clamps it
+                applied = true;
+                continue;
+            }
+
             value = std::clamp(value, 0.0f, 1.0f);
 
             if (key == "master")      SetChannelVolume(AudioChannel::MASTER, value);
@@ -227,7 +246,11 @@ private:
                 tickCount = 0;
             }
 
-            nextTick += std::chrono::milliseconds(AUDIO_MS_PER_TICK);
+            nextTick += AUDIO_TICK_DURATION;
+            // Fell behind (debugger break, long device switch): resync instead of running a burst of catch-up ticks.
+            const auto afterTick = std::chrono::high_resolution_clock::now();
+            if (nextTick < afterTick)
+                nextTick = afterTick;
             std::this_thread::sleep_until(nextTick);
         }
 

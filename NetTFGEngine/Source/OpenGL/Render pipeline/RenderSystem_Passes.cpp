@@ -39,6 +39,10 @@ void RenderSystem::GBufferPass(EntityManager::Query<MeshComponent, Transform>& m
     const GLint mvpLoc = glGetUniformLocation(m_gbufferShader, "uModelViewProjection");
     const GLint prevMvpLoc = glGetUniformLocation(m_gbufferShader, "uPrevModelViewProjection");
     const GLint normalMatLoc = glGetUniformLocation(m_gbufferShader, "uViewNormalMatrix");
+    // The default material adds the environment reflection while shading: SSR must then replace that share where it
+    // hits instead of adding a second reflection on top (see the SSR trace's "replace" alpha).
+    const GLint hasEnvLoc = glGetUniformLocation(m_gbufferShader, "uHasEnvReflection");
+    const float hasEnv = EnvironmentActive() ? 1.0f : 0.0f;
     const glm::mat4 viewProjection = projection * view;
     bool engineShaderBound = false;
 
@@ -72,6 +76,7 @@ void RenderSystem::GBufferPass(EntityManager::Query<MeshComponent, Transform>& m
 
         if (!engineShaderBound) {
             glUseProgram(m_gbufferShader);
+            glUniform1f(hasEnvLoc, hasEnv);
             engineShaderBound = true;
         }
 
@@ -360,7 +365,7 @@ void RenderSystem::ShadowPass(EntityManager& em, EntityManager::Query<MeshCompon
 // turns, and snapping its centre to whole texels keeps edges from shimmering as the camera moves. No glPolygonOffset:
 // the bias is receiver-side in the shader. GL_DEPTH_CLAMP keeps casters in front of the near plane (outside the view).
 void RenderSystem::DirShadowPass(EntityManager::Query<MeshComponent, Transform>& meshQuery,
-    const glm::mat4& view, const glm::mat4& projection, float cameraNear, float cameraFar)
+    const glm::mat4& view, const glm::mat4& projection, float cameraNear, float cameraFar, bool probeCapture)
 {
     // No dir light (or it doesn't cast) → params.x stays 0 and the shader treats it as unshadowed.
     if (m_cpuDirLight.colorEnabled.a < 0.5f || !m_dirLightCastsShadows || m_dirCascadeCount <= 0)
@@ -446,6 +451,7 @@ void RenderSystem::DirShadowPass(EntityManager::Query<MeshComponent, Transform>&
 
         for (auto [entity, meshC, xf] : meshQuery) {
             if (!meshC->enabled || !meshC->mesh || !meshC->castShadows || meshC->additive) continue;
+            if (probeCapture && !meshC->reflectionProbeVisible) continue;
             glUniformMatrix4fv(locModel, 1, GL_FALSE, glm::value_ptr(xf->getModelMatrix()));
             meshC->mesh->drawDepthOnly(glm::mat4(1.0f), m_dirShadowShader);
         }
@@ -465,25 +471,8 @@ void RenderSystem::DirShadowPass(EntityManager::Query<MeshComponent, Transform>&
     glViewport(0, 0, m_screenW, m_screenH);
 }
 
-void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& meshQuery,
-    const glm::mat4& view,
-    const glm::mat4& projection,
-    const glm::vec3& cameraPos)
+void RenderSystem::BindLightingInputs(bool probeCapture)
 {
-    const auto& rs = RenderSettings::instance();
-    const GLuint targetFBO = (m_msaaSamples > 1) ? m_msaaFBO : m_hdrFBO;
-    glBindFramebuffer(GL_FRAMEBUFFER, targetFBO);
-    GLenum drawBuf = GL_COLOR_ATTACHMENT0;
-    glDrawBuffers(1, &drawBuf);
-    // Own viewport: the passes before it (SSAO, shadows) leave theirs.
-    glViewport(0, 0, m_screenW, m_screenH);
-
-    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LESS);
-    glDepthMask(GL_TRUE);
-
     // Point light SSBO + shadow SSBO
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_lightSSBO);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 1, m_shadowDataSSBO);
@@ -510,36 +499,86 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
     glActiveTexture(GL_TEXTURE9);
     glBindTexture(GL_TEXTURE_2D_ARRAY, m_dirShadowTex);
 
-    // Screen-space AO (all 1.0 when SSAO is off; the 1x1 white texture when its targets aren't allocated) — unit 7
+    // Screen-space AO (all 1.0 when SSAO is off; the 1x1 white texture when its targets aren't allocated) — unit 7.
+    // A probe capture is another viewpoint: this frame's AO doesn't apply to it.
     glActiveTexture(GL_TEXTURE7);
-    glBindTexture(GL_TEXTURE_2D, m_ssaoBlurTex ? m_ssaoBlurTex : m_whiteTex);
+    glBindTexture(GL_TEXTURE_2D, (!probeCapture && m_ssaoBlurTex) ? m_ssaoBlurTex : m_whiteTex);
+
+    // Environment lighting: prefiltered sky/probe maps (unit 10), split-sum LUT (unit 11), probe SSBO (binding 3).
+    // Unbound (0) while there's no map: uEnvEnabled is 0 then and the shaders never sample them.
+    glActiveTexture(GL_TEXTURE0 + EnvLighting::kPrefilteredUnit);
+    glBindTexture(GL_TEXTURE_CUBE_MAP_ARRAY, m_envPrefiltered);
+    glActiveTexture(GL_TEXTURE0 + EnvLighting::kBrdfLutUnit);
+    glBindTexture(GL_TEXTURE_2D, m_envBrdfLUT);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, EnvLighting::kProbeBinding, m_envProbeSSBO);
+    glActiveTexture(GL_TEXTURE0);
+}
+
+void RenderSystem::UnbindLightingInputs()
+{
+    glBindSampler(8, 0);
+    glBindSampler(6, 0);
+}
+
+void RenderSystem::SetLightingUniforms(Material* mat, const glm::vec3& cameraPos, bool probeCapture)
+{
+    // Pipeline state offered to every material, set only if the shader has it.
+    const auto& rs = RenderSettings::instance();
+    mat->setVec3IfPresent("uCameraPos", cameraPos);
+    mat->setIntIfPresent("uShadowCubeArray", 5);
+    mat->setIntIfPresent("uShadowCubeArrayCmp", 8);
+    mat->setIntIfPresent("uDirShadowMap", 6);
+    mat->setIntIfPresent("uDirShadowDepth", 9);
+    mat->setIntIfPresent("uSSAOTex", 7);
+    mat->setIntIfPresent("uSSAOScale", probeCapture ? 1 : m_ssaoScale);
+    mat->setIntIfPresent("uShadowCount", probeCapture ? 0 : m_shadowCount);
+    mat->setIntIfPresent("uLightCount", m_lightCount);
+    mat->setIntIfPresent("uShadowRes", m_shadowRes);
+    mat->setIntIfPresent("uDirShadowRes", m_dirShadowRes);
+
+    mat->setIntIfPresent("uEnvPrefiltered", EnvLighting::kPrefilteredUnit);
+    mat->setIntIfPresent("uEnvBrdfLUT", EnvLighting::kBrdfLutUnit);
+    mat->setIntIfPresent("uEnvEnabled", EnvironmentActive() ? 1 : 0);
+    mat->setIntIfPresent("uEnvProbeCount", probeCapture ? 0 : m_envProbeCount);
+    mat->setFloatIfPresent("uEnvMaxLod", (float)std::max(m_envMips - 1, 0));
+    mat->setFloatIfPresent("uEnvIntensity", rs.getEnvIntensity());
+    mat->setIntIfPresent("uEnvDebugView", (!probeCapture && rs.getEnvDebugView()) ? 1 : 0);
+}
+
+void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& meshQuery,
+    const glm::mat4& view,
+    const glm::mat4& projection,
+    const glm::vec3& cameraPos)
+{
+    const auto& rs = RenderSettings::instance();
+    const GLuint targetFBO = (m_msaaSamples > 1) ? m_msaaFBO : m_hdrFBO;
+    glBindFramebuffer(GL_FRAMEBUFFER, targetFBO);
+    GLenum drawBuf = GL_COLOR_ATTACHMENT0;
+    glDrawBuffers(1, &drawBuf);
+    // Own viewport: the passes before it (SSAO, shadows) leave theirs.
+    glViewport(0, 0, m_screenW, m_screenH);
+
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_TRUE);
+
+    BindLightingInputs(false);
 
     for (auto [entity, meshC, transform] : meshQuery) {
         if (!meshC->enabled || !meshC->mesh || meshC->additive) continue; // additive ones: see AdditivePass
 
-        // Pipeline state offered to every material, set only if the shader has it. Set BEFORE bind: Material::bind()
-        // uploads them, so afterwards they'd only reach the GPU next frame.
-        if (Material* mat = meshC->mesh->getMaterial()) {
-            mat->setVec3IfPresent("uCameraPos", cameraPos);
-            mat->setIntIfPresent("uShadowCubeArray", 5);
-            mat->setIntIfPresent("uShadowCubeArrayCmp", 8);
-            mat->setIntIfPresent("uDirShadowMap", 6);
-            mat->setIntIfPresent("uDirShadowDepth", 9);
-            mat->setIntIfPresent("uSSAOTex", 7);
-            mat->setIntIfPresent("uSSAOScale", m_ssaoScale);
-            mat->setIntIfPresent("uShadowCount", m_shadowCount);
-            mat->setIntIfPresent("uLightCount", m_lightCount);
-            mat->setIntIfPresent("uShadowRes", m_shadowRes);
-            mat->setIntIfPresent("uDirShadowRes", m_dirShadowRes);
-        }
+        // Set BEFORE bind: Material::bind() uploads them, so afterwards they'd only reach the GPU next frame.
+        if (Material* mat = meshC->mesh->getMaterial())
+            SetLightingUniforms(mat, cameraPos, false);
 
         glm::mat4 model = transform->getModelMatrix();
         meshC->mesh->bindMaterial(model, view, projection);
         meshC->mesh->draw();
     }
 
-    glBindSampler(8, 0);
-    glBindSampler(6, 0);
+    UnbindLightingInputs();
 
     glDepthMask(GL_TRUE);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);

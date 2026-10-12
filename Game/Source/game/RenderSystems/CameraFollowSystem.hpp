@@ -33,6 +33,7 @@ public:
         bool localFound = false;
         int  localPlayerId = -1;
         glm::vec3 localPos(0.0f);
+        Entity localEntity{};
 
         auto playerQuery = entityManager.CreateQuery<Transform, Playable, SpaceShip>();
         for (auto [entity, playerTransform, play, ship] : playerQuery)
@@ -40,6 +41,7 @@ public:
             if (play->isLocal)
             {
                 localFound = true;
+                localEntity = entity;
                 localPlayerId = play->playerId;
                 localAlive = ship->isAlive;
                 localPos = playerTransform->getPosition();
@@ -51,6 +53,20 @@ public:
             return;
 
         glm::vec3 targetPos(0.0f);
+
+        // Just died: stay on our own explosion for DEATH_CAM_SECONDS before spectating (or the winner zoom, if this death
+        // ended the match). No SpectatorState yet, so spectating then starts on whoever is alive at that point.
+        if (!localAlive)
+        {
+            const JustDeathChecker* death = entityManager.GetComponent<JustDeathChecker>(localEntity);
+            if (death && death->InDeathCam())
+            {
+                // Before OnDeathRenderSystem handles the death (it runs after this system), the ship is still where it blew up.
+                targetPos = death->notExecuted ? localPos : death->deathPosition;
+                SetCamera(entityManager, targetPos, debugZoomMultiplier);
+                return;
+            }
+        }
 
         // Game over: all players see the winner zoom regardless of alive state
         int winnerId = GetWinnerId(entityManager);
@@ -81,18 +97,7 @@ public:
                 }
             }
 
-            float zoom = 0.6f;
-            for (auto [camEntity, cam, camTrans] : camQuery)
-            {
-                glm::vec3 newCamPos(
-                    targetPos.x,
-                    targetPos.y - 27.0f * zoom,
-                    18.0f * zoom
-                );
-                camTrans->setPosition(newCamPos);
-                cam->setTarget(targetPos);
-                cam->markViewDirty();
-            }
+            SetCamera(entityManager, targetPos, 0.6f);
             return;
         }
 
@@ -190,14 +195,17 @@ public:
                 targetPos = localPos;
         }
 
+        SetCamera(entityManager, targetPos, debugZoomMultiplier);
+    }
+
+private:
+    // Fixed top-down-ish framing: behind (-Y) and above the target, looking at it. zoom < 1 moves in, > 1 out.
+    static void SetCamera(EntityManager& entityManager, const glm::vec3& targetPos, float zoom)
+    {
+        auto camQuery = entityManager.CreateQuery<Camera, Transform>();
         for (auto [camEntity, cam, camTrans] : camQuery)
         {
-            glm::vec3 newCamPos(
-                targetPos.x,
-                targetPos.y - 27.0f * debugZoomMultiplier,
-                18.0f * debugZoomMultiplier
-            );
-            camTrans->setPosition(newCamPos);
+            camTrans->setPosition(glm::vec3(targetPos.x, targetPos.y - 27.0f * zoom, 18.0f * zoom));
             cam->setTarget(targetPos);
             cam->markViewDirty();
         }

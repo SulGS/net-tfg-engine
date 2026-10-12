@@ -33,6 +33,7 @@ class ShieldRenderSystem : public ISystem
             soundEntity, AudioSourceComponent("shield.wav", AudioChannel::SFX, false));
         audio->play = true;
         audio->gain = 1.0f;
+        ApplyArenaAttenuation(*audio);
     }
 
     void Push(MeshComponent* mesh, float power, float expire, float breakT, float fade) const

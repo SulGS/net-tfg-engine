@@ -5,6 +5,43 @@ void ShaderLoader::registerBuiltIn(const std::string& key, const char* source)
     builtIns()[key] = source;
 }
 
+bool ShaderLoader::expandIncludes(std::string& code, const std::string& sourceName)
+{
+    // Depth cap only guards against an include cycle; real nesting is one or two levels.
+    for (int pass = 0; pass < 8; ++pass) {
+        bool expanded = false;
+        size_t pos = 0;
+        while ((pos = code.find("#include", pos)) != std::string::npos) {
+            // Only a directive at the start of a line (indentation allowed), not "#include" inside a comment.
+            size_t lineStart = code.rfind('\n', pos);
+            lineStart = (lineStart == std::string::npos) ? 0 : lineStart + 1;
+            if (code.find_first_not_of(" \t", lineStart) != pos) { pos += 8; continue; }
+
+            size_t lineEnd = code.find('\n', pos);
+            if (lineEnd == std::string::npos) lineEnd = code.size();
+            const size_t q0 = code.find('"', pos);
+            const size_t q1 = (q0 == std::string::npos) ? q0 : code.find('"', q0 + 1);
+            if (q0 == std::string::npos || q1 == std::string::npos || q1 > lineEnd) {
+                Debug::Error("ShaderLoader") << sourceName << ": malformed #include\n";
+                return false;
+            }
+
+            const std::string key = code.substr(q0 + 1, q1 - q0 - 1);
+            auto it = builtIns().find(key);
+            if (it == builtIns().end()) {
+                Debug::Error("ShaderLoader") << sourceName << ": #include \"" << key << "\" is not a registered built-in\n";
+                return false;
+            }
+            code.replace(pos, lineEnd - pos, it->second);
+            pos += it->second.size();
+            expanded = true;
+        }
+        if (!expanded) return true;
+    }
+    Debug::Error("ShaderLoader") << sourceName << ": #include nested too deep (cycle?)\n";
+    return false;
+}
+
 bool ShaderLoader::fetchSource(const std::string& key, std::string& code, bool& fromAsset)
 {
     auto& registered = builtIns();
@@ -76,6 +113,11 @@ GLuint ShaderLoader::acquireProgram(const std::string& vertexAssetKey,
         if (vertFromAsset) AssetManager::instance().unloadAsset<ShaderSource>(vertexAssetKey);
         if (fragFromAsset) AssetManager::instance().unloadAsset<ShaderSource>(fragmentAssetKey);
         };
+
+    if (!expandIncludes(vertCode, vertexAssetKey) || !expandIncludes(fragCode, fragmentAssetKey)) {
+        releaseSources();
+        return 0;
+    }
 
     if (!define.empty()) {
         // Shader doesn't implement this variant: not an error, the caller falls back to its default path.

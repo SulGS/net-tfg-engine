@@ -753,6 +753,16 @@ private:
             [](ShaderSource) {}
         );
 
+        AssetManager::instance().registerType<BlobData>(
+            // Loader: keeps a copy of the decompressed bytes (the loader's buffer is scratch)
+            [](const uint8_t* data, size_t size) -> BlobData
+            {
+                return { std::make_shared<const std::vector<uint8_t>>(data, data + size) };
+            },
+            // Destroyer: the shared_ptr frees the bytes
+            [](BlobData) {}
+        );
+
         AssetManager::instance().registerType<AudioBuffer>(
             // Loader
             [](const uint8_t* data, size_t size) -> AudioBuffer

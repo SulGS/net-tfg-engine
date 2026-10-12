@@ -62,6 +62,10 @@ layout(std140, binding = 2) uniform DirLightBlock {
     vec4 uDirLightParams;           // x = cascade count (0 = no shadow), y = tan(light angular radius)
 };
 
+// Ambient light + reflections from the engine's sky / reflection probe maps (EnvLighting.hpp). Expanded by
+// ShaderLoader: GLSL itself has no #include.
+#include "engine/env_lighting.glsl"
+
 const float PI = 3.14159265358979;
 
 // -------------------------------------------------------
@@ -462,6 +466,10 @@ void main()
     vec3 lit = CalcPointLights(N, V, albedo, F0, alpha, 0.0, ao)
              + CalcDirLight   (N, V, albedo, F0, alpha, 0.0, ao);
 
-    FragColor = vec4(lit + emissive, 1.0);
+    // Sky / probe light on the crust, same matte 0.7 as above. No hasEnvReflection in the GBuffer: SSR's replace
+    // would also eat the emissive glow, and this rough a reflection is faint, so SSR keeps adding on top.
+    vec3 env = EnvLighting(vWorldPos, N, Nsurf, V, albedo, F0, 0.7, 0.0, ao);
+
+    FragColor = vec4(uEnvDebugView == 1 ? env : lit + env + emissive, 1.0);
 #endif
 }

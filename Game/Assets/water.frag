@@ -79,6 +79,10 @@ layout(std140, binding = 2) uniform DirLightBlock {
     vec4 uDirLightParams;           // x = cascade count (0 = no shadow), y = tan(light angular radius)
 };
 
+// Ambient light + reflections from the engine's sky / reflection probe maps (EnvLighting.hpp). Expanded by
+// ShaderLoader: GLSL itself has no #include.
+#include "engine/env_lighting.glsl"
+
 const float PI = 3.14159265358979;
 
 // -------------------------------------------------------
@@ -456,14 +460,21 @@ void main()
     vec3 lit = CalcPointLights(N, V, albedo, F0, alpha, 0.0, ao)
              + CalcDirLight   (N, V, albedo, F0, alpha, 0.0, ao);
 
-    // Fallback environment reflection (no cubemap capture): the sky colour,
-    // blended in harder at grazing angles the way real Fresnel behaves. Where
-    // an SSR ray hits, the SSR pass swaps this share for the traced reflection.
-    vec3 reflected = uSkyColor;
+    // Environment reflection, blended in harder at grazing angles the way real Fresnel behaves: the engine's sky /
+    // reflection probe maps when environment lighting is on (EnvLighting.hpp, already Fresnel-weighted), the flat
+    // sky colour otherwise. Where an SSR ray hits, the SSR pass swaps this share for the traced reflection.
+    vec3 color;
+    vec3 env = vec3(0.0);
+    if (uEnvEnabled != 0)
+    {
+        env   = EnvLighting(vWorldPos, N, normalize(vN), V, albedo, F0, uRoughness, 0.0, ao);
+        color = lit + env;
+    }
+    else
+        color = mix(lit, uSkyColor, fresnel);
 
     // Sharp specular glint from the sun — makes the water read as wet/shiny
     // even where the diffuse BRDF term alone would look flat.
-    vec3 color = mix(lit, reflected, fresnel);
 
     if (uDirLightColorEnabled.a > 0.5)
     {
@@ -473,6 +484,6 @@ void main()
         color += glint * uDirLightColorEnabled.rgb * uDirLightDirIntensity.w * 0.6;
     }
 
-    FragColor = vec4(color, 1.0);
+    FragColor = vec4(uEnvDebugView == 1 ? env : color, 1.0);
 #endif
 }

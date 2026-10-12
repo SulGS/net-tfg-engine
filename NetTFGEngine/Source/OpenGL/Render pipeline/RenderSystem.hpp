@@ -8,6 +8,7 @@
 #include "OpenGL/Material.hpp"
 #include "OpenGL/OpenGLIncludes.hpp"
 #include "RenderSettings.hpp"
+#include "EnvLighting.hpp"
 #include <glm/gtc/type_ptr.hpp>
 #include <vector>
 #include <string>
@@ -45,11 +46,21 @@ struct GPUShadowData {
     int       pad;
 };
 
+// One entry of the environment probe SSBO (binding 3), std430. Layout shared with EnvLighting.hpp's EnvProbe.
+struct GPUEnvProbe {
+    glm::vec4 sh[9];   // irradiance / pi as order-2 SH, basis constants and cosine convolution folded in
+    glm::vec4 boxMin;       // xyz = influence box min, w = blend distance
+    glm::vec4 boxMax;       // xyz = influence box max, w = 1 if parallax corrected
+    glm::vec4 center;       // xyz = capture position, w = cube array layer
+    glm::vec4 parallaxMin;  // xyz = parallax proxy box (w unused)
+    glm::vec4 parallaxMax;
+};
+
 // Concrete type for the mesh query used across passes.
 using MeshQuery = decltype(
     std::declval<EntityManager>().CreateQuery<MeshComponent, Transform>());
 
-// Per-frame pipeline: [GBufferPass → LinearDepthPass, only if SSAO or SSR is on] → SSAOPass → CollectLightsPass → ShadowPass → DirShadowPass → ShadingPass → AdditivePass → SSRPass → particles → MotionBlurPass → BloomPass → TonemapPass → FXAAPass [→ CopyPass (nearest), FSRPass or NISPass, per the upscale mode].
+// Per-frame pipeline: [EnvironmentPass, only when the sky/probes changed or captures are pending] → [GBufferPass → LinearDepthPass, only if SSAO or SSR is on] → SSAOPass → CollectLightsPass → ShadowPass → DirShadowPass → ShadingPass → AdditivePass → SSRPass → particles → MotionBlurPass → BloomPass → TonemapPass → FXAAPass [→ CopyPass (nearest), FSRPass or NISPass, per the upscale mode].
 class RenderSystem : public ISystem {
 public:
 
@@ -245,6 +256,30 @@ private:
     GLuint m_nisSampler = 0;
     int    m_nisBlockW = 32, m_nisBlockH = 24;
 
+    // Environment lighting (image-based lighting, RenderSystem_Environment.cpp; GLSL side in EnvLighting.hpp).
+    // Prefiltered radiance: RGBA16F cube map array, layer 0 = the sky, layer i = probe i; mip m = GGX roughness
+    // m / (mips - 1), down to 8x8 faces. Captures render into m_envCaptureCube (full mip chain, read by the prefilter
+    // with filtered importance sampling and by the CPU SH projection) through m_envFBO.
+    GLuint m_envBrdfLUT = 0;           // RG16F split-sum LUT, built once in Init
+    GLuint m_envPrefiltered = 0;
+    int    m_envRes = 0;               // face size of the array and of the capture cube, as allocated
+    int    m_envMips = 0;
+    int    m_envLayers = 0;
+    GLuint m_envCaptureCube = 0;
+    GLuint m_envCaptureDepth = 0;      // depth renderbuffer for scene captures
+    GLuint m_envFBO = 0;
+    GLuint m_envProbeSSBO = 0;         // GPUEnvProbe[1 + kMaxProbes]
+    std::vector<GPUEnvProbe> m_envProbeData;   // [0] = sky, [i] = probe i (SH filled once captured)
+    std::vector<bool>        m_envProbeReady;  // [i] = probe i captured since its last change
+    int      m_envProbeCount = 0;      // probes in the SSBO after the sky
+    bool     m_envSkyReady = false;
+    uint64_t m_envSkyHash = 0;         // sky + directional light the current layer 0 was rendered with
+    GLuint   m_envSkySource = 0;       // the game's sky cube map, RGBA16F + mips (0 = none: black sky)
+    int      m_envSkySourceSize = 0;
+    uint64_t m_envSkyFacesHash = 0;    // face asset names m_envSkySource was loaded from
+    uint64_t m_envProbeSetHash = 0;    // probe placement the current captures belong to
+    bool     m_envProbeLimitWarned = false;
+
     // Shader programs
     GLuint m_gbufferShader = 0;
     GLuint m_tonemapShader = 0;
@@ -265,6 +300,10 @@ private:
     GLuint m_fsrRcasShader = 0;
     GLuint m_nisShader = 0;    // compute
     GLuint m_copyShader = 0;   // final copy to the window without FXAA / Nearest scaling (see CompileCopyShader)
+    GLuint m_envSkyShader = 0;        // sky cube map resampled into one cube face
+    GLuint m_envPrefilterShader = 0;  // GGX prefilter of the capture cube into one face/mip of the array
+    GLuint m_envBrdfShader = 0;       // split-sum BRDF LUT
+    GLuint m_envEquirectShader = 0;   // equirectangular sky panorama into one cube face
 
     // Initialisation helpers
     void InitLightSSBO();
@@ -311,6 +350,36 @@ private:
     void CompileNISShader();   // also the coefficient textures, UBO and sampler it uses
     void DeleteNIS();
     void CompileCopyShader();
+    void CompileEnvironmentShaders();
+
+    // Environment lighting (RenderSystem_Environment.cpp).
+    void InitEnvironment();             // BRDF LUT, probe SSBO, capture FBO (needs the quad and the env shaders)
+    void AllocateEnvironmentMaps(int res, int layers);
+    void DeleteEnvironmentMaps();       // the array and the capture cube; the LUT and SSBO stay
+    // Sky and probes up to date: re-renders the sky when it (or the directional light) changed, captures pending probes
+    // (a few per frame, so a level with many doesn't stall one frame), uploads the probe SSBO. Runs after
+    // CollectLightsPass (needs the directional light) and before the frame's shadow passes (it renders its own).
+    void EnvironmentPass(EntityManager& em, EntityManager::Query<MeshComponent, Transform>& meshQuery);
+    bool LoadSkyCubemap(const EnvironmentSkyComponent& sky);
+    bool LoadSkyEquirect(const std::string& name);   // panorama -> m_envSkySource
+    void DeleteSkyCubemap();
+    void DrawSkyFace(const EnvironmentSkyComponent& sky, int face);   // into whatever cube face is attached
+    void RenderSkyToCapture(const EnvironmentSkyComponent& sky);
+    // The 6 faces of the static scene seen from pos into the capture cube, the sky behind it.
+    void CaptureProbeScene(EntityManager::Query<MeshComponent, Transform>& meshQuery,
+        const EnvironmentSkyComponent& sky, const glm::vec3& pos, float nearPlane, float farPlane);
+    // Capture cube (mips regenerated here) -> prefiltered array layer, and its SH into m_envProbeData[layer].
+    void PrefilterCaptureInto(int layer);
+    void ProjectCaptureSH(GPUEnvProbe& out);
+    bool EnvironmentActive() const;     // setting on and the sky map built: what uEnvEnabled says
+
+    // Lighting inputs every lit material reads, shared by ShadingPass and the probe captures: light SSBOs/UBO, shadow
+    // maps (units 5, 6, 8, 9), SSAO (unit 7) and the environment (units 10, 11, SSBO 3). probeCapture: AO 1, no point
+    // light shadows (this frame's maps include moving casters), and the environment is the sky alone (the probe being
+    // captured, and those around it, must not show up in it).
+    void BindLightingInputs(bool probeCapture);
+    void UnbindLightingInputs();
+    void SetLightingUniforms(Material* mat, const glm::vec3& cameraPos, bool probeCapture);
 
     // Per-frame passes
     // Clears targetFBO and draws sourceTex (render resolution) over all of it with the copy shader.
@@ -326,8 +395,10 @@ private:
     void MotionBlurPass(const glm::mat4& viewProjection, float deltaTime);
     void CollectLightsPass(EntityManager& em);  // also handles directional light
     void ShadowPass(EntityManager& em, EntityManager::Query<MeshComponent, Transform>& meshQuery);
+    // probeCapture: only reflectionProbeVisible meshes cast (no ghost shadows of moving objects in the captures).
     void DirShadowPass(EntityManager::Query<MeshComponent, Transform>& meshQuery,
-        const glm::mat4& view, const glm::mat4& projection, float cameraNear, float cameraFar);
+        const glm::mat4& view, const glm::mat4& projection, float cameraNear, float cameraFar,
+        bool probeCapture = false);
     void ShadingPass(EntityManager::Query<MeshComponent, Transform>& meshQuery,
         const glm::mat4& view, const glm::mat4& projection,
         const glm::vec3& cameraPos);

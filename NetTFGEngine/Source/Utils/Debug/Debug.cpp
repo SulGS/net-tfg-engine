@@ -43,7 +43,7 @@ void Debug::LogCritical(const std::string& msg, const std::string& channel) {
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Crash report: the log is written by a worker thread, so a crash loses its last lines and says nothing about where it
-// happened. On an unhandled exception this writes, next to the logs, crash_<time>_PID<pid>.txt (exception, faulting
+// happened. On an unhandled exception this writes, next to this run's engine.log, crash.txt (exception, faulting
 // module + offset, symbolised stack of the crashing thread; symbols come from the .pdb next to the .exe if it was
 // copied along) and a .dmp minidump (open in Visual Studio with the same build's .pdb).
 // ---------------------------------------------------------------------------------------------------------------------
@@ -143,7 +143,7 @@ static void WriteCrashReport(EXCEPTION_POINTERS* ep)
     fclose(f);
 
     // The log's last lines are still queued / buffered: get them (and a pointer to the report) onto the disk.
-    Debug::LogCritical("Unhandled exception, see the crash_*.txt / .dmp next to this log\n", "Crash");
+    Debug::LogCritical("Unhandled exception, see crash.txt / crash.dmp next to this log\n", "Crash");
     LogRouter::Instance().FlushForCrash(2000);
 }
 
@@ -165,17 +165,13 @@ static LONG WINAPI VectoredFatal(EXCEPTION_POINTERS* ep)
 
 static void InstallCrashHandler()
 {
-    const auto dir = UserDataPath::LogsDirectory();
+    // Same per-run folder as engine.log (the folder name already carries time and PID).
+    const auto dir = UserDataPath::SessionLogsDirectory();
     if (dir.empty()) return;
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
 
-    const std::time_t now = std::time(nullptr);
-    std::tm tm{};
-    localtime_s(&tm, &now);
-    wchar_t stamp[64];
-    wcsftime(stamp, 64, L"%Y%m%d_%H%M%S", &tm);
-    swprintf(g_crashBase, MAX_PATH, L"%s\\crash_%s_PID%lu", dir.wstring().c_str(), stamp, GetCurrentProcessId());
+    swprintf(g_crashBase, MAX_PATH, L"%s\\crash", dir.wstring().c_str());
 
     SetUnhandledExceptionFilter(UnhandledFilter);
     AddVectoredExceptionHandler(1, VectoredFatal);

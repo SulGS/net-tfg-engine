@@ -33,7 +33,8 @@ public:
                 if (jdC->notExecuted) {
 
                     jdC->notExecuted = false;
-
+                    jdC->secondsSinceDeath = 0.0f;
+                    jdC->deathPosition = playerTransform->getPosition();
 
                     SpawnShipExplosion(entityManager, playerTransform->getPosition(), play->playerId);
 
@@ -44,12 +45,18 @@ public:
                         audioEntity, AudioSourceComponent("explosion.wav", AudioChannel::SFX, false));
 					audio->gain = 1.0f;
                     audio->play = true;
+                    ApplyArenaAttenuation(*audio, ARENA_EXPLOSION_MAX_DISTANCE);
                     entityManager.AddComponent<ExplosionPlayerID>(audioEntity, ExplosionPlayerID{ play->playerId });
+                }
+                else
+                {
+                    jdC->secondsSinceDeath += deltaTime;
                 }
             }
             else
             {
 				jdC->notExecuted = true; // reset for potential future deaths
+				jdC->secondsSinceDeath = 0.0f;
 
 				auto explosionQuery = entityManager.CreateQuery<Transform, ParticleEmitterComponent, ExplosionPlayerID>();
                 for (auto [e, t, emitter, expID] : explosionQuery)
@@ -104,7 +111,9 @@ public:
                     element->size = glm::vec2(350.0f, 80.0f);
                     element->pivot = glm::vec2(0.5f);
 
-                    if (gameOver)
+                    if (jdC->InDeathCam())
+                        text->text = "YOU DIED";   // camera still on our explosion (CameraFollowSystem)
+                    else if (gameOver)
                         text->text = "PLAYER " + std::to_string(winnerId + 1) + " WINS";
                     else if (!watchedName.empty())
                         text->text = "SPECTATING " + watchedName;

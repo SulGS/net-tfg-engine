@@ -873,6 +873,7 @@ void RenderSystem::CompileGBufferShader()
         uniform sampler2D uAlbedoTex;
         uniform sampler2D uNormalTex;
         uniform sampler2D uMRTex;
+        uniform float     uHasEnvReflection; // 1 while environment lighting is on (RenderSystem::GBufferPass)
 
         void main()
         {
@@ -884,8 +885,9 @@ void RenderSystem::CompileGBufferShader()
             float metalness           = clamp(mr.y, 0.0,   1.0);
 
             FragNormalRoughness = vec4(viewNormal, perceptualRoughness);
-            // g = 0: the default material has no env reflection of its own, so SSR adds on top (GBufferVariant.hpp).
-            FragMaterial        = vec4(metalness, 0.0, 0.0, 1.0);
+            // g: the default material adds the environment map's reflection while shading when it is on, so SSR must
+            // replace that share where it hits; off, SSR adds on top (GBufferVariant.hpp).
+            FragMaterial        = vec4(metalness, uHasEnvReflection, 0.0, 1.0);
             FragAlbedo          = vec4(texture(uAlbedoTex, vUV).rgb, 1.0);
             // UV-space displacement since last frame from the object's own movement (camera motion is added later
             // by reprojecting the depth, so static geometry needn't be tracked).

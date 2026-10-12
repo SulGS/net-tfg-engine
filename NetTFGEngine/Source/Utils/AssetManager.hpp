@@ -7,6 +7,7 @@
 #include <any>
 #include <fstream>
 #include <vector>
+#include <memory>
 #include <cassert>
 #include <cstdint>
 #include <algorithm>
@@ -38,6 +39,11 @@ struct TextureID { GLuint value; };
 struct AudioBuffer { ALuint value; };
 struct ShaderSource {
     std::string code;
+};
+// The asset's file bytes, undecoded, for loaders that parse a format themselves (e.g. cube map faces decoded to float
+// by RenderSystem: the TextureID path goes through SOIL straight to an 8-bit, DXT-compressed texture).
+struct BlobData {
+    std::shared_ptr<const std::vector<uint8_t>> bytes;
 };
 
 

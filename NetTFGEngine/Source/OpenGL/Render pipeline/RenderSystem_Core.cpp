@@ -54,7 +54,9 @@ void RenderSystem::Init(int screenW, int screenH, int outputW, int outputH)
     CompileFSRShaders();
     CompileNISShader();
     CompileCopyShader();
+    CompileEnvironmentShaders();
     InitScreenQuad();
+    InitEnvironment();   // renders the BRDF LUT: needs the quad and the env shaders
 }
 
 void RenderSystem::Resize(int screenW, int screenH, int outputW, int outputH)
@@ -182,6 +184,14 @@ void RenderSystem::Update(EntityManager& entityManager,
         InitScreenSpace();
     }
 
+    // Lights first: the environment pass needs the directional light (sun halo in the sky, shadows in the captures).
+    // CollectLightsPass now handles both point lights and the directional light.
+    CollectLightsPass(entityManager);
+
+    // Sky / reflection probe maps, before anything that reads them (the GBuffer flags the env reflection for SSR).
+    // Only does work when they changed or captures are pending.
+    EnvironmentPass(entityManager, meshQuery);
+
     // The GBuffer only feeds SSAO/SSR/motion blur: with all of them off, skip the whole extra geometry pass.
     const bool screenSpace = rs.getSSAOEnabled() || rs.getSSREnabled() || rs.getMotionBlurEnabled();
     if (screenSpace) {
@@ -198,9 +208,6 @@ void RenderSystem::Update(EntityManager& entityManager,
     SSAOPass(projection);
     if (rs.getSSAOEnabled())
         DumpStage("ssao_buffer", StageImage::Grey, m_ssaoBlurTex, m_ssaoW, m_ssaoH);
-
-    // CollectLightsPass now handles both point lights and the directional light.
-    CollectLightsPass(entityManager);
 
     if (rs.getPointShadowsEnabled())
         ShadowPass(entityManager, meshQuery);   // point light cubemap shadows
@@ -363,6 +370,16 @@ void RenderSystem::ReleaseGPUResources()
     prog(m_bloomKawaseShader);
     prog(m_fxaaShader);
     prog(m_copyShader);
+    // Environment lighting
+    DeleteEnvironmentMaps();
+    DeleteSkyCubemap();
+    tex(m_envBrdfLUT);
+    fbo(m_envFBO);
+    buf(m_envProbeSSBO);
+    prog(m_envSkyShader);
+    prog(m_envPrefilterShader);
+    prog(m_envBrdfShader);
+    prog(m_envEquirectShader);
     // Bloom, LDR, AO fallback
     DeleteBloom();
     fbo(m_ldrFBO);

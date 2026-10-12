@@ -13,6 +13,13 @@ struct AudioSourceComponent : public IComponent {
     float gain = 1.0f;
     float pitch = 1.0f;
 
+    // Distance attenuation, in world units (AL_LINEAR_DISTANCE_CLAMPED, see AudioSystem): full gain up to
+    // referenceDistance, fading linearly to silence at maxDistance. rolloffFactor scales the slope (1 = reach 0 exactly
+    // at maxDistance, 0 = no attenuation). Read every tick, so they can change while the source plays.
+    float referenceDistance = 1.0f;
+    float maxDistance = 100.0f;
+    float rolloffFactor = 1.0f;
+
     AudioChannel channel = AudioChannel::SFX;
 
     ALuint source = 0;

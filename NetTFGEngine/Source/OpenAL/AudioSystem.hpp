@@ -5,6 +5,7 @@
 #include "ecs/ecs_common.hpp"
 #include "AudioComponents.hpp"
 #include "AudioChannels.hpp"
+#include "AudioOutput.hpp"
 
 #include "Utils/Debug/Debug.hpp"
 #include "Utils/AssetManager.hpp"
@@ -16,6 +17,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include <array>
 #include <vector>
 #include <cstdio>
 #include <cstring>
@@ -173,11 +175,12 @@ public:
             }
         }
 
-        // Create context (try HRTF attr first).
-        ALCint attrs[] = { ALC_HRTF_SOFT, ALC_TRUE, 0 };
-        ALCcontext* newContext = alcCreateContext(newDevice, attrs);
+        // Create context with the output mode from the settings (headphones HRTF, speakers...).
+        const AudioOutputMode outputMode = AudioOutputSettings::instance().GetMode();
+        const auto attrs = ContextAttribs(outputMode);
+        ALCcontext* newContext = alcCreateContext(newDevice, attrs.data());
         if (!newContext) {
-            Debug::Warning("AudioSystem") << "HRTF context creation failed on new device, falling back to normal context.\n";
+            Debug::Warning("AudioSystem") << "Context creation with output-mode attributes failed on new device, falling back to normal context.\n";
             newContext = alcCreateContext(newDevice, nullptr);
             if (!newContext) {
                 Debug::Error("AudioSystem") << "Failed to create context on new device\n";
@@ -198,9 +201,11 @@ public:
         context = newContext;
 
         // New context, same reasoning as initializeOpenAL() — see there.
-        alDistanceModel(AL_INVERSE_DISTANCE_CLAMPED);
+        alDistanceModel(AL_LINEAR_DISTANCE_CLAMPED);
 
         currentDeviceName = deviceName;
+        appliedOutputMode = outputMode;
+        logOutputState();
 
         musicVolume = savedMusicVolume; // restore BEFORE initMusicSource so AL_GAIN is correct
         initMusicSource();
@@ -316,18 +321,26 @@ public:
     void Update(EntityManager& entityManager,
         std::vector<EventEntry>&,
         bool,
-        float) override
+        float deltaTime) override
     {
 
         entityManager.acquireMutex();
 
-        // 0. CHECK FOR DEVICE CHANGES
-        if (HasDeviceChanged()) {
-            Debug::Info("AudioSystem") << "Default audio device changed (effective). Switching to it.\n";
-            // FIX: Pass entityManager so ChangeOutputDevice can save looping source
-            // offsets before shutdownOpenAL destroys the AL context.
-            SwitchToDefaultDevice(&entityManager);
+        // 0. CHECK FOR DEVICE CHANGES. Throttled: listing the devices makes OpenAL Soft probe every endpoint, too costly
+        // to do on every 60 Hz tick, and a plug/unplug noticed half a second later is fine.
+        deviceCheckTimer -= deltaTime;
+        if (deviceCheckTimer <= 0.0f) {
+            deviceCheckTimer = DEVICE_CHECK_INTERVAL;
+            if (HasDeviceChanged()) {
+                Debug::Info("AudioSystem") << "Default audio device changed (effective). Switching to it.\n";
+                // FIX: Pass entityManager so ChangeOutputDevice can save looping source
+                // offsets before shutdownOpenAL destroys the AL context.
+                SwitchToDefaultDevice(&entityManager);
+            }
         }
+
+        // 0b. OUTPUT MODE CHANGED IN THE SETTINGS (speakers/headphones...): reset the device in place.
+        applyOutputMode();
 
         // 1. REINITIALIZE AFTER DEVICE CHANGE (offsets/entities already restored by ChangeOutputDevice; section 4 re-initializes each source)
         if (needsReinit) {
@@ -417,6 +430,11 @@ public:
 
             glm::vec3 sp = t->getPosition();
 
+            // Attenuation from the component every tick (pool sources are shared, and the game may tune them live).
+            alSourcef(audio->source, AL_REFERENCE_DISTANCE, audio->referenceDistance);
+            alSourcef(audio->source, AL_MAX_DISTANCE, std::max(audio->maxDistance, audio->referenceDistance));
+            alSourcef(audio->source, AL_ROLLOFF_FACTOR, audio->rolloffFactor);
+
             float finalGain = audio->gain * channels.GetVolume(audio->channel);
             alSourcef(audio->source, AL_GAIN, finalGain);
             alSourcef(audio->source, AL_PITCH, audio->pitch);
@@ -473,9 +491,7 @@ public:
 
         alSourcei(ac.source, AL_BUFFER, ac.buffer);
         alSourcei(ac.source, AL_LOOPING, ac.loop ? AL_TRUE : AL_FALSE);
-        alSourcef(ac.source, AL_REFERENCE_DISTANCE, 5.0f);
-        alSourcef(ac.source, AL_MAX_DISTANCE, 50.0f);
-        alSourcef(ac.source, AL_ROLLOFF_FACTOR, 1.0f);
+        // Distance attenuation is applied from the component in Update(), before the source first plays.
 
         ac.initialized = true;
     }
@@ -583,6 +599,80 @@ private:
     std::string lastMusicFile;
     bool lastMusicLoop = true;
 
+    static constexpr float DEVICE_CHECK_INTERVAL = 0.5f;   // seconds
+    float deviceCheckTimer = 0.0f;
+
+    // Output mode the current device/context was opened or last reset with.
+    AudioOutputMode appliedOutputMode = AudioOutputMode::Auto;
+
+    // Device attributes for an output mode, zero-terminated. ALC_OUTPUT_MODE_SOFT picks the channel layout / stereo
+    // renderer; ALC_HRTF_SOFT is passed alongside for OpenAL Soft builds older than ALC_SOFT_output_mode.
+    // Implementations that know neither just ignore them.
+    static std::array<ALCint, 5> ContextAttribs(AudioOutputMode mode) {
+        ALCint hrtf = ALC_DONT_CARE_SOFT;
+        ALCint output = ALC_ANY_SOFT;
+        switch (mode) {
+        case AudioOutputMode::Headphones: hrtf = ALC_TRUE;  output = ALC_STEREO_HRTF_SOFT;  break;
+        case AudioOutputMode::Stereo:     hrtf = ALC_FALSE; output = ALC_STEREO_BASIC_SOFT; break;
+        case AudioOutputMode::Surround51: hrtf = ALC_FALSE; output = ALC_SURROUND_5_1_SOFT; break;
+        case AudioOutputMode::Surround71: hrtf = ALC_FALSE; output = ALC_SURROUND_7_1_SOFT; break;
+        default: break;   // Auto
+        }
+        return { ALC_HRTF_SOFT, hrtf, ALC_OUTPUT_MODE_SOFT, output, 0 };
+    }
+
+    // Applies a changed AudioOutputSettings mode with alcResetDeviceSOFT, which keeps the context, sources and buffers
+    // (and whatever is playing) alive. Without the extension the change only takes effect on the next device open.
+    void applyOutputMode() {
+        const AudioOutputMode wanted = AudioOutputSettings::instance().GetMode();
+        if (wanted == appliedOutputMode || !device) return;
+        appliedOutputMode = wanted;   // also on failure: don't retry every tick
+
+        auto resetDevice = alcIsExtensionPresent(device, "ALC_SOFT_HRTF")
+            ? reinterpret_cast<LPALCRESETDEVICESOFT>(alcGetProcAddress(device, "alcResetDeviceSOFT"))
+            : nullptr;
+        if (!resetDevice) {
+            Debug::Warning("AudioSystem") << "alcResetDeviceSOFT not available; output mode applies on the next device open.\n";
+            return;
+        }
+
+        const auto attrs = ContextAttribs(wanted);
+        if (!resetDevice(device, attrs.data())) {
+            Debug::Error("AudioSystem") << "alcResetDeviceSOFT failed for output mode " << static_cast<int>(wanted) << "\n";
+            return;
+        }
+        logOutputState();
+    }
+
+    // What the device actually ended up with: a requested layout or HRTF can be refused (e.g. 7.1 on a stereo endpoint).
+    void logOutputState() {
+        if (!device) return;
+
+        ALCint hrtfStatus = -1;
+        if (alcIsExtensionPresent(device, "ALC_SOFT_HRTF"))
+            alcGetIntegerv(device, ALC_HRTF_STATUS_SOFT, 1, &hrtfStatus);
+
+        ALCint outputMode = 0;
+        if (alcIsExtensionPresent(device, "ALC_SOFT_output_mode"))
+            alcGetIntegerv(device, ALC_OUTPUT_MODE_SOFT, 1, &outputMode);
+
+        const char* modeName = "unknown";
+        switch (outputMode) {
+        case ALC_MONO_SOFT:         modeName = "mono"; break;
+        case ALC_STEREO_BASIC_SOFT: modeName = "stereo (panning)"; break;
+        case ALC_STEREO_UHJ_SOFT:   modeName = "stereo (UHJ)"; break;
+        case ALC_STEREO_HRTF_SOFT:  modeName = "stereo (HRTF)"; break;
+        case ALC_QUAD_SOFT:         modeName = "quad"; break;
+        case ALC_SURROUND_5_1_SOFT: modeName = "5.1"; break;
+        case ALC_SURROUND_6_1_SOFT: modeName = "6.1"; break;
+        case ALC_SURROUND_7_1_SOFT: modeName = "7.1"; break;
+        default: break;
+        }
+
+        Debug::Info("AudioSystem") << "Output: " << modeName << ", HRTF status " << hrtfStatus
+            << " (requested mode " << static_cast<int>(appliedOutputMode) << ")\n";
+    }
+
     bool initializeOpenAL() {
         // Determine effective default device (first enumerated device if possible)
         std::string effectiveDefault = GetEffectiveDefaultDevice(); // uses enumeration or fallback
@@ -603,10 +693,11 @@ private:
             currentDeviceName = ds ? std::string(reinterpret_cast<const char*>(ds)) : std::string("OpenAL-Unknown");
         }
 
-        ALCint attrs[] = { ALC_HRTF_SOFT, ALC_TRUE, 0 };
-        context = alcCreateContext(device, attrs);
+        const AudioOutputMode outputMode = AudioOutputSettings::instance().GetMode();
+        const auto attrs = ContextAttribs(outputMode);
+        context = alcCreateContext(device, attrs.data());
         if (!context) {
-            Debug::Warning("AudioSystem") << "HRTF not available on this device, creating normal context.\n";
+            Debug::Warning("AudioSystem") << "Context creation with output-mode attributes failed, creating normal context.\n";
             context = alcCreateContext(device, nullptr);
             if (!context) {
                 Debug::Error("AudioSystem") << "Failed to create OpenAL context\n";
@@ -625,11 +716,13 @@ private:
             return false;
         }
 
-        // Explicit, matching what initializeSource()'s REFERENCE_DISTANCE/MAX_DISTANCE/ROLLOFF_FACTOR assume. Already the
-        // OpenAL default, so not a live bug fix: it just removes the dependency on that implicit default.
-        alDistanceModel(AL_INVERSE_DISTANCE_CLAMPED);
+        // Linear, not the inverse-distance default: inverse never reaches silence (past AL_MAX_DISTANCE it stays at
+        // ref/max, so everything far away sounded equally loud); linear fades to 0 at each source's maxDistance.
+        alDistanceModel(AL_LINEAR_DISTANCE_CLAMPED);
 
+        appliedOutputMode = outputMode;
         Debug::Info("AudioSystem") << "OpenAL initialized on device: " << currentDeviceName << "\n";
+        logOutputState();
         return true;
     }
 

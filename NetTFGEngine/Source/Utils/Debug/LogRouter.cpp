@@ -48,31 +48,17 @@ void LogRouter::Stop() {
 
 void LogRouter::SetProductName(const std::string& name) {
     UserDataPath::SetProductName(name);
-    const std::filesystem::path logsDir = UserDataPath::LogsDirectory();
-    if (logsDir.empty())
+    // One folder per run (logs/<time>_PID<pid>/), shared with the crash reports, so runs don't mix in one folder.
+    const std::filesystem::path sessionDir = UserDataPath::SessionLogsDirectory();
+    if (sessionDir.empty())
         return;
 
-    std::filesystem::create_directories(logsDir);
-    const std::string folder = (logsDir / "").string();
+    std::error_code ec;
+    std::filesystem::create_directories(sessionDir, ec);
+    if (ec)
+        return;
 
-    auto now = std::chrono::system_clock::now();
-    auto time = std::chrono::system_clock::to_time_t(now);
-    std::tm tm;
-#ifdef _WIN32
-    localtime_s(&tm, &time);
-#else
-    localtime_r(&time, &tm);
-#endif
-    std::stringstream timestamp;
-    timestamp << std::put_time(&tm, "%Y%m%d_%H%M%S");
-
-#ifdef _WIN32
-    DWORD pid = GetCurrentProcessId();
-#else
-    pid_t pid = getpid();
-#endif
-
-    logFilePath = folder + "engine_" + timestamp.str() + "_PID" + std::to_string(pid) + ".log";
+    logFilePath = (sessionDir / "engine.log").string();
 
     fileOutput.Open(logFilePath);
 }
