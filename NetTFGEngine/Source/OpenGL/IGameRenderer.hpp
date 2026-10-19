@@ -8,7 +8,7 @@
 class IGameRenderer {
 private:
 
-	IGameLogic* gameLogic;
+	IGameLogic* gameLogic = nullptr;
 
 public:
 

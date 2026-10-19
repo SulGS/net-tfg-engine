@@ -22,6 +22,7 @@
 
 #include "GameState.hpp"
 #include "Components.hpp"
+#include "ArenaLayout.hpp"
 #include "LogicSystems/InputMask.hpp"
 #include "LogicSystems/MatchStartSystem.hpp"
 #include "LogicSystems/InputSystem.hpp"
@@ -46,6 +47,7 @@
 #include "RenderSystems/DestroyTimerSystem.hpp"
 #include "RenderSystems/ShieldRenderSystem.hpp"
 #include "RenderSystems/AbilityHudSystem.hpp"
+#include "RenderSystems/PlayerNameTagSystem.hpp"
 #include "Explosion.hpp"
 #include "PauseMenu.hpp"
 #include "Events.hpp"
@@ -477,153 +479,60 @@ public:
         }
 
 
-        const int x_size = 5;
-        const int y_size = 5;
-
         auto& em = world.GetEntityManager();
 
+        // Arena geometry comes from ArenaLayout, shared with InitECSRenderer so both sides match one to one.
+        const ArenaLayout::Layout arena = ArenaLayout::Build();
+
         // Tiles
-        for (int x = 0; x < x_size; x++)
+        for (const auto& tile : arena.tiles)
         {
-            for (int y = 0; y < y_size; y++)
-            {
-                const int cellId = x * y_size + y;
-                Entity e = em.CreateEntity();
-                Transform* t = em.AddComponent<Transform>(e, Transform{});
-                t->setPosition(glm::vec3((x - x_size / 2.0f) * 80.0f,
-                    (y - y_size / 2.0f) * 80.0f, -4.0f));
-                t->setScale(glm::vec3(1.0f));
-                em.AddComponent<TileID>(e, TileID{ cellId });
-            }
+            Entity e = em.CreateEntity();
+            Transform* t = em.AddComponent<Transform>(e, Transform{});
+            t->setPosition(tile.pos);
+            t->setScale(glm::vec3(1.0f));
+            em.AddComponent<TileID>(e, TileID{ tile.cellId });
         }
 
         // Pillars (logic side — no mesh)
-        for (int px = 0; px <= 2 * x_size; px++)
+        for (const auto& pillar : arena.pillars)
         {
-            for (int py = 0; py <= 2 * y_size; py++)
-            {
-                const bool isTileCentre = (px % 2 == 1 && py % 2 == 1);
-
-                Entity e = em.CreateEntity();
-                Transform* t = em.AddComponent<Transform>(e, Transform{});
-                t->setPosition(glm::vec3((px - x_size) * 40.0f - 40.0f,
-                    (py - y_size) * 40.0f - 40.0f, -4.0f));
-                t->setRotation(glm::vec3(90.0f, 0.0f, 0.0f));
-                t->setScale(glm::vec3(1.0f));
-
-                PillarID pid;
-                if (isTileCentre)
-                {
-                    const int cx = (px - 1) / 2;
-                    const int cy = (py - 1) / 2;
-                    pid.addCell(cx * y_size + cy);
-                }
-                else
-                {
-                    const int cx_min = (px - 2) / 2;
-                    const int cx_max = px / 2;
-                    const int cy_min = (py - 2) / 2;
-                    const int cy_max = py / 2;
-
-                    for (int cx = std::max(cx_min, 0); cx <= std::min(cx_max, x_size - 1); cx++)
-                    {
-                        for (int cy = std::max(cy_min, 0); cy <= std::min(cy_max, y_size - 1); cy++)
-                        {
-                            const bool onBorderX = (px == 2 * cx || px == 2 * cx + 1 || px == 2 * cx + 2);
-                            const bool onBorderY = (py == 2 * cy || py == 2 * cy + 1 || py == 2 * cy + 2);
-                            if (onBorderX && onBorderY)
-                                pid.addCell(cx * y_size + cy);
-                        }
-                    }
-                }
-                em.AddComponent<PillarID>(e, pid);
-            }
+            Entity e = em.CreateEntity();
+            Transform* t = em.AddComponent<Transform>(e, Transform{});
+            t->setPosition(pillar.pos);
+            t->setRotation(glm::vec3(90.0f, 0.0f, 0.0f));
+            t->setScale(glm::vec3(1.0f));
+            em.AddComponent<PillarID>(e, pillar.id);
         }
 
-        // Walls: one logic entity per 40-unit pillar gap, i.e. per HALF of a cell side (each side borders two subtiles and
-        // each half toggles independently). Each half has its own state slot (EdgeWallSlot), so what collides on the
-        // server is exactly what is serialized and drawn.
         std::mt19937 initRng{ std::random_device{}() };
         std::uniform_real_distribution<float> initDist(3.0f, 30.0f);
 
-        std::vector<WallDef> walls;
+        // Walls and spokes kill a player on contact (server only: clients have no colliders).
+        auto onWallHit = [this](Entity self, Entity other, const CollisionInfo& info) {
+            Playable* play = this->world.GetEntityManager().GetComponent<Playable>(other);
+            if (!play) return; // only react to players
 
-        // Walls between horizontally adjacent pillars (px,py)→(px+1,py)
-        for (int px = 0; px < 2 * x_size; px++)
+            EventEntry deathEvent;
+            deathEvent.event.type = AsteroidEventMask::DEATH;
+            DeathEventData deathData;
+            deathData.playerId = play->playerId;
+            std::memcpy(deathEvent.event.data, &deathData, sizeof(DeathEventData));
+            deathEvent.event.len = sizeof(DeathEventData);
+            this->world.GetEvents().push_back(deathEvent);
+            };
+
+        // Walls: one logic entity per half cell side (see ArenaLayout); each half has its own state slot (EdgeWallSlot),
+        // so what collides on the server is exactly what is serialized and drawn.
+        for (const auto& w : arena.walls)
         {
-            for (int py = 0; py <= 2 * y_size; py++)
-            {
-                const float midX = ((px - x_size) * 40.0f - 40.0f + (px + 1 - x_size) * 40.0f - 40.0f) / 2.0f;
-                const float midY = (py - y_size) * 40.0f - 40.0f;
-
-                // An interior boundary matches TWO (cx,cy) combinations (one per side); edgeBuilt keeps only the first
-                // so each physical half-edge is exactly one entity, not two independently-toggled ones.
-                bool edgeBuilt = false;
-                for (int cx = 0; cx < x_size && !edgeBuilt; cx++)
-                {
-                    for (int cy = 0; cy < y_size && !edgeBuilt; cy++)
-                    {
-                        if (px < 2 * cx || px >= 2 * cx + 2) continue;
-                        if (py != 2 * cy && py != 2 * cy + 2) continue;
-
-                        const CellCardinalDirection dir = (py == 2 * cy)
-                            ? CellCardinalDirection::Down
-                            : CellCardinalDirection::Up;
-                        const bool onBorder = (py == 0) || (py == 2 * y_size);
-
-                        walls.push_back({ cx, cy, dir,
-                            glm::vec3(midX, midY, 0.0f),
-                            glm::vec3(0.0f, 90.0f, 0.0f),
-                            onBorder, px - 2 * cx });
-                        edgeBuilt = true;
-                    }
-                }
-            }
-        }
-
-        // Walls between vertically adjacent pillars (px,py)→(px,py+1)
-        for (int px = 0; px <= 2 * x_size; px++)
-        {
-            for (int py = 0; py < 2 * y_size; py++)
-            {
-                const float midX = (px - x_size) * 40.0f - 40.0f;
-                const float midY = ((py - y_size) * 40.0f - 40.0f + (py + 1 - y_size) * 40.0f - 40.0f) / 2.0f;
-
-                bool edgeBuilt = false; // same reasoning as the loop above
-                for (int cx = 0; cx < x_size && !edgeBuilt; cx++)
-                {
-                    for (int cy = 0; cy < y_size && !edgeBuilt; cy++)
-                    {
-                        if (py < 2 * cy || py >= 2 * cy + 2) continue;
-                        if (px != 2 * cx && px != 2 * cx + 2) continue;
-
-                        const CellCardinalDirection dir = (px == 2 * cx)
-                            ? CellCardinalDirection::Left
-                            : CellCardinalDirection::Right;
-                        const bool onBorder = (px == 0) || (px == 2 * x_size);
-
-                        walls.push_back({ cx, cy, dir,
-                            glm::vec3(midX, midY, 0.0f),
-                            glm::vec3(90.0f, 0.0f, 0.0f),
-                            onBorder, py - 2 * cy });
-                        edgeBuilt = true;
-                    }
-                }
-            }
-        }
-
-        // Spawn border/shared wall entities
-        for (auto& w : walls)
-        {
-            const int cellId = w.cellX * y_size + w.cellY;
-
             Entity e = em.CreateEntity();
             Transform* t = em.AddComponent<Transform>(e, Transform{});
             t->setPosition(w.pos);
             t->setRotation(w.rot);
             t->setScale(glm::vec3(2.0f, 2.0f, 19.0f));
 
-            LaserWallID lwid(cellId, w.dir, w.half);
+            LaserWallID lwid(ArenaLayout::CellId(w.cellX, w.cellY), w.dir, w.half);
             lwid.enabled = w.onBorder;
             lwid.timer = initDist(initRng);
             em.AddComponent<LaserWallID>(e, lwid);
@@ -639,95 +548,38 @@ public:
                 collider->isEnabled = w.onBorder;
                 collider->layer = CollisionLayer::WALL;
                 collider->collidesWith = CollisionLayer::PLAYER | CollisionLayer::BULLET;
-                collider->SetOnCollisionEnter([this](Entity self, Entity other, const CollisionInfo& info) {
-                    Playable* play = this->world.GetEntityManager().GetComponent<Playable>(other);
-                    if (!play) return; // only react to players
-
-                    EventEntry deathEvent;
-                    deathEvent.event.type = AsteroidEventMask::DEATH;
-                    DeathEventData deathData;
-                    deathData.playerId = play->playerId;
-                    std::memcpy(deathEvent.event.data, &deathData, sizeof(DeathEventData));
-                    deathEvent.event.len = sizeof(DeathEventData);
-                    this->world.GetEvents().push_back(deathEvent);
-                    });
+                collider->SetOnCollisionEnter(onWallHit);
             }
         }
 
         // Center spokes
-        for (int cx = 0; cx < x_size; cx++)
+        for (const auto& s : arena.spokes)
         {
-            for (int cy = 0; cy < y_size; cy++)
+            Entity e = em.CreateEntity();
+            Transform* t = em.AddComponent<Transform>(e, Transform{});
+            t->setPosition(s.pos);
+            t->setRotation(s.rot);
+            t->setScale(glm::vec3(2.0f, 2.0f, 19.0f));
+
+            LaserWallID lwid(s.cellId, s.dir);
+            lwid.enabled = false;
+            lwid.timer = initDist(initRng);
+            em.AddComponent<LaserWallID>(e, lwid);
+            em.AddComponent<CenterSpoke>(e, CenterSpoke{});
+
+            if (isServer)
             {
-                const float centerX = (2 * cx + 1 - x_size) * 40.0f - 40.0f;
-                const float centerY = (2 * cy + 1 - y_size) * 40.0f - 40.0f;
+                // Spokes run from the cell centre to an edge midpoint, so their
+                // orientation is the opposite of a border wall with the same dir:
+                // Down/Up spokes are wide along Y, Left/Right spokes are wide along X.
+                const bool wideX = (s.dir == CellCardinalDirection::Left || s.dir == CellCardinalDirection::Right);
+                glm::vec2 halfExtents = wideX ? glm::vec2(19.0f, 2.0f) : glm::vec2(2.0f, 19.0f);
 
-                auto makeSpoke = [&](CellCardinalDirection dir, glm::vec3 pos, glm::vec3 rot)
-                    {
-                        const int cellId = cx * y_size + cy;
-                        Entity e = em.CreateEntity();
-                        Transform* t = em.AddComponent<Transform>(e, Transform{});
-                        t->setPosition(pos);
-                        t->setRotation(rot);
-                        t->setScale(glm::vec3(2.0f, 2.0f, 19.0f));
-
-                        LaserWallID lwid(cellId, dir);
-                        lwid.enabled = false;
-                        lwid.timer = initDist(initRng);
-                        em.AddComponent<LaserWallID>(e, lwid);
-                        em.AddComponent<CenterSpoke>(e, CenterSpoke{});
-
-                        if (isServer)
-                        {
-                            // Spokes run from the cell centre to an edge midpoint, so their
-                            // orientation is the opposite of a border wall with the same dir:
-                            // Down/Up spokes are wide along Y, Left/Right spokes are wide along X.
-                            const bool wideX = (dir == CellCardinalDirection::Left || dir == CellCardinalDirection::Right);
-                            glm::vec2 halfExtents = wideX ? glm::vec2(19.0f, 2.0f) : glm::vec2(2.0f, 19.0f);
-
-                            BoxCollider2D* collider = em.AddComponent<BoxCollider2D>(e, BoxCollider2D{ halfExtents });
-                            collider->isEnabled = false;
-                            collider->layer = CollisionLayer::WALL;
-                            collider->collidesWith = CollisionLayer::PLAYER | CollisionLayer::BULLET;
-                            collider->SetOnCollisionEnter([this](Entity self, Entity other, const CollisionInfo& info) {
-                                Playable* play = this->world.GetEntityManager().GetComponent<Playable>(other);
-                                if (!play) return; // only react to players
-
-                                EventEntry deathEvent;
-                                deathEvent.event.type = AsteroidEventMask::DEATH;
-                                DeathEventData deathData;
-                                deathData.playerId = play->playerId;
-                                std::memcpy(deathEvent.event.data, &deathData, sizeof(DeathEventData));
-                                deathEvent.event.len = sizeof(DeathEventData);
-                                this->world.GetEvents().push_back(deathEvent);
-                                });
-                        }
-                    };
-
-                {
-                    const float edgeY = (2 * cy - y_size) * 40.0f - 40.0f;
-                    makeSpoke(CellCardinalDirection::Down,
-                        glm::vec3(centerX, (centerY + edgeY) / 2.0f, 0.0f),
-                        glm::vec3(90.0f, 0.0f, 0.0f));
-                }
-                {
-                    const float edgeY = (2 * cy + 2 - y_size) * 40.0f - 40.0f;
-                    makeSpoke(CellCardinalDirection::Up,
-                        glm::vec3(centerX, (centerY + edgeY) / 2.0f, 0.0f),
-                        glm::vec3(90.0f, 0.0f, 0.0f));
-                }
-                {
-                    const float edgeX = (2 * cx - x_size) * 40.0f - 40.0f;
-                    makeSpoke(CellCardinalDirection::Left,
-                        glm::vec3((centerX + edgeX) / 2.0f, centerY, 0.0f),
-                        glm::vec3(0.0f, 90.0f, 0.0f));
-                }
-                {
-                    const float edgeX = (2 * cx + 2 - x_size) * 40.0f - 40.0f;
-                    makeSpoke(CellCardinalDirection::Right,
-                        glm::vec3((centerX + edgeX) / 2.0f, centerY, 0.0f),
-                        glm::vec3(0.0f, 90.0f, 0.0f));
-                }
+                BoxCollider2D* collider = em.AddComponent<BoxCollider2D>(e, BoxCollider2D{ halfExtents });
+                collider->isEnabled = false;
+                collider->layer = CollisionLayer::WALL;
+                collider->collidesWith = CollisionLayer::PLAYER | CollisionLayer::BULLET;
+                collider->SetOnCollisionEnter(onWallHit);
             }
         }
 
@@ -1056,6 +908,13 @@ public:
 
 			world.GetEntityManager().AddComponent<JustDeathChecker>(player, JustDeathChecker{});
 
+            // Player name over the ship, filled and shown/hidden by PlayerNameTagSystem. Billboard above the ship on
+            // screen, whatever its heading; ~1 world unit is ~30 px at the follow camera's distance.
+            WorldText* nameTag = world.GetEntityManager().AddComponent<WorldText>(player, WorldText{ "", 0.8f });
+            nameTag->localOffset = glm::vec2(0.0f, 3.5f);
+            nameTag->SetColor(1.0f, 1.0f, 1.0f, 0.9f);
+            nameTag->visible = false;
+
             if (i == playerId)
             {
 				Entity listenerForShipEntity = world.GetEntityManager().CreateEntity();
@@ -1220,35 +1079,34 @@ public:
         lavaMesh->castShadows = false;
         world.GetEntityManager().AddComponent<FluidSurface>(lavaFloor, FluidSurface{});
 
-        const int x_size = 5;
-        const int y_size = 5;
         auto& em = world.GetEntityManager();
 
+        // Arena geometry comes from ArenaLayout, shared with InitECSLogic: every beam matches its logic entity one to one
+        // (same cellId, dir, half), so each reads exactly its own state slot (EdgeWallSlot).
+        const ArenaLayout::Layout arena = ArenaLayout::Build();
+
         // Tiles
-        for (int x = 0; x < x_size; ++x)
-            for (int y = 0; y < y_size; ++y)
-            {
-                const int cellId = x * y_size + y;
-                Entity e = em.CreateEntity();
-                Transform* t = em.AddComponent<Transform>(e, Transform{});
-                t->setPosition(glm::vec3((x - x_size / 2.0f) * 80.0f,
-                    (y - y_size / 2.0f) * 80.0f, -4.0f));
-                t->setScale(glm::vec3(1.0f));
-                em.AddComponent<TileID>(e, TileID{ cellId });
-                em.AddComponent<MeshComponent>(e, MeshComponent(new Mesh("tile.glb")));
-            }
+        for (const auto& tile : arena.tiles)
+        {
+            Entity e = em.CreateEntity();
+            Transform* t = em.AddComponent<Transform>(e, Transform{});
+            t->setPosition(tile.pos);
+            t->setScale(glm::vec3(1.0f));
+            em.AddComponent<TileID>(e, TileID{ tile.cellId });
+            em.AddComponent<MeshComponent>(e, MeshComponent(new Mesh("tile.glb")));
+        }
 
         // Reflection probes: one per cell, at ship height over its centre. Influence = the cell plus an 8-unit overlap
         // into the neighbours (they cross-fade there) and deep enough below to cover the tiles and the lava; parallax
         // proxy = the cell itself from the tile surface up, where the pillars and walls actually stand. Re-captured
         // around a tile when it drops out (ReflectionProbeRefreshSystem).
         {
-            constexpr float kCellHalf = 40.0f;
+            constexpr float kCellHalf = ArenaLayout::CELL_SIZE / 2.0f;
             constexpr float kBlend = 8.0f;
-            for (int cx = 0; cx < x_size; ++cx)
-                for (int cy = 0; cy < y_size; ++cy)
+            for (int cx = 0; cx < MAP_SIZE; ++cx)
+                for (int cy = 0; cy < MAP_SIZE; ++cy)
                 {
-                    const glm::vec2 c((2 * cx + 1 - x_size) * 40.0f - 40.0f, (2 * cy + 1 - y_size) * 40.0f - 40.0f);
+                    const glm::vec2 c = ArenaLayout::CellCentre(cx, cy);
                     Entity e = em.CreateEntity();
                     Transform* t = em.AddComponent<Transform>(e, Transform{});
                     t->setPosition(glm::vec3(c, 2.0f));
@@ -1264,91 +1122,16 @@ public:
         }
 
         // Pillars
-        for (int px = 0; px <= 2 * x_size; ++px)
-            for (int py = 0; py <= 2 * y_size; ++py)
-            {
-                const bool isTileCentre = (px % 2 == 1 && py % 2 == 1);
-
-                Entity e = em.CreateEntity();
-                Transform* t = em.AddComponent<Transform>(e, Transform{});
-                t->setPosition(glm::vec3((px - x_size) * 40.0f - 40.0f,
-                    (py - y_size) * 40.0f - 40.0f, -4.0f));
-                t->setRotation(glm::vec3(90.0f, 0.0f, 0.0f));
-                t->setScale(glm::vec3(1.0f));
-
-                PillarID pid;
-                if (isTileCentre)
-                {
-                    const int cx = (px - 1) / 2;
-                    const int cy = (py - 1) / 2;
-                    pid.addCell(cx * y_size + cy);
-                }
-                else
-                {
-                    const int cx_min = (px - 2) / 2;
-                    const int cx_max = px / 2;
-                    const int cy_min = (py - 2) / 2;
-                    const int cy_max = py / 2;
-                    for (int cx = std::max(cx_min, 0); cx <= std::min(cx_max, x_size - 1); ++cx)
-                        for (int cy = std::max(cy_min, 0); cy <= std::min(cy_max, y_size - 1); ++cy)
-                        {
-                            const bool onBorderX = (px == 2 * cx || px == 2 * cx + 1 || px == 2 * cx + 2);
-                            const bool onBorderY = (py == 2 * cy || py == 2 * cy + 1 || py == 2 * cy + 2);
-                            if (onBorderX && onBorderY)
-                                pid.addCell(cx * y_size + cy);
-                        }
-                }
-                em.AddComponent<PillarID>(e, pid);
-                em.AddComponent<MeshComponent>(e, MeshComponent(new Mesh("pilar.glb")));
-            }
-
-        // Walls: one beam per 40-unit pillar gap = one half of a cell side, matching the logic entities one to one
-        // (same cellId, dir, half), so each beam reads exactly its own state slot (EdgeWallSlot).
-        std::vector<WallDef> walls;
-
-        for (int px = 0; px < 2 * x_size; ++px)
-            for (int py = 0; py <= 2 * y_size; ++py)
-            {
-                const float midX = ((px - x_size) * 40.0f - 40.0f + (px + 1 - x_size) * 40.0f - 40.0f) / 2.0f;
-                const float midY = (py - y_size) * 40.0f - 40.0f;
-                // Interior boundary: keep only the first of the two matching
-                // (cx,cy) — see the matching comment in InitECSLogic.
-                bool edgeBuilt = false;
-                for (int cx = 0; cx < x_size && !edgeBuilt; ++cx)
-                    for (int cy = 0; cy < y_size && !edgeBuilt; ++cy)
-                    {
-                        if (px < 2 * cx || px >= 2 * cx + 2) continue;
-                        if (py != 2 * cy && py != 2 * cy + 2) continue;
-                        const CellCardinalDirection dir = (py == 2 * cy)
-                            ? CellCardinalDirection::Down : CellCardinalDirection::Up;
-                        const bool onBorder = (py == 0) || (py == 2 * y_size);
-                        walls.push_back({ cx, cy, dir,
-                            glm::vec3(midX, midY, 0.0f),
-                            glm::vec3(0.0f, 90.0f, 0.0f), onBorder, px - 2 * cx });
-                        edgeBuilt = true;
-                    }
-            }
-
-        for (int px = 0; px <= 2 * x_size; ++px)
-            for (int py = 0; py < 2 * y_size; ++py)
-            {
-                const float midX = (px - x_size) * 40.0f - 40.0f;
-                const float midY = ((py - y_size) * 40.0f - 40.0f + (py + 1 - y_size) * 40.0f - 40.0f) / 2.0f;
-                bool edgeBuilt = false; // same reasoning as the loop above
-                for (int cx = 0; cx < x_size && !edgeBuilt; ++cx)
-                    for (int cy = 0; cy < y_size && !edgeBuilt; ++cy)
-                    {
-                        if (py < 2 * cy || py >= 2 * cy + 2) continue;
-                        if (px != 2 * cx && px != 2 * cx + 2) continue;
-                        const CellCardinalDirection dir = (px == 2 * cx)
-                            ? CellCardinalDirection::Left : CellCardinalDirection::Right;
-                        const bool onBorder = (px == 0) || (px == 2 * x_size);
-                        walls.push_back({ cx, cy, dir,
-                            glm::vec3(midX, midY, 0.0f),
-                            glm::vec3(90.0f, 0.0f, 0.0f), onBorder, py - 2 * cy });
-                        edgeBuilt = true;
-                    }
-            }
+        for (const auto& pillar : arena.pillars)
+        {
+            Entity e = em.CreateEntity();
+            Transform* t = em.AddComponent<Transform>(e, Transform{});
+            t->setPosition(pillar.pos);
+            t->setRotation(glm::vec3(90.0f, 0.0f, 0.0f));
+            t->setScale(glm::vec3(1.0f));
+            em.AddComponent<PillarID>(e, pillar.id);
+            em.AddComponent<MeshComponent>(e, MeshComponent(new Mesh("pilar.glb")));
+        }
 
         // Beam mesh at its design scale: local Z spans +-20 world units so each end lands on a pillar axis (40 apart); radius 2,
         // tapering over the last 8 units to 0.9 so the ends hide inside the pillar (radius ~1.3). The taper is baked into
@@ -1371,15 +1154,14 @@ public:
                 return mat;
             };
 
-        for (auto& w : walls)
+        for (const auto& w : arena.walls)
         {
-            const int cellId = w.cellX * y_size + w.cellY;
             Entity e = em.CreateEntity();
             Transform* t = em.AddComponent<Transform>(e, Transform{});
             t->setPosition(w.pos);
             t->setRotation(w.rot);
             t->setScale(laserBeamScale);
-            LaserWallID lwid(cellId, w.dir, w.half);
+            LaserWallID lwid(ArenaLayout::CellId(w.cellX, w.cellY), w.dir, w.half);
             lwid.enabled = w.onBorder;
             em.AddComponent<LaserWallID>(e, lwid);
             em.AddComponent<LaserWallVisual>(e, LaserWallVisual{});
@@ -1390,49 +1172,23 @@ public:
         }
 
         // Center spokes
-        for (int cx = 0; cx < x_size; ++cx)
-            for (int cy = 0; cy < y_size; ++cy)
-            {
-                const float centerX = (2 * cx + 1 - x_size) * 40.0f - 40.0f;
-                const float centerY = (2 * cy + 1 - y_size) * 40.0f - 40.0f;
-                const int cellId = cx * y_size + cy;
-
-                auto makeSpoke = [&](CellCardinalDirection dir, glm::vec3 pos, glm::vec3 rot)
-                    {
-                        Entity e = em.CreateEntity();
-                        Transform* t = em.AddComponent<Transform>(e, Transform{});
-                        t->setPosition(pos);
-                        t->setRotation(rot);
-                        t->setScale(laserBeamScale);
-                        LaserWallID lwid(cellId, dir);
-                        lwid.enabled = false;
-                        em.AddComponent<LaserWallID>(e, lwid);
-                        em.AddComponent<CenterSpoke>(e, CenterSpoke{});
-                        em.AddComponent<LaserWallVisual>(e, LaserWallVisual{});
-                        MeshComponent* mc = em.AddComponent<MeshComponent>(e,
-                            MeshComponent(new Mesh(laserBeamMesh, makeLaserWallMaterial(pos))));
-                        mc->castShadows = false;
-                        mc->additive = true;
-                    };
-
-                const float edgeYdown = (2 * cy - y_size) * 40.0f - 40.0f;
-                const float edgeYup = (2 * cy + 2 - y_size) * 40.0f - 40.0f;
-                const float edgeXleft = (2 * cx - x_size) * 40.0f - 40.0f;
-                const float edgeXright = (2 * cx + 2 - x_size) * 40.0f - 40.0f;
-
-                makeSpoke(CellCardinalDirection::Down,
-                    glm::vec3(centerX, (centerY + edgeYdown) / 2.0f, 0.0f),
-                    glm::vec3(90.0f, 0.0f, 0.0f));
-                makeSpoke(CellCardinalDirection::Up,
-                    glm::vec3(centerX, (centerY + edgeYup) / 2.0f, 0.0f),
-                    glm::vec3(90.0f, 0.0f, 0.0f));
-                makeSpoke(CellCardinalDirection::Left,
-                    glm::vec3((centerX + edgeXleft) / 2.0f, centerY, 0.0f),
-                    glm::vec3(0.0f, 90.0f, 0.0f));
-                makeSpoke(CellCardinalDirection::Right,
-                    glm::vec3((centerX + edgeXright) / 2.0f, centerY, 0.0f),
-                    glm::vec3(0.0f, 90.0f, 0.0f));
-            }
+        for (const auto& s : arena.spokes)
+        {
+            Entity e = em.CreateEntity();
+            Transform* t = em.AddComponent<Transform>(e, Transform{});
+            t->setPosition(s.pos);
+            t->setRotation(s.rot);
+            t->setScale(laserBeamScale);
+            LaserWallID lwid(s.cellId, s.dir);
+            lwid.enabled = false;
+            em.AddComponent<LaserWallID>(e, lwid);
+            em.AddComponent<CenterSpoke>(e, CenterSpoke{});
+            em.AddComponent<LaserWallVisual>(e, LaserWallVisual{});
+            MeshComponent* mc = em.AddComponent<MeshComponent>(e,
+                MeshComponent(new Mesh(laserBeamMesh, makeLaserWallMaterial(s.pos))));
+            mc->castShadows = false;
+            mc->additive = true;
+        }
 
         // Render systems
         world.AddSystem(std::make_unique<CameraFollowSystem>());
@@ -1452,6 +1208,7 @@ public:
         world.AddSystem(std::make_unique<FluidAnimationSystem>());
         world.AddSystem(std::make_unique<DestroyTimerSystem>());
         world.AddSystem(std::make_unique<AbilityHudSystem>());
+        world.AddSystem(std::make_unique<PlayerNameTagSystem>());
         world.AddSystem(std::make_unique<PauseMenuSystem>());
 
         AudioManager::PlayMusic("lava_sound.wav", true);

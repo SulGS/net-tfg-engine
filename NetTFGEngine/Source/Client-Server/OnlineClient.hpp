@@ -65,6 +65,9 @@ public:
 			prediction_ = nullptr;
 		}
 
+        // The previous match's names would otherwise label this one's ships until the server sends the new list.
+        gameLogic_->SetPlayerNames({});
+
         cWindow_ = new ClientWindow(
             [this](GameStateBlob& state, OpenGLWindow* win) {
                 gameRenderer_->Init(state, win);
@@ -313,6 +316,9 @@ private:
                     stateReceived = true;
                     Debug::Info("OnlineClient") << "Received state update after reconnection\n";
                 }
+                else if (type == PACKET_PLAYER_NAMES) {
+                    HandlePlayerNames(data, len);
+                }
                 }, true);
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
@@ -337,6 +343,19 @@ private:
         }
 
         return true;
+    }
+
+    // Any phase: before the game starts (gameLogic_) or during it (moved into prediction_). Same object either way.
+    void HandlePlayerNames(const uint8_t* data, int len) {
+        std::map<int, std::string> names;
+        if (!net_.ParsePlayerNames(data, static_cast<size_t>(len), names)) {
+            return;
+        }
+        IGameLogic* logic = prediction_ ? prediction_->GetGameLogic() : gameLogic_.get();
+        if (logic) {
+            logic->SetPlayerNames(names);
+        }
+        Debug::Info("OnlineClient") << "Received " << names.size() << " player names\n";
     }
 
     bool HandleServerReject(const uint8_t* data, int len) {
@@ -393,6 +412,11 @@ private:
             if (!HandleGameStart(data, len, gameStarted)) {
                 return false;
             }
+            return true;
+        }
+
+        if (type == PACKET_PLAYER_NAMES) {
+            HandlePlayerNames(data, len);
             return true;
         }
 
@@ -557,6 +581,9 @@ private:
                 EventEntry event = net_.ParseEventEntryPacket(data, len);
                 prediction.OnServerEventUpdate(event);
             }
+        }
+        else if (type == PACKET_PLAYER_NAMES) {
+            HandlePlayerNames(data, len);
         }
         else if (type == PACKET_INPUT_DELAY) {
             InputDelayPacket packet = net_.ParseInputDelaySync(data, len);

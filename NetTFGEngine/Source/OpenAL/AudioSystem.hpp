@@ -247,7 +247,7 @@ public:
     {
         // Step 1: Acquire new buffer FIRST
         auto reqBuffer =
-            AssetManager::instance().loadAsset<AudioBuffer>(file);
+            AssetManager::instance().loadAsset<MusicBuffer>(file);
 
         if (!reqBuffer)
         {
@@ -271,7 +271,7 @@ public:
         {
             // Rollback
             alSourcei(musicSource, AL_BUFFER, musicBuffer);
-            AssetManager::instance().unloadAsset<AudioBuffer>(file);
+            AssetManager::instance().unloadAsset<MusicBuffer>(file);
 
             Debug::Error("AudioSystem")
                 << "Failed to bind music source: " << file << "\n";
@@ -281,7 +281,7 @@ public:
         // Step 3: Commit (safe point)
         if (musicBuffer != 0)
         {
-            AssetManager::instance().unloadAsset<AudioBuffer>(lastMusicFile);
+            AssetManager::instance().unloadAsset<MusicBuffer>(lastMusicFile);
         }
 
         musicBuffer = newBuffer;
@@ -439,8 +439,13 @@ public:
             alSourcef(audio->source, AL_GAIN, finalGain);
             alSourcef(audio->source, AL_PITCH, audio->pitch);
 
+            // alSourcePlay on a playing source restarts it from the top. A loop that the game keeps flagging `play` (to
+            // make sure it runs) only ever sounded its first tick's worth of samples, with a click at every restart.
             if (audio->play) {
-                alSourcePlay(audio->source);
+                ALint state;
+                alGetSourcei(audio->source, AL_SOURCE_STATE, &state);
+                if (!(audio->loop && state == AL_PLAYING))
+                    alSourcePlay(audio->source);
                 audio->play = false;
             }
 
@@ -736,7 +741,7 @@ private:
 
         // 2. Release music buffer via AssetManager (never delete manually!)
         if (!lastMusicFile.empty()) {
-            AssetManager::instance().unloadAsset<AudioBuffer>(lastMusicFile);
+            AssetManager::instance().unloadAsset<MusicBuffer>(lastMusicFile);
             lastMusicFile.clear();
             musicBuffer = 0;
         }
@@ -747,6 +752,7 @@ private:
         // 4. Flush all ALuint assets from AssetManager.
         // Required before context/device destruction so OpenAL doesn't see dangling buffers.
         AssetManager::instance().clearType<AudioBuffer>();
+        AssetManager::instance().clearType<MusicBuffer>();
 
         // 5. Destroy OpenAL context and device
         if (context) {
@@ -874,7 +880,9 @@ private:
 
 };
 
-ALuint loadWavALFromMemory(const uint8_t* data, size_t size)
+// keepStereo: leave a stereo file stereo (non-positional playback: music). Otherwise everything is downmixed to mono,
+// which positional sources need.
+ALuint loadWavALFromMemory(const uint8_t* data, size_t size, bool keepStereo = false)
 {
     drwav wav;
     if (!drwav_init_memory(&wav, data, size, nullptr))
@@ -898,7 +906,11 @@ ALuint loadWavALFromMemory(const uint8_t* data, size_t size)
     }
 
     // OpenAL ignores AL_POSITION/HRTF/attenuation for non-mono buffers, so downmix to mono for 3D spatialization.
-    if (channels == 2)
+    if (channels == 2 && keepStereo)
+    {
+        // Played as is, left/right kept.
+    }
+    else if (channels == 2)
     {
         std::vector<float> mono(static_cast<size_t>(totalFrames));
         for (size_t i = 0; i < static_cast<size_t>(totalFrames); ++i)
@@ -919,8 +931,8 @@ ALuint loadWavALFromMemory(const uint8_t* data, size_t size)
         Debug::Info("AudioSystem") << "Downmixed multichannel WAV to mono for 3D spatialization\n";
     }
 
-    // channels is guaranteed 1 after the downmix above
-    ALenum format = AL_FORMAT_MONO_FLOAT32;
+    // 1 after the downmix above, or 2 with keepStereo
+    const ALenum format = channels == 2 ? AL_FORMAT_STEREO_FLOAT32 : AL_FORMAT_MONO_FLOAT32;
 
     // AL errors are sticky until read: clear whatever an earlier, unrelated call left behind (another thread's alSource*
     // on a stale source, an alDeleteBuffers of a still-bound buffer...), or the check below blames this load for it.

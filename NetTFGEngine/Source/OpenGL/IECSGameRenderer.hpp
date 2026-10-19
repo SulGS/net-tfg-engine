@@ -21,6 +21,8 @@
 #include "ecs/UI/UIRenderSystem.hpp"
 #include "ecs/UI/UIUpdateSystem.hpp"
 #include "ecs/UI/UIScrollView.hpp"
+#include "ecs/UI/WorldText.hpp"
+#include "ecs/UI/WorldTextRenderSystem.hpp"
 #include "ecs/UI/DebugOverlay.hpp"
 #include "OpenAL/AudioManager.hpp"
 #include "Utils/Input.hpp"
@@ -55,6 +57,25 @@ protected:
 
     std::function<void(IECSGameLogic* logic, IECSGameRenderer* renderer)> renderDataTransferToLogicCallback;
 
+    // IGameLogic::GetPlayerNamesVersion last copied into this world's Playables; -1 forces a copy (new world).
+    int playerNamesVersion = -1;
+
+    // Player names aren't in the game state blob GameState_To_ECSWorld reads: copied from the logic, only when they change.
+    void SyncPlayerNames() {
+        IGameLogic* logic = GetGameLogic();
+        if (!logic) return;
+        const int version = logic->GetPlayerNamesVersion();
+        if (version == playerNamesVersion) return;
+        playerNamesVersion = version;   // read before the names: a change in between is just copied again next frame
+
+        const std::map<int, std::string> names = logic->GetPlayerNames();
+        auto query = world.GetEntityManager().CreateQuery<Playable>();
+        for (auto [entity, play] : query) {
+            auto it = names.find(play->playerId);
+            play->name = it != names.end() ? it->second : std::string();
+        }
+    }
+
 public:
 
     virtual void InitECSRenderer(const GameStateBlob& state, OpenGLWindow* window) = 0;
@@ -69,6 +90,7 @@ public:
     void Init(const GameStateBlob& state, OpenGLWindow* window) override {
         world.Reset();
         hasLastRenderTime = false;
+        playerNamesVersion = -1;
 
         world.GetEntityManager().RegisterComponentType<Transform>();
         world.GetEntityManager().RegisterComponentType<Playable>();
@@ -83,6 +105,7 @@ public:
 		world.GetEntityManager().RegisterComponentType<UISlider>();
 		world.GetEntityManager().RegisterComponentType<UIDropdown>();
 		UIScroll::Register(world.GetEntityManager());
+        world.GetEntityManager().RegisterComponentType<WorldText>();
 
         world.GetEntityManager().RegisterComponentType<DirectionalLightComponent>();
         world.GetEntityManager().RegisterComponentType<PointLightComponent>();
@@ -107,6 +130,7 @@ public:
         world.AddSystem(std::make_unique<CameraSystem>());
         world.AddSystem(std::make_unique<ParticleSystem>());
         world.AddSystem(std::make_unique<RenderSystem>());
+        world.AddSystem(std::make_unique<WorldTextRenderSystem>());   // over the 3D frame, under the UI
         world.AddSystem(std::make_unique<UIRenderSystem>(1920,1080));
 
         AudioManager::SetEntityManager(&world.GetEntityManager());
@@ -122,6 +146,7 @@ public:
 
 
         UIRenderSystem* uir = world.GetSystem<UIRenderSystem>();
+        world.GetSystem<WorldTextRenderSystem>()->SetFontManager(uir->GetFontManager());
 
         world.AddSystem(std::make_unique<UIUpdateSystem>(1920, 1080, window->getWindow(), uir->GetFontManager()));
 
@@ -153,6 +178,7 @@ public:
         em.acquireMutex();
 
         GameState_To_ECSWorld(state);
+        SyncPlayerNames();
 
         RenderSystem* renderSys = world.GetSystem<RenderSystem>();
 
@@ -201,14 +227,21 @@ public:
 			}
 		}
 
+        // The callback reads/writes BOTH worlds, so it runs under both mutexes, always taken in this order (renderer, then
+        // logic; nothing takes them the other way round). Unlocked it raced the game tick and the network thread's
+        // rollbacks, which create/destroy logic entities (activeEntities resized and component maps rehashed mid-query),
+        // and the audio thread on the renderer world.
+        if (renderDataTransferToLogicCallback) {
+            IECSGameLogic* logic = dynamic_cast<IECSGameLogic*>(GetGameLogic());
+            if (logic) {
+                auto logicLock = logic->world.GetEntityManager().Lock();
+                renderDataTransferToLogicCallback(logic, this);
+            }
+        }
+
         em.releaseMutex();
 
         auto t2 = std::chrono::high_resolution_clock::now();
-
-        if (renderDataTransferToLogicCallback) {
-            IECSGameLogic* logic = static_cast<IECSGameLogic*>(GetGameLogic());
-            renderDataTransferToLogicCallback(logic, this);
-        }
 
         frameCount++;
 

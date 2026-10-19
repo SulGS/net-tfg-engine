@@ -780,6 +780,23 @@ private:
             }
         );
 
+        AssetManager::instance().registerType<MusicBuffer>(
+            // Loader: keeps stereo (music isn't positioned, so nothing gains from the mono downmix)
+            [](const uint8_t* data, size_t size) -> MusicBuffer
+            {
+                MusicBuffer buffer;
+                buffer.value = loadWavALFromMemory(data, size, true);
+                return buffer;
+            },
+
+            // Destroyer
+            [](MusicBuffer buffer)
+            {
+                if (buffer.value != 0)
+                    alDeleteBuffers(1, &(buffer.value));
+            }
+        );
+
         AssetManager::instance().registerType<TextureID>(
             [](const uint8_t* data, size_t size) -> TextureID
             {

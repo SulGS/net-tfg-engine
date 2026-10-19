@@ -17,6 +17,7 @@
 #include <atomic>
 #include <cstdint>
 #include <algorithm>
+#include <string>
 #include <openssl/sha.h>
 
 #if defined(_WIN32) || defined(_WIN64)
@@ -89,7 +90,9 @@ enum PacketType : uint8_t {
     PACKET_INPUT_ACK = 0x05,
     PACKET_INPUT_DELAY = 0x06,
 	PACKET_DELTA_STATE_UPDATE = 0x07,
-	PACKET_EVENT_UPDATE = 0x08
+	PACKET_EVENT_UPDATE = 0x08,
+	// playerId -> display name of every player that joined, see IGameLogic::SetPlayerNames and GNSSession::SendPlayerNames.
+	PACKET_PLAYER_NAMES = 0x09
 };
 
 struct HashPacket {
@@ -179,6 +182,36 @@ public:
 
     // Releases AssetManager-backed resources held by this logic's components; must run before the owning Client's asset bin is unloaded.
     virtual void ReleaseECSAssets() {}
+
+    // Display name of each player by player id: the client id it joined with (the nickname under matchmaking). Not
+    // simulation state (never in a GameStateBlob, so no deltas, hashes or rollbacks involved): the server sends it apart,
+    // in PACKET_PLAYER_NAMES, whenever a player joins or reconnects. IECSGameLogic copies it into Playable::name.
+    // Written from the network thread, read from the tick and render threads.
+    void SetPlayerNames(const std::map<int, std::string>& names) {
+        {
+            std::lock_guard<std::mutex> lock(playerNamesMutex_);
+            playerNames_ = names;
+            playerNamesVersion_++;
+        }
+        OnPlayerNamesChanged();
+    }
+
+    std::map<int, std::string> GetPlayerNames() const {
+        std::lock_guard<std::mutex> lock(playerNamesMutex_);
+        return playerNames_;
+    }
+
+    // Bumped by every SetPlayerNames, so a reader (the renderer, every frame) can tell its copy is stale without copying the map.
+    int GetPlayerNamesVersion() const { return playerNamesVersion_.load(); }
+
+protected:
+    // Called after SetPlayerNames stores the new names, outside playerNamesMutex_.
+    virtual void OnPlayerNamesChanged() {}
+
+private:
+    mutable std::mutex playerNamesMutex_;
+    std::map<int, std::string> playerNames_;
+    std::atomic<int> playerNamesVersion_{ 0 };
 };
 
 struct StateUpdate {
@@ -200,11 +233,11 @@ using EventsHistory = std::map<int, std::vector<EventEntry>>;
 // GameNetworkingSockets connection wrapper
 // Replaces ENetPeer with HSteamNetConnection
 struct PeerInfo {
-    HSteamNetConnection connection;  // GameNetworkingSockets handle
-    int playerId;
+    HSteamNetConnection connection = k_HSteamNetConnection_Invalid;  // GameNetworkingSockets handle
+    int playerId = -1;
     int lastAckedFrame = -1;
     std::string clientId;
-    bool isConnected;
+    bool isConnected = false;
 	bool pendingReceiveFullState = true;
     std::chrono::steady_clock::time_point disconnectTime;
 };

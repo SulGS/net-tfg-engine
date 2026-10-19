@@ -552,6 +552,63 @@ public:
 	}
 
 
+    // Layout: type, count (u8), then per player: playerId (u32 BE), name length (u8), name bytes (no terminator).
+    static constexpr size_t MAX_PLAYER_NAME_BYTES = 63;   // same bound as a client id (ClientHelloPacket::clientId)
+
+    void SendPlayerNames(HSteamNetConnection conn, const std::map<int, std::string>& names) {
+        if (!sockets || conn == k_HSteamNetConnection_Invalid) return;
+
+        std::vector<uint8_t> buf;
+        buf.push_back(PACKET_PLAYER_NAMES);
+        buf.push_back(0);   // count, patched below
+
+        uint8_t count = 0;
+        for (const auto& [playerId, name] : names) {
+            if (count == UINT8_MAX) break;
+            const size_t len = std::min(name.size(), MAX_PLAYER_NAME_BYTES);
+            uint32_t pid = hostToBigEndian32(static_cast<uint32_t>(playerId));
+            const uint8_t* pidBytes = reinterpret_cast<const uint8_t*>(&pid);
+            buf.insert(buf.end(), pidBytes, pidBytes + 4);
+            buf.push_back(static_cast<uint8_t>(len));
+            buf.insert(buf.end(), name.begin(), name.begin() + len);
+            count++;
+        }
+        buf[1] = count;
+
+        sockets->SendMessageToConnection(conn, buf.data(), static_cast<uint32_t>(buf.size()), k_nSteamNetworkingSend_Reliable, nullptr);
+    }
+
+    // False (and names left empty) on a malformed packet: every entry is bounds-checked against len.
+    bool ParsePlayerNames(const uint8_t* buf, size_t len, std::map<int, std::string>& names) {
+        names.clear();
+        if (len < 2 || buf[0] != PACKET_PLAYER_NAMES) {
+            Debug::Error("Sockets") << "Player names packet too short\n";
+            return false;
+        }
+
+        const uint8_t count = buf[1];
+        size_t offset = 2;
+        for (uint8_t i = 0; i < count; i++) {
+            if (offset + 5 > len) {
+                names.clear();
+                Debug::Error("Sockets") << "Player names packet truncated\n";
+                return false;
+            }
+            uint32_t pid = 0;
+            std::memcpy(&pid, buf + offset, 4);
+            offset += 4;
+            const size_t nameLen = buf[offset++];
+            if (nameLen > MAX_PLAYER_NAME_BYTES || offset + nameLen > len) {
+                names.clear();
+                Debug::Error("Sockets") << "Player names packet truncated\n";
+                return false;
+            }
+            names[static_cast<int>(bigEndianToHost32(pid))] = std::string(reinterpret_cast<const char*>(buf + offset), nameLen);
+            offset += nameLen;
+        }
+        return true;
+    }
+
     void BroadcastGameStart(HSteamNetConnection conn, int playerId) {
         if (!sockets || conn == k_HSteamNetConnection_Invalid) return;
 

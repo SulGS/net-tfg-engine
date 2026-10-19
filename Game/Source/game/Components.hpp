@@ -359,6 +359,10 @@ public:
 class ThrusterSound : public IComponent {
 public:
 	int shipEntity;
+	// Smoothed engine drivers, 0..1 (speed can pass 1 during propulsion). Maintained by ThrustersSoundSystem.
+	float throttle = 0.0f;
+	float speedNorm = 0.0f;
+	float aliveFade = 0.0f;   // ramps the whole engine in on spawn and out on death, no hard cut
 	ThrusterSound() : shipEntity(-1) {}
 	ThrusterSound(int se) : shipEntity(se) {}
 };

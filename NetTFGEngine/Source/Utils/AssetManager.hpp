@@ -36,7 +36,10 @@ struct BinData {
 };
 
 struct TextureID { GLuint value; };
-struct AudioBuffer { ALuint value; };
+struct AudioBuffer { ALuint value; };   // mono (downmixed): for positional sources
+// Same WAV with its channels kept (mono or stereo): for non-positional playback such as music. A separate type, so a
+// file can be loaded both ways without one handle overwriting the other.
+struct MusicBuffer { ALuint value; };
 struct ShaderSource {
     std::string code;
 };
@@ -251,7 +254,7 @@ public:
 
         Handle h = std::any_cast<Handle>(anyHandle);
 
-        if constexpr (std::is_same_v<Handle, AudioBuffer>)
+        if constexpr (std::is_same_v<Handle, AudioBuffer> || std::is_same_v<Handle, MusicBuffer>)
         {
             if (h.value == 0)
             {

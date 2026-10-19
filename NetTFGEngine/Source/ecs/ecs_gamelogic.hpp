@@ -72,7 +72,30 @@ public:
 
     virtual void InitECSLogic(GameStateBlob& state) = 0;
 
+    // Copies the names from SetPlayerNames into every Playable (empty for a player without one). Caller holds the EM lock.
+    void ApplyPlayerNames() {
+        const std::map<int, std::string> names = GetPlayerNames();
+        auto query = world.GetEntityManager().CreateQuery<Playable>();
+        for (auto [entity, play] : query) {
+            auto it = names.find(play->playerId);
+            play->name = it != names.end() ? it->second : std::string();
+        }
+    }
+
+protected:
+    // Network thread (client) or server network thread: the world may be mid-tick, hence the lock.
+    void OnPlayerNamesChanged() override {
+        auto lock = world.GetEntityManager().Lock();
+        ApplyPlayerNames();
+    }
+
+public:
+
+    // Every entry point that reads or writes the world holds its EntityManager mutex for the whole call: besides the thread
+    // that simulates (game tick, or the network thread during a rollback), the render thread reaches this world through
+    // IECSGameRenderer's renderDataTransferToLogicCallback.
     void Init(GameStateBlob& state) override {
+        auto lock = world.GetEntityManager().Lock();
         world.Reset();
         lastKnownInput.clear();
 
@@ -96,26 +119,32 @@ public:
         world.AddSystem(std::make_unique<DestroyingSystem>());
 
         InitECSLogic(state);
+
+        // Names set before this Init (they usually arrive before the match starts) go onto the Playables just created.
+        ApplyPlayerNames();
     }
 
     // Destroys every component in this world, which drops any AssetManager
     // ref-counts they hold (see ecs.hpp EntityManager::Reset). Safe to call
     // again from the next Init(), which resets the world unconditionally.
     void ReleaseECSAssets() override {
+        auto lock = world.GetEntityManager().Lock();
         world.Reset();
     }
 
 	void Synchronize(GameStateBlob& state) override {
+		auto lock = world.GetEntityManager().Lock();
 		GameState_To_ECSWorld(state);
 	}
 
     void SimulateFrame(GameStateBlob& state, std::vector<EventEntry> events, std::map<int, InputEntry> inputs) override {
+        // Taken before the first read of the world (prevState), not just around Update.
+        auto lock = world.GetEntityManager().Lock();
+
         GameStateBlob prevState;
         ECSWorld_To_GameState(prevState);
         this->generatedEvents.clear();
 		this->generatedDeltas.clear();
-
-		world.GetEntityManager().acquireMutex();
 
         ProcessEvents(events);
 		ProcessInputs(inputs);
@@ -129,8 +158,6 @@ public:
             world.ClearEvents();
             GenerateDeltas(prevState, state);
         }
-
-		world.GetEntityManager().releaseMutex();
     }
 };
 

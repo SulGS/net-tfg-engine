@@ -96,7 +96,10 @@ public:
                         {
                             if (pl2->playerId == spectator->watchedPlayerId)
                             {
-                                watchedName = "Player " + std::to_string(spectator->watchedPlayerId + 1);
+                                // The player's name (Playable::name, from the server); the slot number until it's known.
+                                watchedName = !pl2->name.empty()
+                                    ? pl2->name
+                                    : "Player " + std::to_string(spectator->watchedPlayerId + 1);
                                 break;
                             }
                         }

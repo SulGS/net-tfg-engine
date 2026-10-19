@@ -16,6 +16,9 @@
 #include <algorithm>
 #include <functional>
 #include <optional>
+#include <atomic>
+#include <mutex>
+#include <thread>
 
 #include <string>
 #include <sstream>
@@ -119,10 +122,14 @@ private:
     GNSSession net_;
     ServerNetcode server_;
     ServerConfig config_;
+    // Once the game loop runs, the network thread (ServerNetworkThread) and the tick loop (RunServerLoop) both read and
+    // modify peerInfo_, allPlayers_ and pendingReconnections_: every access from then on holds peersMutex_. Lock order is
+    // peersMutex_ -> ServerNetcode's mutex (never the other way round).
+    std::mutex peersMutex_;
     std::map<HSteamNetConnection, PeerInfo> peerInfo_;
     std::vector<PeerInfo> allPlayers_;
-    bool running_;
-    size_t activePlayerCount_;
+    std::atomic<bool> running_;
+    std::atomic<size_t> activePlayerCount_;
     std::set<int> pendingReconnections_;
 
     std::vector<long long> tickDurations_;
@@ -151,6 +158,28 @@ private:
         if (sockets) {
             sockets->SendMessageToConnection(conn, &accept,
                 sizeof(accept), k_nSteamNetworkingSend_Reliable, nullptr);
+        }
+    }
+
+    // Every player that ever joined keeps its name (and slot) while disconnected, so its ship stays labelled.
+    std::map<int, std::string> CollectPlayerNames() const {
+        std::map<int, std::string> names;
+        for (const PeerInfo& p : allPlayers_) {
+            names[p.playerId] = p.clientId;
+        }
+        return names;
+    }
+
+    // Into the server's own logic (Playable::name) and out to every connected client. Called on each accept, so a
+    // (re)joining client gets the full list and the others learn the newcomer's name. Sent after the accept on the
+    // same reliable connection, so it never overtakes it.
+    void BroadcastPlayerNames() {
+        const std::map<int, std::string> names = CollectPlayerNames();
+        server_.GetGameLogic()->SetPlayerNames(names);
+        for (const auto& [conn, info] : peerInfo_) {
+            if (info.isConnected) {
+                net_.SendPlayerNames(conn, names);
+            }
         }
     }
 
@@ -212,6 +241,7 @@ private:
             << " (" << clientId << ") joined mid-game\n";
 
         SendServerAccept(conn, info.playerId, false);
+        BroadcastPlayerNames();
         // Only now: the tick loop sends the full state as soon as it sees this, and it must not overtake the accept.
         peerInfo_[conn].pendingReceiveFullState = true;
         activePlayerCount_++;
@@ -249,13 +279,14 @@ private:
             << ") reconnected after " << elapsed.count() << "s\n";
 
         SendServerAccept(conn, playerInfo->playerId, true);
+        BroadcastPlayerNames();
         server_.OnPlayerReconnected(playerInfo->playerId);   // back to real input (see ServerNetcode::SimulateFrame)
         peerInfo_[conn].pendingReceiveFullState = true;       // sent by the tick loop, see the CLIENT_HELLO reconnection path
 
         return true;
     }
 
-    void HandleInputPacket(HSteamNetConnection conn, const uint8_t* data, int len) {
+    void HandleInputPacket(const PeerInfo& sender, const uint8_t* data, int len) {
         const size_t EXPECTED_MIN_LEN = 1 + 4 + 4 + sizeof(InputBlob);
         if (len < EXPECTED_MIN_LEN) {
             Debug::Info("Server") << "[SERVER] Malformed input packet, len=" << len << "\n";
@@ -264,7 +295,7 @@ private:
 
         InputEntry ie = net_.ParseInputEntryPacket(data, len);
 
-		ie.playerId = peerInfo_[conn].playerId;
+		ie.playerId = sender.playerId;
 
         if (ie.frame < server_.GetCurrentFrame())
         {
@@ -313,14 +344,23 @@ private:
 
         uint8_t type = data[0];
 
-        if (type == PACKET_INPUT) {
-            HandleInputPacket(conn, data, len);
-            return;
-        }
-
         if (type == PACKET_CLIENT_HELLO) {
             Debug::Info("Server") << "Received CLIENT_HELLO during game, len=" << len << "\n";
             HandleClientHelloDuringGame(conn, data, len);
+            return;
+        }
+
+        // Every other packet needs a connection that passed CLIENT_HELLO (id + player key). GNS accepts any incoming
+        // connection, and peerInfo_[conn] on an unknown one inserted a zeroed PeerInfo: playerId 0, so anyone could
+        // drive player 0's ship without a key, and closing that connection then disconnected the real player 0.
+        auto peerIt = peerInfo_.find(conn);
+        if (peerIt == peerInfo_.end() || !peerIt->second.isConnected) {
+            return;
+        }
+        PeerInfo& sender = peerIt->second;
+
+        if (type == PACKET_INPUT) {
+            HandleInputPacket(sender, data, len);
             return;
         }
 
@@ -346,9 +386,9 @@ private:
 
             if (!match) 
             {
-				peerInfo_[conn].pendingReceiveFullState = true;
+				sender.pendingReceiveFullState = true;
 				Debug::Info("Server") << "[SERVER] Hash mismatch from player "
-					<< peerInfo_[conn].playerId << " at frame " << packet.frame << "\n";
+					<< sender.playerId << " at frame " << packet.frame << "\n";
 
 				Debug::Info("Server") << "Received hash: " << HashToString(packet.hash) << " Server hash: " << HashToString(computedHash) << "\n";
             }
@@ -394,10 +434,12 @@ private:
         }
 
         peerInfo_.erase(it);
-        activePlayerCount_--;
+        if (activePlayerCount_ > 0) {
+            activePlayerCount_--;
+        }
 
         if (config_.stopOnBelowMin && activePlayerCount_ < config_.minPlayers) {
-            Debug::Info("Server") << "Not enough active clients (" << activePlayerCount_
+            Debug::Info("Server") << "Not enough active clients (" << activePlayerCount_.load()
                 << " < " << config_.minPlayers << "). Stopping server.\n";
             running_ = false;
         }
@@ -492,6 +534,7 @@ private:
                 << elapsed.count() << "s\n";
 
             SendServerAccept(conn, existingPlayer->playerId, true);
+            BroadcastPlayerNames();
             server_.OnPlayerReconnected(existingPlayer->playerId);   // back to real input (see ServerNetcode::SimulateFrame)
 
             // The full state goes out from the tick loop (RunServerLoop), not from here: this runs on the network thread,
@@ -527,6 +570,7 @@ private:
             << config_.maxPlayers << "\n";
 
         SendServerAccept(conn, info.playerId, false);
+        BroadcastPlayerNames();
 
         if (peerInfo_.size() == config_.minPlayers) {
             Debug::Info("Server") << "Minimum players reached. Game will start.\n";
@@ -594,35 +638,39 @@ private:
         while (running.load()) {
             net_.PumpCallbacks();  // CRITICAL: process connection state changes
 
-            // Server mutex protects shared state
-            net_.Poll([&](const uint8_t* data, int len, HSteamNetConnection conn) {
-                HandleReceiveEventInGame(conn, data, len);
-                }, false);
+            {
+                // The handlers below insert/erase peers while RunServerLoop iterates them on the tick thread.
+                std::lock_guard<std::mutex> lock(peersMutex_);
 
-            ISteamNetworkingSockets* sockets = net_.GetSockets();
-            std::vector<HSteamNetConnection> toRemove;
+                net_.Poll([&](const uint8_t* data, int len, HSteamNetConnection conn) {
+                    HandleReceiveEventInGame(conn, data, len);
+                    }, false);
 
-            for (auto& [conn, info] : peerInfo_) {
-                SteamNetConnectionInfo_t connInfo;
-                // An unknown handle counts as gone too: GNSSession closes the handle itself as
-                // soon as the peer drops (ClosedByPeer/ProblemDetectedLocally), so by now
-                // GetConnectionInfo usually fails rather than reporting those states.
-                if (!sockets->GetConnectionInfo(conn, &connInfo) ||
-                    connInfo.m_eState == k_ESteamNetworkingConnectionState_ClosedByPeer ||
-                    connInfo.m_eState == k_ESteamNetworkingConnectionState_ProblemDetectedLocally ||
-                    connInfo.m_eState == k_ESteamNetworkingConnectionState_Dead) {
-                    toRemove.push_back(conn);
+                ISteamNetworkingSockets* sockets = net_.GetSockets();
+                std::vector<HSteamNetConnection> toRemove;
+
+                for (auto& [conn, info] : peerInfo_) {
+                    SteamNetConnectionInfo_t connInfo;
+                    // An unknown handle counts as gone too: GNSSession closes the handle itself as
+                    // soon as the peer drops (ClosedByPeer/ProblemDetectedLocally), so by now
+                    // GetConnectionInfo usually fails rather than reporting those states.
+                    if (!sockets->GetConnectionInfo(conn, &connInfo) ||
+                        connInfo.m_eState == k_ESteamNetworkingConnectionState_ClosedByPeer ||
+                        connInfo.m_eState == k_ESteamNetworkingConnectionState_ProblemDetectedLocally ||
+                        connInfo.m_eState == k_ESteamNetworkingConnectionState_Dead) {
+                        toRemove.push_back(conn);
+                    }
+                }
+
+                for (auto conn : toRemove) {
+                    int pID = HandleDisconnectInGame(conn);
+                    if (pID == -1)
+                        continue;
+                    server_.OnPlayerDisconnected(pID);
                 }
             }
 
-            for (auto conn : toRemove) {
-                int pID = HandleDisconnectInGame(conn);
-				if (pID == -1)
-					continue;
-                server_.OnPlayerDisconnected(pID);
-            }
-
-            // Small sleep to prevent busy-waiting
+            // Small sleep to prevent busy-waiting (outside the lock, so the tick loop gets its turn)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
@@ -645,59 +693,64 @@ private:
 
             StateUpdate update = server_.Tick();
 
-            for (auto& [conn, info] : peerInfo_) {
-                if (!info.isConnected) {
-                    continue;
-                }
-                if (pendingReconnections_.find(info.playerId) != pendingReconnections_.end()) {
-                    server_.OnPlayerReconnected(info.playerId);
-                    pendingReconnections_.erase(info.playerId);
-                }
-            }
+            {
+                // Held while walking peerInfo_: the network thread inserts/erases peers (hello, disconnect) concurrently.
+                std::lock_guard<std::mutex> peersLock(peersMutex_);
 
-            std::vector<EventEntry> generatedEvents;
-            server_.GetGameLogic()->GetGeneratedEvents(generatedEvents);
-
-            // Full states go out first, ahead of this tick's events and deltas. The state is frame N, and this tick's
-            // events are stamped N (applied when frame N is simulated, so they aren't in the state yet). A client waiting
-            // for a state after (re)connecting drops every packet before it, so nothing that follows the state may precede it.
-            std::set<HSteamNetConnection> sentFullState;
-            for (auto& [conn, info] : peerInfo_) {
-                if (!info.isConnected || !info.pendingReceiveFullState) {
-                    continue;
-                }
-                if (pendingReconnections_.find(info.playerId) == pendingReconnections_.end()) {
-                    info.pendingReceiveFullState = false;
-                    net_.SendStateUpdate(conn, update);
-                    sentFullState.insert(conn);
-                }
-            }
-
-            for (auto event : generatedEvents) {
                 for (auto& [conn, info] : peerInfo_) {
                     if (!info.isConnected) {
                         continue;
                     }
-                    if (pendingReconnections_.find(info.playerId) == pendingReconnections_.end()) {
-                        net_.SendEventUpdate(conn, event);
+                    if (pendingReconnections_.find(info.playerId) != pendingReconnections_.end()) {
+                        server_.OnPlayerReconnected(info.playerId);
+                        pendingReconnections_.erase(info.playerId);
                     }
                 }
-            }
 
-            std::vector<DeltaStateBlob> generatedDeltas;
-            server_.GetGameLogic()->GetGeneratedDeltas(generatedDeltas);
+                std::vector<EventEntry> generatedEvents;
+                server_.GetGameLogic()->GetGeneratedEvents(generatedEvents);
 
-
-            for (auto& [conn, info] : peerInfo_) {
-                if (!info.isConnected) {
-                    continue;
+                // Full states go out first, ahead of this tick's events and deltas. The state is frame N, and this tick's
+                // events are stamped N (applied when frame N is simulated, so they aren't in the state yet). A client waiting
+                // for a state after (re)connecting drops every packet before it, so nothing that follows the state may precede it.
+                std::set<HSteamNetConnection> sentFullState;
+                for (auto& [conn, info] : peerInfo_) {
+                    if (!info.isConnected || !info.pendingReceiveFullState) {
+                        continue;
+                    }
+                    if (pendingReconnections_.find(info.playerId) == pendingReconnections_.end()) {
+                        info.pendingReceiveFullState = false;
+                        net_.SendStateUpdate(conn, update);
+                        sentFullState.insert(conn);
+                    }
                 }
-                // Got the whole state above: this tick's deltas are already in it.
-                if (sentFullState.count(conn)) {
-                    continue;
+
+                for (auto event : generatedEvents) {
+                    for (auto& [conn, info] : peerInfo_) {
+                        if (!info.isConnected) {
+                            continue;
+                        }
+                        if (pendingReconnections_.find(info.playerId) == pendingReconnections_.end()) {
+                            net_.SendEventUpdate(conn, event);
+                        }
+                    }
                 }
-                if (pendingReconnections_.find(info.playerId) == pendingReconnections_.end()) {
-                    net_.SendDeltasUpdate(conn, generatedDeltas, server_.GetCurrentFrame());
+
+                std::vector<DeltaStateBlob> generatedDeltas;
+                server_.GetGameLogic()->GetGeneratedDeltas(generatedDeltas);
+
+
+                for (auto& [conn, info] : peerInfo_) {
+                    if (!info.isConnected) {
+                        continue;
+                    }
+                    // Got the whole state above: this tick's deltas are already in it.
+                    if (sentFullState.count(conn)) {
+                        continue;
+                    }
+                    if (pendingReconnections_.find(info.playerId) == pendingReconnections_.end()) {
+                        net_.SendDeltasUpdate(conn, generatedDeltas, server_.GetCurrentFrame());
+                    }
                 }
             }
 

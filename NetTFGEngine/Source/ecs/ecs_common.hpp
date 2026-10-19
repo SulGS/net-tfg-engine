@@ -390,6 +390,10 @@ public:
     int playerId;
     InputBlob input;
     bool isLocal = false;
+    // Display name of the player driving this entity (its client id / nickname); empty until the server sends it, and
+    // offline. Filled from IGameLogic::SetPlayerNames: by IECSGameLogic in the logic world, by IECSGameRenderer in the
+    // render world. Not part of the game state.
+    std::string name;
 
     Playable() : playerId(-1), input(MakeZeroInputBlob()), isLocal(false) {}
     Playable(int pid, InputBlob input, bool isLocal) : playerId(pid), input(input), isLocal(isLocal) {}

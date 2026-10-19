@@ -100,6 +100,11 @@ public:
         entityMutex.unlock();
     }
 
+    // RAII form of acquireMutex()/releaseMutex(): released on every return and on exceptions.
+    [[nodiscard]] std::unique_lock<std::recursive_mutex> Lock() {
+        return std::unique_lock<std::recursive_mutex>(entityMutex);
+    }
+
     // Resets to a clean state: destroys every component, clears entities/arrays/ID counters, and clears registered component types.
     void Reset() {
         for (auto& [typeIndex, array] : componentArrays) {
