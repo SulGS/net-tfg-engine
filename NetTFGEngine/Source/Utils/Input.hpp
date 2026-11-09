@@ -1,6 +1,10 @@
 #ifndef INPUT_HPP
 #define INPUT_HPP
 
+#ifdef NETTFG_HEADLESS
+#error "Utils/Input.hpp is client-only (OpenGL/GLFW/OpenAL/FreeType/SOIL): headless targets (NetTFGEngineCore, GameServer) must not include it"
+#endif
+
 #include <GLFW/glfw3.h>
 #include <unordered_map>
 #include <unordered_set>

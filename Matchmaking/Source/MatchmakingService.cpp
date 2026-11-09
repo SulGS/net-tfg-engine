@@ -39,9 +39,16 @@ MatchmakingService::~MatchmakingService() {
     Shutdown();
 }
 
-ApiResponse MatchmakingService::Enqueue(const std::string& name, const std::string& key, int version) {
+ApiResponse MatchmakingService::Enqueue(const std::string& name, const std::string& key, int version,
+    const std::string& gameVersion) {
     if (version != Protocol::VERSION) {
         return Error(426, "Versión del juego incompatible con el matchmaking");
+    }
+    if (!config_.gameVersion.empty() && gameVersion != config_.gameVersion) {
+        Debug::Info("Matchmaker") << "Rejected " << name << ": game version '" << gameVersion
+            << "', expected '" << config_.gameVersion << "'\n";
+        return Error(426, "Versión del juego " + (gameVersion.empty() ? std::string("desconocida") : gameVersion)
+            + " incompatible: el servidor usa la " + config_.gameVersion + ". Actualiza el juego");
     }
     if (!Protocol::IsValidPlayerName(name)) {
         return Error(400, "Nickname inválido: 1-" + std::to_string(Protocol::MAX_NAME_LENGTH)
@@ -194,6 +201,7 @@ ApiResponse MatchmakingService::Status() {
     }
 
     return { 200, json{
+        { "gameVersion", config_.gameVersion },
         { "queued", queue_.size() },
         { "playersInMatches", activePlayers_.size() },
         { "matches", matches },

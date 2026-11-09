@@ -33,7 +33,7 @@ project "Matchmaking"
    -- Linux (cpp-httplib and nlohmann-json are header-only)
    filter "system:linux"
       -- -isystem: third-party headers must not raise warnings in our build
-      externalincludedirs { "%{wks.location}/vcpkg_installed/x64-linux/include" }
+      externalincludedirs { VcpkgDir .. "/include" }
       links { "pthread" }
 
    -- Debug

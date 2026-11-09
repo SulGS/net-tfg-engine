@@ -1,8 +1,8 @@
 #ifndef AUDIO_COMPONENTS_HPP
 #define AUDIO_COMPONENTS_HPP
 
+#include <cstdint>
 #include <string>
-#include <AL/al.h>
 #include "AudioChannels.hpp"
 #include "ecs/ecs.hpp"
 
@@ -22,14 +22,16 @@ struct AudioSourceComponent : public IComponent {
 
     AudioChannel channel = AudioChannel::SFX;
 
-    ALuint source = 0;
-    ALuint buffer = 0;
+    // OpenAL handles (ALuint / ALint), filled by AudioSystem. Plain integers so this component stays pure data, usable
+    // from the shared game logic headers without pulling OpenAL into GameServer.
+    uint32_t source = 0;
+    uint32_t buffer = 0;
     bool initialized = false;
     bool pendingToDestroy = false;
 
     // Saved on device swap so looping sources resume from the same position
     // rather than restarting from the beginning.
-    ALint savedSampleOffset = 0;
+    int32_t savedSampleOffset = 0;
 
     AudioSourceComponent() = default;
 

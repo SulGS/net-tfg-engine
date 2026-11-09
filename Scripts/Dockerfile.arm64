@@ -1,0 +1,45 @@
+# Ubuntu ARM64 image to build net-tfg-engine for linux-ARM64.
+# Built and run by Build-Linux-ARM64.sh (through QEMU emulation on x86_64 hosts); the project is mounted at /src.
+FROM --platform=linux/arm64 ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Toolchain + what vcpkg ports need to build (system cmake/ninja: vcpkg has no prebuilt ones for ARM),
+# X11/Wayland/GL headers for glfw3/glew, ALSA/PulseAudio so openal-soft gets real audio backends,
+# python3-zstandard for AssetsPackager.py, uuid-dev for building premake.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential clang lld git curl ca-certificates zip unzip tar pkg-config \
+        cmake ninja-build autoconf autoconf-archive automake libtool perl bison flex \
+        python3 python3-zstandard \
+        libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxext-dev libxmu-dev \
+        libxkbcommon-dev libwayland-dev wayland-protocols \
+        libgl-dev libglu1-mesa-dev libegl-dev \
+        libasound2-dev libpulse-dev \
+        uuid-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV VCPKG_FORCE_SYSTEM_BINARIES=1
+
+# premake5 for AArch64 (same version as the one bundled in Vendor/Binaries/Premake)
+RUN git clone --depth 1 --branch v5.0.0-beta2 https://github.com/premake/premake-core /opt/premake-src \
+    && make -C /opt/premake-src -f Bootstrap.mak linux \
+    && cp /opt/premake-src/bin/release/premake5 /usr/local/bin/premake5 \
+    && rm -rf /opt/premake-src
+
+# vcpkg tool itself (ports are built at compile time and cached in the /root volume)
+RUN git clone https://github.com/microsoft/vcpkg /opt/vcpkg \
+    && /opt/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+ENV VCPKG_ROOT=/opt/vcpkg
+
+# Release-only arm64-linux triplet, read from the mounted project (see ARM64-Triplets/arm64-linux.cmake)
+ENV VCPKG_OVERLAY_TRIPLETS=/src/Scripts/ARM64-Triplets
+
+# Fewer parallel jobs than cores: emulated C++ compiles (protobuf, abseil) use a lot of RAM each,
+# and 12 at once nearly exhausted WSL's memory. Override with: BUILD_JOBS=N bash Build-Linux-ARM64.sh
+ENV BUILD_JOBS=6
+
+# Source downloads live in the cache volume, so they survive image rebuilds
+ENV VCPKG_DOWNLOADS=/root/vcpkg-downloads
+
+WORKDIR /src
+CMD ["bash", "Scripts/Setup-Linux.sh"]

@@ -9,6 +9,7 @@
 #include "GPUMemoryLog.hpp"
 #include "IGameRenderer.hpp"
 #include "Mesh.hpp"
+#include "MeshComponent.hpp"
 #include "OpenGL/Render pipeline/RenderSystem.hpp"
 #include "OpenGL/Particles/ParticleSystem.hpp"
 #include "OpenGL/Particles/ParticleEmitterComponent.hpp"

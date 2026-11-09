@@ -3,6 +3,7 @@
 #include <string>
 
 #include "ecs/ecs_common.hpp"
+#include "OpenGL/MeshComponent.hpp"
 #include "ecs/UI/UIButton.hpp"
 #include "ecs/UI/UIElement.hpp"
 #include "ecs/UI/UIText.hpp"

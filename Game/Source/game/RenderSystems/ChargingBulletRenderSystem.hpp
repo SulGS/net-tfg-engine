@@ -4,6 +4,7 @@
 #include <cmath>
 
 #include "ecs/ecs_common.hpp"
+#include "OpenGL/MeshComponent.hpp"
 #include "../Components.hpp"
 #include "LaserVisuals.hpp"
 

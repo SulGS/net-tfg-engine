@@ -3,6 +3,7 @@
 Binaries/
 vcpkg_installed/
 include/
+Instalador/
 
 # Files
 *.vcxproj

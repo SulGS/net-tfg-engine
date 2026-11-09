@@ -1,4 +1,8 @@
 ﻿#pragma once
+
+#ifdef NETTFG_HEADLESS
+#error "NetTFG_Engine.hpp is client-only (OpenGL/GLFW/OpenAL/FreeType/SOIL): headless targets (NetTFGEngineCore, GameServer) must not include it"
+#endif
 #include <unordered_map>
 #include <string>
 #include <iostream>

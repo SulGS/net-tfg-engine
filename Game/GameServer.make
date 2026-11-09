@@ -43,33 +43,33 @@ ifeq ($(config),debug)
 TARGETDIR = ../Binaries/linux-x86_64/Debug/GameServer
 TARGET = $(TARGETDIR)/GameServer
 OBJDIR = ../Binaries/Intermediates/linux-x86_64/Debug/GameServer
-DEFINES += -DDEBUG
-ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -g
-ALL_CXXFLAGS += $(CXXFLAGS) $(ALL_CPPFLAGS) -m64 -g -std=c++20
-LIBS += ../Binaries/linux-x86_64/Debug/Engine/libNetTFGEngine.a -lfreetype -lpng16 -lbrotlidec -lbrotlicommon -lbz2 -lz -lzstd -lGameNetworkingSockets -lGLEW -lglfw3 -lopenal -lGL -lsoil2 -lssl -lcrypto -lpthread -ldl
-LDDEPS += ../Binaries/linux-x86_64/Debug/Engine/libNetTFGEngine.a
+DEFINES += -DNETTFG_HEADLESS -DDEBUG
+ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -g -ffp-contract=off
+ALL_CXXFLAGS += $(CXXFLAGS) $(ALL_CPPFLAGS) -m64 -g -std=c++20 -ffp-contract=off
+LIBS += ../Binaries/linux-x86_64/Debug/Engine/libNetTFGEngineCore.a -lGameNetworkingSockets -lssl -lcrypto -lpthread -ldl
+LDDEPS += ../Binaries/linux-x86_64/Debug/Engine/libNetTFGEngineCore.a
 ALL_LDFLAGS += $(LDFLAGS) -L../Binaries/linux-x86_64/Debug/Engine -L../vcpkg_installed/x64-linux/lib -L../vcpkg_installed/x64-linux/debug/lib -L/usr/lib64 -m64 -Wl,-rpath,'$$ORIGIN'
 
 else ifeq ($(config),release)
 TARGETDIR = ../Binaries/linux-x86_64/Release/GameServer
 TARGET = $(TARGETDIR)/GameServer
 OBJDIR = ../Binaries/Intermediates/linux-x86_64/Release/GameServer
-DEFINES += -DRELEASE
-ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -g
-ALL_CXXFLAGS += $(CXXFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -g -std=c++20
-LIBS += ../Binaries/linux-x86_64/Release/Engine/libNetTFGEngine.a -lfreetype -lpng16 -lbrotlidec -lbrotlicommon -lbz2 -lz -lzstd -lGameNetworkingSockets -lGLEW -lglfw3 -lopenal -lGL -lsoil2 -lssl -lcrypto -lpthread -ldl
-LDDEPS += ../Binaries/linux-x86_64/Release/Engine/libNetTFGEngine.a
+DEFINES += -DNETTFG_HEADLESS -DRELEASE
+ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -g -ffp-contract=off
+ALL_CXXFLAGS += $(CXXFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -g -std=c++20 -ffp-contract=off
+LIBS += ../Binaries/linux-x86_64/Release/Engine/libNetTFGEngineCore.a -lGameNetworkingSockets -lssl -lcrypto -lpthread -ldl
+LDDEPS += ../Binaries/linux-x86_64/Release/Engine/libNetTFGEngineCore.a
 ALL_LDFLAGS += $(LDFLAGS) -L../Binaries/linux-x86_64/Release/Engine -L../vcpkg_installed/x64-linux/lib -L/usr/lib64 -m64 -Wl,-rpath,'$$ORIGIN'
 
 else ifeq ($(config),dist)
 TARGETDIR = ../Binaries/linux-x86_64/Dist/GameServer
 TARGET = $(TARGETDIR)/GameServer
 OBJDIR = ../Binaries/Intermediates/linux-x86_64/Dist/GameServer
-DEFINES += -DDIST
-ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -O2
-ALL_CXXFLAGS += $(CXXFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -std=c++20
-LIBS += ../Binaries/linux-x86_64/Dist/Engine/libNetTFGEngine.a -lfreetype -lpng16 -lbrotlidec -lbrotlicommon -lbz2 -lz -lzstd -lGameNetworkingSockets -lGLEW -lglfw3 -lopenal -lGL -lsoil2 -lssl -lcrypto -lpthread -ldl
-LDDEPS += ../Binaries/linux-x86_64/Dist/Engine/libNetTFGEngine.a
+DEFINES += -DNETTFG_HEADLESS -DDIST
+ALL_CFLAGS += $(CFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -ffp-contract=off
+ALL_CXXFLAGS += $(CXXFLAGS) $(ALL_CPPFLAGS) -m64 -O2 -std=c++20 -ffp-contract=off
+LIBS += ../Binaries/linux-x86_64/Dist/Engine/libNetTFGEngineCore.a -lGameNetworkingSockets -lssl -lcrypto -lpthread -ldl
+LDDEPS += ../Binaries/linux-x86_64/Dist/Engine/libNetTFGEngineCore.a
 ALL_LDFLAGS += $(LDFLAGS) -L../Binaries/linux-x86_64/Dist/Engine -L../vcpkg_installed/x64-linux/lib -L/usr/lib64 -m64 -Wl,-rpath,'$$ORIGIN'
 
 endif

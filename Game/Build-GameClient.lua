@@ -21,12 +21,14 @@ project "GameClient"
    }
 
    libdirs { Directories.EngineDir }
-   links   { "NetTFGEngine" }
+   -- Order matters for GNU ld: the client library uses symbols from Core
+   links   { "NetTFGEngine", "NetTFGEngineCore" }
 
    -- Windows: vcpkg integration handled automatically by Visual Studio
    filter "system:windows"
       systemversion "latest"
       defines { "WINDOWS" }
+	  files { "Resources/GameClient.rc" }
 
       postbuildcommands {
          'if exist "%{prj.location}/Assets" (python "%{prj.location}/../AssetsPackager.py" "%{prj.location}/Assets" "%{cfg.targetdir}")'
@@ -35,8 +37,8 @@ project "GameClient"
    -- Linux
    filter "system:linux"
       -- -isystem: third-party headers must not raise warnings in our build
-      externalincludedirs { "%{wks.location}/vcpkg_installed/x64-linux/include" }
-      libdirs     { "%{wks.location}/vcpkg_installed/x64-linux/lib" }
+      externalincludedirs { VcpkgDir .. "/include" }
+      libdirs     { VcpkgDir .. "/lib" }
       linkoptions { "-Wl,-rpath,'$$ORIGIN'" }
       links
       {
@@ -70,7 +72,7 @@ project "GameClient"
       symbols "On"
 
    filter { "configurations:Debug", "system:linux" }
-      libdirs { "%{wks.location}/vcpkg_installed/x64-linux/debug/lib" }
+      libdirs { VcpkgDir .. "/debug/lib" }
 
    -- Release
    filter "configurations:Release"

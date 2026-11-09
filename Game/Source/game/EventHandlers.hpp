@@ -1,13 +1,11 @@
 ﻿#pragma once
-#include "OpenGL/OpenGLIncludes.hpp"
+#include <glm/glm.hpp>
 #include "ecs/Events/ecs_iecs_event_handler.hpp"
 #include "ecs/ecs_common.hpp"
 #include "ecs/Collisions/BoxCollider2D.hpp"
 #include "Events.hpp"
 #include "Components.hpp"
 
-#include "OpenAL/AudioManager.hpp"
-#include "OpenAL/AudioComponents.hpp"
 
 
 class WarnTileHandler : public IEventHandler {

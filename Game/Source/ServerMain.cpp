@@ -7,13 +7,15 @@
 #include <sstream>
 
 #include "Client-Server/Server.hpp"
-#include "game/asteroids.hpp"
+#include "game/AsteroidsLogic.hpp"
 
 #include "Matchmaking/MatchmakingClient.hpp"
 #include "Matchmaking/MatchmakerReporter.hpp"
 
 #include "Utils/Debug/Debug.hpp"
 #include "Utils/PlayerKey.hpp"
+#include "Utils/GameVersion.hpp"
+#include "game/GameVersionInfo.hpp"
 
 void PrintHelp() {
     std::cout << "Usage:\n"
@@ -127,7 +129,6 @@ int main(int argc, char** argv) {
     }
 
     std::unique_ptr<IGameLogic> gameLogic = std::make_unique<AsteroidShooterGame>();
-    std::unique_ptr<IGameRenderer> gameRenderer = std::make_unique<AsteroidShooterGameRenderer>();
 
     ServerConfig config(port);
 	config.minPlayers = players;
@@ -144,6 +145,8 @@ int main(int argc, char** argv) {
     config.emptyTimeout = std::chrono::seconds(emptyTimeout);
 
     Debug::Initialize("AsteroidsServer", true);
+    // Clients reporting another version are rejected in CLIENT_HELLO (Server::HandleNewClient).
+    GameVersion::Set(ASTEROIDS_GAME_VERSION);
 
     std::optional<MatchmakerReporter> reporter;
     if (matchmaker && matchId >= 0) {

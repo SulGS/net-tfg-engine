@@ -15,6 +15,7 @@
 
 #include "MatchmakingService.hpp"
 #include "Utils/Debug/Debug.hpp"
+#include "Utils/GameVersion.hpp"
 #include "Utils/UserDataPath.hpp"
 
 using json = nlohmann::json;
@@ -39,6 +40,7 @@ namespace
             << "  --port-range <min-max>      UDP ports for game servers (default: 27100-27199).\n"
             << "  --players <n>               Players per match (default: 2).\n"
             << "  --game-server <path>        GameServer executable (default: next to this one).\n"
+            << "  --game-version <version>    Only accept clients of this game version (default: any).\n"
             << "  --ready-timeout <seconds>   Max time for a game server to start (default: 15).\n"
             << "  --join-timeout <seconds>    Max time for matched players to join (default: 60).\n"
             << "  --empty-timeout <seconds>   Stop a match with nobody connected (default: 30).\n"
@@ -68,6 +70,9 @@ namespace
         "\n"
         "# Ejecutable del GameServer. Por defecto, el que esta junto al matchmaker.\n"
         "# game-server C:\\ruta\\GameServer.exe\n"
+        "\n"
+        "# Version del juego que deben tener los clientes (la de GameVersion::Set). Sin ella, cualquiera.\n"
+        "# game-version 1.0.0\n"
         "\n"
         "# Tiempos en segundos: arranque del GameServer, entrada de los jugadores\n"
         "# y cierre de una partida que se queda sin nadie.\n"
@@ -111,6 +116,7 @@ namespace
 
         if (key == "bind") config.bindAddress = value;
         else if (key == "public-ip") config.publicIp = value;
+        else if (key == "game-version" && GameVersion::IsValid(value)) config.gameVersion = value;
         else if (key == "game-server") config.gameServerPath = std::filesystem::absolute(value);
         else if (key == "http-port" && ParseInt(value, 1, 65535, number)) config.httpPort = static_cast<uint16_t>(number);
         else if (key == "players" && ParseInt(value, 1, 64, number)) config.playersPerMatch = number;
@@ -256,7 +262,8 @@ int main(int argc, char** argv) {
             json body = json::parse(req.body);
             // "key" is optional here so a client from before it existed gets the clear 426 version error.
             Reply(res, service.Enqueue(body.at("name").get<std::string>(),
-                body.value("key", std::string()), body.at("version").get<int>()));
+                body.value("key", std::string()), body.at("version").get<int>(),
+                body.value("gameVersion", std::string())));
         }
         catch (const json::exception&) {
             ReplyBadRequest(res, "Se esperaba {\"name\", \"key\", \"version\"}");
@@ -304,7 +311,8 @@ int main(int argc, char** argv) {
     Debug::Info("Matchmaker") << "Listening on " << config.bindAddress << ":" << config.httpPort
         << " | " << config.playersPerMatch << " players per match"
         << " | game ports " << config.gamePortMin << "-" << config.gamePortMax
-        << " | game server " << config.gameServerPath.string() << "\n";
+        << " | game server " << config.gameServerPath.string()
+        << " | game version " << (config.gameVersion.empty() ? "any" : config.gameVersion) << "\n";
 
     int code = 0;
     if (!server.listen(config.bindAddress, config.httpPort)) {

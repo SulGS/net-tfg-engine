@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "ecs/ecs_common.hpp"
+#include "OpenGL/MeshComponent.hpp"
 #include "OpenAL/AudioComponents.hpp"
 #include "../Components.hpp"
 #include "LaserVisuals.hpp"

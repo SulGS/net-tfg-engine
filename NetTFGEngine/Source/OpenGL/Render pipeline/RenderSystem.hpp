@@ -5,6 +5,7 @@
 #include "ecs/ecs_common.hpp"
 #include "Utils/Debug/Debug.hpp"
 #include "OpenGL/Mesh.hpp"
+#include "OpenGL/MeshComponent.hpp"
 #include "OpenGL/Material.hpp"
 #include "OpenGL/OpenGLIncludes.hpp"
 #include "RenderSettings.hpp"

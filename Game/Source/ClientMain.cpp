@@ -11,6 +11,8 @@
 #include "game/menu.hpp"
 #include "game/settings_menu.hpp"
 #include "game/GameActions.hpp"
+#include "game/GameVersionInfo.hpp"
+#include "Utils/GameVersion.hpp"
 
 
 #include "NetTFG_Engine.hpp"
@@ -25,7 +27,7 @@ int main(int argc, char** argv) {
 	std::cout << std::filesystem::current_path() << '\n';
 
 
-	std::unique_ptr<IGameLogic> gameLogic = std::make_unique<AsteroidShooterGame>();
+	std::unique_ptr<IGameLogic> gameLogic = std::make_unique<AsteroidShooterClientGame>();
 	std::unique_ptr<IGameRenderer> gameRenderer = std::make_unique<AsteroidShooterGameRenderer>();
 
 	gameRenderer->LinkGameLogic(gameLogic.get());
@@ -37,6 +39,9 @@ int main(int argc, char** argv) {
 #else
 	Debug::Initialize("AsteroidsClient", false);
 #endif
+
+	// After Debug::Initialize so it lands in the log; before any connection (it travels in CLIENT_HELLO and to the matchmaker).
+	GameVersion::Set(ASTEROIDS_GAME_VERSION);
 
 	// After Debug::Initialize: it sets the user data folder the saved bindings are read from.
 	RegisterGameActions();

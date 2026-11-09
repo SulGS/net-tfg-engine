@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 
 #include "Matchmaking/MatchmakingClient.hpp"
+#include "Utils/GameVersion.hpp"
 #include "Utils/PlayerKey.hpp"
 #include "Utils/UserDataPath.hpp"
 
@@ -66,7 +67,8 @@ namespace
         json request = {
             { "name", playerName },
             { "key", playerKey },
-            { "version", MatchmakingProtocol::VERSION }
+            { "version", MatchmakingProtocol::VERSION },
+            { "gameVersion", GameVersion::Get() }
         };
 
         auto res = cli.Post("/queue", request.dump(), "application/json");

@@ -1,6 +1,10 @@
 #ifndef FONTMANAGER_HPP
 #define FONTMANAGER_HPP
 
+#ifdef NETTFG_HEADLESS
+#error "Utils/FontManager.hpp is client-only (OpenGL/GLFW/OpenAL/FreeType/SOIL): headless targets (NetTFGEngineCore, GameServer) must not include it"
+#endif
+
 #include <GL/glew.h>
 #include <glm/glm.hpp>
 #include <ft2build.h>

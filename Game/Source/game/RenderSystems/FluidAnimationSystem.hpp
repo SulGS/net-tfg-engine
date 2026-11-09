@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include "ecs/ecs_common.hpp"
+#include "OpenGL/MeshComponent.hpp"
 #include "../Components.hpp"
 
 // Drives "uTime" for every FluidSurface mesh (fluid.vert waves, water/lava.frag detail). Render-side clock only:

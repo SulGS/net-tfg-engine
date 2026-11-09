@@ -18,6 +18,7 @@
 #include <algorithm> // for std::min
 #include "Utils/Debug/Debug.hpp"
 #include "Utils/PlayerKey.hpp"
+#include "Utils/GameVersion.hpp"
 
 #include "Client-Server/Client.hpp"
 #include "Client-Server/InputDelayCalculator.hpp"
@@ -49,6 +50,9 @@ public:
         // Nicknames (matchmaking) keep their key across restarts so a crashed game can reconnect;
         // generated ids are new every session, so a throwaway key is enough.
         playerKey_ = customClientId.empty() ? PlayerKey::Generate() : PlayerKey::ForName(clientId_);
+
+        versionRejected_ = false;
+        serverGameVersion_.clear();
 
         // Guard against a live previous session; routed through RunOnRenderThread — see OfflineClient::SetupClient.
         if (cWindow_) {
@@ -94,7 +98,7 @@ public:
         if (!WaitForConnectionAndAuth()) {
             delete cWindow_;
             cWindow_ = nullptr;
-            return CONN_DENIED;
+            return versionRejected_ ? CONN_VERSION_MISMATCH : CONN_DENIED;
         }
 
         if (isReconnection_) {
@@ -238,6 +242,10 @@ public:
 
     const std::string& GetClientId() const { return clientId_; }
 
+    // Game version of the server that refused the last SetupClient with CONN_VERSION_MISMATCH ("" if it didn't say).
+    // Written by SetupClient, so read it from the ActivateClientAsync callback (same thread) or after it returned.
+    const std::string& GetServerGameVersion() const { return serverGameVersion_; }
+
 private:
     GNSSession net_;
     InputDelayCalculator inputDelayCalc;
@@ -248,6 +256,10 @@ private:
     int assignedPlayerId_;
     bool isReconnection_;
     HSteamNetConnection serverConnection_;
+
+    // Set when the server refused the hello for a game version mismatch (reject packet or close end reason).
+    bool versionRejected_ = false;
+    std::string serverGameVersion_;
 
     ClientPredictionNetcode* prediction_ = nullptr;
     ClientWindow* cWindow_ = nullptr;
@@ -282,6 +294,11 @@ private:
         std::memcpy(hello.playerKey, key.data(), key.size());
         hello.playerKey[key.size()] = '\0';
 
+        const std::string version = GameVersion::Get();
+        static_assert(sizeof(hello.gameVersion) == GameVersion::MAX_LENGTH + 1, "hello must fit a full game version");
+        std::memcpy(hello.gameVersion, version.data(), version.size());
+        hello.gameVersion[version.size()] = '\0';
+
         ISteamNetworkingSockets* sockets = net_.GetSockets();
         if (!sockets || serverConnection_ == k_HSteamNetConnection_Invalid) {
             Debug::Info("OnlineClient") << "Failed to send client hello: invalid connection\n";
@@ -291,7 +308,8 @@ private:
         sockets->SendMessageToConnection(serverConnection_, &hello,
             sizeof(hello), k_nSteamNetworkingSend_Reliable, nullptr);
 
-        Debug::Info("OnlineClient") << "Sent CLIENT_HELLO with ID: " << clientId_ << "\n";
+        Debug::Info("OnlineClient") << "Sent CLIENT_HELLO with ID: " << clientId_
+            << " (game version " << (version.empty() ? "unset" : version) << ")\n";
         return true;
     }
 
@@ -359,6 +377,19 @@ private:
     }
 
     bool HandleServerReject(const uint8_t* data, int len) {
+        if (len >= static_cast<int>(sizeof(ServerRejectPacket))) {
+            ServerRejectPacket reject;
+            std::memcpy(&reject, data, sizeof(reject));
+            if (reject.reason == REJECT_GAME_VERSION) {
+                versionRejected_ = true;
+                serverGameVersion_.assign(reject.serverGameVersion,
+                    strnlen(reject.serverGameVersion, sizeof(reject.serverGameVersion)));
+                Debug::Error("OnlineClient") << "Server rejected connection: game version "
+                    << (GameVersion::IsSet() ? GameVersion::Get() : "unset") << ", server runs "
+                    << (serverGameVersion_.empty() ? "unknown" : serverGameVersion_) << "\n";
+                return false;
+            }
+        }
         Debug::Info("OnlineClient") << "Server rejected connection\n";
         return false;
     }
@@ -482,6 +513,22 @@ private:
                     }
                 }
                 }, true);
+
+            // Checked after Poll so a reject packet sent before the close is read first. Without this a refused
+            // client only noticed after the 10 s timeout.
+            if (running && !serverAccepted) {
+                ISteamNetworkingSockets* sockets = net_.GetSockets();
+                SteamNetConnectionInfo_t info;
+                if (sockets && sockets->GetConnectionInfo(serverConnection_, &info) &&
+                    (info.m_eState == k_ESteamNetworkingConnectionState_ClosedByPeer ||
+                     info.m_eState == k_ESteamNetworkingConnectionState_ProblemDetectedLocally)) {
+                    if (info.m_eEndReason == k_ESteamNetConnectionEnd_App_Min + REJECT_GAME_VERSION) {
+                        versionRejected_ = true;
+                    }
+                    Debug::Info("OnlineClient") << "Server closed the connection before accepting: " << info.m_szEndDebug << "\n";
+                    running = false;
+                }
+            }
 
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }

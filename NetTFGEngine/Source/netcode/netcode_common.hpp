@@ -258,6 +258,20 @@ struct ClientHelloPacket {
     uint8_t type;
     char clientId[64];
     char playerKey[33];  // PlayerKey (32 hex chars) + '\0'; checked by the server unless disabled
+    char gameVersion[32];  // GameVersion::Get() + '\0' (empty = unset); the server rejects a different version
+};
+
+// Why the server refused a CLIENT_HELLO. Sent in ServerRejectPacket and also, as k_ESteamNetConnectionEnd_App_Min +
+// reason, as the GNS end reason of the close that follows (fallback if the packet doesn't make it).
+enum ServerRejectReason : uint8_t {
+    REJECT_GENERIC = 0,
+    REJECT_GAME_VERSION = 1
+};
+
+struct ServerRejectPacket {
+    uint8_t type;
+    uint8_t reason;              // ServerRejectReason
+    char serverGameVersion[32];  // the server's GameVersion::Get() + '\0', so the client can show both versions
 };
 
 struct ServerAcceptPacket {

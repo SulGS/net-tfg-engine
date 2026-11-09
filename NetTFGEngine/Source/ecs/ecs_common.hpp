@@ -3,9 +3,10 @@
 
 #include "netcode/netcode_common.hpp"
 #include "ecs.hpp"
-#include "OpenGL/Mesh.hpp"
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <memory>
 #include <algorithm>
 #include <cmath>
 #include <array>
@@ -397,21 +398,6 @@ public:
 
     Playable() : playerId(-1), input(MakeZeroInputBlob()), isLocal(false) {}
     Playable(int pid, InputBlob input, bool isLocal) : playerId(pid), input(input), isLocal(isLocal) {}
-};
-
-class MeshComponent : public IComponent {
-public:
-    std::unique_ptr<Mesh> mesh;
-    bool enabled;
-	bool castShadows = true;
-	// Light-only mesh (beams, glows). Skipped by GBuffer/shadow/opaque passes and summed by RenderSystem::AdditivePass:
-	// (SRC_ALPHA, ONE), depth test without write, so order doesn't matter. Unlit shader: only uCameraPos and
-	// uModel/uView/uProjection, no texture units bound.
-	bool additive = false;
-	// Drawn into reflection probe captures (see ReflectionProbeComponent). Turn off for anything that moves.
-	bool reflectionProbeVisible = true;
-    MeshComponent() : mesh(nullptr), enabled(true), castShadows(true) {}
-    MeshComponent(Mesh* m) : mesh(m), enabled(true), castShadows(true) {}
 };
 
 class CameraSystem : public ISystem {

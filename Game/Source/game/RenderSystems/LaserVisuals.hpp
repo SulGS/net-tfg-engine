@@ -4,6 +4,7 @@
 #include <glm/glm.hpp>
 
 #include "ecs/ecs_common.hpp"
+#include "OpenGL/MeshComponent.hpp"
 #include "OpenGL/Material.hpp"
 #include "OpenGL/Mesh.hpp"
 

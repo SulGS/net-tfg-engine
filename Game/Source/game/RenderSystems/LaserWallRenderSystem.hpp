@@ -4,6 +4,7 @@
 #include <unordered_set>
 
 #include "ecs/ecs_common.hpp"
+#include "OpenGL/MeshComponent.hpp"
 #include "../Components.hpp"
 
 // Drives tile/wall/spoke/pillar visibility from replicated state, and each wall's beam animation (laser_wall.frag)

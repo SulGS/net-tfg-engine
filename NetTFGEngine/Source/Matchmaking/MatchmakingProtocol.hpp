@@ -3,12 +3,14 @@
 #include <cstdint>
 #include <string>
 
-// HTTP+JSON contract. Client: POST /queue {name,key,version} -> {ticket} (same name+key in a running match = reconnect, other
+// HTTP+JSON contract. Client: POST /queue {name,key,version,gameVersion} -> {ticket} (same name+key in a running match = reconnect, other
 // key = 409); GET /queue/<ticket> -> status waiting{queued,needed}|starting|ready{ip,port,reconnect}|error; DELETE -> 204.
 // GameServer: POST /server/ready|/server/ended {matchId,token} -> 200|403. Debug: GET /status -> {queued,matches,freePorts}.
 namespace MatchmakingProtocol
 {
     // Bumped on any incompatible change; the matchmaker rejects other versions with 426.
+    // Not the game's version: that one is GameVersion::Get(), sent as "gameVersion" and checked against the
+    // matchmaker's optional game-version setting (also 426).
     inline constexpr int VERSION = 2;
 
     inline constexpr uint16_t DEFAULT_HTTP_PORT = 27000;

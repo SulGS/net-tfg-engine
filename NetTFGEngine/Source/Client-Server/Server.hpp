@@ -7,6 +7,7 @@
 #include "netcode/valve_sockets_session.hpp"
 #include "Utils/Debug/Debug.hpp"
 #include "Utils/PlayerKey.hpp"
+#include "Utils/GameVersion.hpp"
 #include <set>
 #include <map>
 #include <vector>
@@ -158,6 +159,20 @@ private:
         if (sockets) {
             sockets->SendMessageToConnection(conn, &accept,
                 sizeof(accept), k_nSteamNetworkingSend_Reliable, nullptr);
+        }
+    }
+
+    void SendServerReject(HSteamNetConnection conn, ServerRejectReason reason) {
+        ServerRejectPacket reject{};
+        reject.type = PACKET_SERVER_REJECT;
+        reject.reason = reason;
+        const std::string version = GameVersion::Get();
+        static_assert(sizeof(reject.serverGameVersion) == GameVersion::MAX_LENGTH + 1, "reject must fit a full game version");
+        std::memcpy(reject.serverGameVersion, version.data(), version.size());
+
+        ISteamNetworkingSockets* sockets = net_.GetSockets();
+        if (sockets) {
+            sockets->SendMessageToConnection(conn, &reject, sizeof(reject), k_nSteamNetworkingSend_Reliable, nullptr);
         }
     }
 
@@ -328,13 +343,14 @@ private:
         const ClientHelloPacket* hello = (const ClientHelloPacket*)data;
         std::string clientId(hello->clientId, strnlen(hello->clientId, sizeof(hello->clientId)));
         std::string playerKey(hello->playerKey, strnlen(hello->playerKey, sizeof(hello->playerKey)));
+        std::string gameVersion(hello->gameVersion, strnlen(hello->gameVersion, sizeof(hello->gameVersion)));
 
         Debug::Info("Server") << "Client attempting connection/reconnection during game: " << clientId << "\n";
 
         net_.AddConnectionToPollGroup(conn);
 
         // Reuse the normal handler for consistency
-        HandleNewClient(conn, clientId, playerKey);
+        HandleNewClient(conn, clientId, playerKey, gameVersion);
     }
 
     void HandleReceiveEventInGame(HSteamNetConnection conn, const uint8_t* data, int len) {
@@ -469,7 +485,20 @@ private:
 
     
 
-    bool HandleNewClient(HSteamNetConnection conn, const std::string& clientId, const std::string& playerKey) {
+    bool HandleNewClient(HSteamNetConnection conn, const std::string& clientId, const std::string& playerKey,
+        const std::string& gameVersion) {
+        // First: a client built from another game version would desync (different logic/packets) even if all else matches.
+        if (!GameVersion::IsCompatibleWithLocal(gameVersion)) {
+            Debug::Info("Server") << "Rejected " << clientId << ": game version " << (gameVersion.empty() ? "unset" : gameVersion)
+                << " differs from the server's " << GameVersion::Get() << "\n";
+            // Reject packet first so the client can tell the player which versions differ; linger = true flushes it
+            // before the close, whose end reason repeats the cause in case the packet is lost anyway.
+            SendServerReject(conn, REJECT_GAME_VERSION);
+            net_.GetSockets()->CloseConnection(conn, k_ESteamNetConnectionEnd_App_Min + REJECT_GAME_VERSION,
+                "game version mismatch", true);
+            return false;
+        }
+
         if (config_.requireClientId && !IsValidClientId(clientId)) {
             Debug::Info("Server") << "Invalid client ID format: " << clientId << "\n";
             net_.GetSockets()->CloseConnection(conn, k_ESteamNetConnectionEnd_App_Generic, nullptr, false);
@@ -588,13 +617,14 @@ private:
         const ClientHelloPacket* hello = (const ClientHelloPacket*)data;
         std::string clientId(hello->clientId,strnlen(hello->clientId, sizeof(hello->clientId)));
         std::string playerKey(hello->playerKey, strnlen(hello->playerKey, sizeof(hello->playerKey)));
+        std::string gameVersion(hello->gameVersion, strnlen(hello->gameVersion, sizeof(hello->gameVersion)));
 
         Debug::Info("Server") << "Received CLIENT_HELLO from " << clientId << "\n";
 
         // Add to poll group BEFORE handling (in case it's already connected via callback)
         net_.AddConnectionToPollGroup(conn);
 
-        HandleNewClient(conn, clientId, playerKey);
+        HandleNewClient(conn, clientId, playerKey, gameVersion);
     }
 
     bool WaitForClients() {

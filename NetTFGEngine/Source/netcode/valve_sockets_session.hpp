@@ -13,7 +13,8 @@ enum ConnectionCode : uint8_t {
 	CONN_SOCKETS_FAILED = 1,
 	CONN_PARSE_ERROR = 2,
 	CONN_TIMEOUT = 3,
-	CONN_DENIED = 4
+	CONN_DENIED = 4,
+	CONN_VERSION_MISMATCH = 5  // the server runs another game version (OnlineClient::GetServerGameVersion)
 };
 
 std::ostream& operator<<(std::ostream& os, ConnectionCode code) {
@@ -23,6 +24,7 @@ std::ostream& operator<<(std::ostream& os, ConnectionCode code) {
     case CONN_PARSE_ERROR: return os << "CONN_PARSE_ERROR";
     case CONN_TIMEOUT: return os << "CONN_TIMEOUT";
     case CONN_DENIED: return os << "CONN_DENIED";
+    case CONN_VERSION_MISMATCH: return os << "CONN_VERSION_MISMATCH";
     default: return os << "UNKNOWN(" << static_cast<int>(code) << ")";
     }
 }

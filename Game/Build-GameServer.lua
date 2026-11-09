@@ -7,12 +7,27 @@ project "GameServer"
    targetdir (Directories.OutputDir)
    objdir    (Directories.IntermediateDir)
 
+   -- Headless: only the shared game logic, never the renderer side (RenderSystems, menus, asteroids.hpp...)
    files
    {
       "Source/game/**.hpp",
       "Source/game/**.cpp",
       "Source/ServerMain.cpp"
    }
+   removefiles
+   {
+      "Source/game/RenderSystems/**",
+      "Source/game/LogicSystems/ExitCheckerSystem.hpp",
+      "Source/game/asteroids.hpp",
+      "Source/game/menu.hpp",
+      "Source/game/settings_menu.hpp",
+      "Source/game/PauseMenu.hpp",
+      "Source/game/Explosion.hpp",
+      "Source/game/GameActions.hpp",
+   }
+
+   -- Client-only engine headers (OpenGL, GLFW, OpenAL, FreeType, SOIL) #error out if included
+   defines { "NETTFG_HEADLESS" }
 
    includedirs
    {
@@ -21,7 +36,7 @@ project "GameServer"
    }
 
    libdirs { Directories.EngineDir }
-   links   { "NetTFGEngine" }
+   links   { "NetTFGEngineCore" }
 
    -- Windows: vcpkg integration handled automatically by Visual Studio
    filter "system:windows"
@@ -31,24 +46,12 @@ project "GameServer"
    -- Linux
    filter "system:linux"
       -- -isystem: third-party headers must not raise warnings in our build
-      externalincludedirs { "%{wks.location}/vcpkg_installed/x64-linux/include" }
-      libdirs     { "%{wks.location}/vcpkg_installed/x64-linux/lib" }
+      externalincludedirs { VcpkgDir .. "/include" }
+      libdirs     { VcpkgDir .. "/lib" }
       linkoptions { "-Wl,-rpath,'$$ORIGIN'" }
       links
       {
-         "freetype",
-         "png16",
-         "brotlidec",
-         "brotlicommon",
-         "bz2",
-         "z",
-         "zstd",
          "GameNetworkingSockets",
-         "GLEW",
-         "glfw3",
-         "openal",
-         "GL",
-         "soil2",
          "ssl",
          "crypto",
          "pthread",
@@ -62,7 +65,7 @@ project "GameServer"
       symbols "On"
 
    filter { "configurations:Debug", "system:linux" }
-      libdirs { "%{wks.location}/vcpkg_installed/x64-linux/debug/lib" }
+      libdirs { VcpkgDir .. "/debug/lib" }
 
    -- Release
    filter "configurations:Release"

@@ -1,20 +1,30 @@
 {
   "dependencies": [
     "cpp-httplib",
-    "freetype",
     "gamenetworkingsockets",
-    "glew",
-    "glfw3",
     "glm",
     "nlohmann-json",
-    {
-      "name": "openal-soft",
-      "version>=": "1.24.0"
-    },
-    "opengl",
-    "soil2",
-    "tinygltf",
-    "openssl",
-    "zstd"
-  ]
+    "openssl"
+  ],
+  "default-features": [
+    "client"
+  ],
+  "features": {
+    "client": {
+      "description": "Graphics, audio, window/input and asset loading: only GameClient (the NetTFGEngine library) needs them. GameServer and Matchmaking build without it (vcpkg install --x-no-default-features).",
+      "dependencies": [
+        "freetype",
+        "glew",
+        "glfw3",
+        {
+          "name": "openal-soft",
+          "version>=": "1.24.0"
+        },
+        "opengl",
+        "soil2",
+        "tinygltf",
+        "zstd"
+      ]
+    }
+  }
 }

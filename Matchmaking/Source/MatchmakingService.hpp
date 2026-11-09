@@ -31,6 +31,10 @@ struct MatchmakerConfig {
 
     int playersPerMatch = 2;
 
+    // Game version clients must report (GameVersion::Get()). Empty = accept any; the GameServer still
+    // rejects a client whose version differs from its own when it connects.
+    std::string gameVersion;
+
     std::filesystem::path gameServerPath;
 
     int serverReadyTimeoutS = 15;  // launch -> /server/ready
@@ -53,7 +57,7 @@ public:
 
     // Queues `name`, or sends it straight back to its running match when `key` matches
     // the one it was matched with (reconnection).
-    ApiResponse Enqueue(const std::string& name, const std::string& key, int version);
+    ApiResponse Enqueue(const std::string& name, const std::string& key, int version, const std::string& gameVersion);
     ApiResponse Poll(const std::string& ticketId, const std::string& localAddress);
     ApiResponse Cancel(const std::string& ticketId);
 

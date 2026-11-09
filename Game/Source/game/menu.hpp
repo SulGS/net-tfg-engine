@@ -19,6 +19,8 @@
 #include "ecs/UI/UIElement.hpp"
 #include "NetTFG_Engine.hpp"
 #include "Matchmaking/MatchmakingClient.hpp"
+#include "Client-Server/OnlineClient.hpp"
+#include "Utils/GameVersion.hpp"
 
 #include <openssl/evp.h>
 
@@ -77,6 +79,7 @@ public:
     bool goingToConnect = false;
     bool connecting = false;
     bool errorConnecting = false;
+    std::string errorMessage;  // shown instead of the generic error when set (written before errorConnecting)
 
     ConnectionData() : ip(""), port(""), clientName(""), goingToConnect(false), connecting(false) {}
     ConnectionData(const std::string& ip, const std::string& port, const std::string& clientName)
@@ -162,6 +165,16 @@ public:
                         }
                         else {
                             Debug::Error("StartScreen") << "Client " << id << " failed: " << code << "\n";
+                            conn->errorMessage.clear();
+                            if (code == CONN_VERSION_MISMATCH) {
+                                // Same thread as SetupClient, so the server's version is already stored.
+                                const auto* online = dynamic_cast<const OnlineClient*>(NetTFG_Engine::Get().GetClient(id));
+                                const std::string serverVersion = online ? online->GetServerGameVersion() : "";
+                                conn->errorMessage = serverVersion.empty()
+                                    ? "Versión incompatible con el servidor (tienes la v" + GameVersion::Get() + "). Actualiza el juego"
+                                    : "Versión incompatible: tienes la v" + GameVersion::Get()
+                                        + " y el servidor usa la v" + serverVersion + ". Actualiza el juego";
+                            }
                             conn->errorConnecting = true;
                             conn->connecting = false;
                             conn->goingToConnect = false;
@@ -352,6 +365,22 @@ public:
 
         em.AddComponent<TextAnimationData>(startText);
 
+        // Game version in the bottom-left corner, so a "can't connect" report says which build it came from.
+        if (GameVersion::IsSet()) {
+            Entity versionText = em.CreateEntity();
+            element = em.AddComponent<UIElement>(versionText, UIElement{});
+            element->anchor = UIAnchor::BOTTOM_LEFT;
+            element->position = glm::vec2(10.0f, -30.0f);
+            element->size = glm::vec2(300.0f, 20.0f);
+            element->layer = 10;
+
+            UIText* version = em.AddComponent<UIText>(versionText, UIText{});
+            version->text = "v" + GameVersion::Get();
+            version->fontSize = 12.0f;
+            version->SetColor(1.0f, 1.0f, 1.0f, 0.6f);
+            version->SetFont("default");
+        }
+
         // Settings entry button; just requests the scene change.
         Entity settingsButton = em.CreateEntity();
         element = em.AddComponent<UIElement>(settingsButton, UIElement{});
@@ -426,8 +455,9 @@ public:
                     {
                         connData->errorConnecting = false;
                         connectBtn->Reset();
-                        SetConnectStatus(em, false,
-                            "Error conectando a la partida " + connData->ip + ":" + connData->port);
+                        SetConnectStatus(em, false, !connData->errorMessage.empty()
+                            ? connData->errorMessage
+                            : "Error conectando a la partida " + connData->ip + ":" + connData->port);
                     }
                     else if (connectBtn->ConsumePress()) {
                         if (mm.IsSearching()) {

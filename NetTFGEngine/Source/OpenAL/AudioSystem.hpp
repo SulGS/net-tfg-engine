@@ -1,6 +1,10 @@
 ﻿#ifndef AUDIO_SYSTEM_HPP
 #define AUDIO_SYSTEM_HPP
 
+#ifdef NETTFG_HEADLESS
+#error "OpenAL/AudioSystem.hpp is client-only (OpenGL/GLFW/OpenAL/FreeType/SOIL): headless targets (NetTFGEngineCore, GameServer) must not include it"
+#endif
+
 #include "ecs/ecs.hpp"
 #include "ecs/ecs_common.hpp"
 #include "AudioComponents.hpp"
@@ -13,6 +17,11 @@
 #include <AL/alc.h>
 #include <AL/al.h>
 #include <AL/alext.h>
+#include <cstdint>
+#include <type_traits>
+
+// AudioSourceComponent stores the AL handles as plain integers (see AudioComponents.hpp) and passes their addresses to alGen*/alGet*.
+static_assert(std::is_same_v<ALuint, uint32_t> && std::is_same_v<ALint, int32_t>, "AudioSourceComponent handle types must match OpenAL's");
 
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
