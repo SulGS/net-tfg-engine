@@ -53,6 +53,7 @@ public:
         uint16_t port = 0,
         const std::string& customClientId = "") {
         std::thread([this, id, host, port, customClientId, cb = std::forward<Callback>(callback)]() mutable {
+            Debug::SetThreadName("Connect");
             ActivateClientInternal(id, host, port, customClientId);
 
             ConnectionCode code = CONN_TIMEOUT;
@@ -274,6 +275,7 @@ public:
     template<typename Callback>
     void ReconnectClientAsync(int id, Callback&& callback) {
         std::thread([this, id, cb = std::forward<Callback>(callback)]() mutable {
+            Debug::SetThreadName("Reconnect");
             ReconnectClientInternal(id);
 
             ConnectionCode code = CONN_TIMEOUT;

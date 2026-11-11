@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <mutex>
+#include <sstream>
 #include <unordered_map>
 #include "Utils/Debug/Debug.hpp"
 
@@ -298,6 +299,26 @@ void OpenGLWindow::setupOpenGL()
     Debug::Info("OpenGLWindow") << "GL vendor: " << glStr(GL_VENDOR) << " | renderer: " << glStr(GL_RENDERER)
         << " | version: " << glStr(GL_VERSION) << " | GLSL: " << glStr(GL_SHADING_LANGUAGE_VERSION)
         << ((flags & GL_CONTEXT_FLAG_DEBUG_BIT) ? " | debug context" : "") << "\n";
+
+    // Display, for the startup system description (SystemInfo logs OS/CPU/RAM; the screen is only known here).
+    {
+        int monitorCount = 0;
+        glfwGetMonitors(&monitorCount);
+        GLFWmonitor* primary = glfwGetPrimaryMonitor();
+        const GLFWvidmode* mode = primary ? glfwGetVideoMode(primary) : nullptr;
+        float scaleX = 1.0f, scaleY = 1.0f;
+        if (primary) glfwGetMonitorContentScale(primary, &scaleX, &scaleY);
+        int fbW = 0, fbH = 0;
+        glfwGetFramebufferSize(window, &fbW, &fbH);
+        const char* monitorName = primary ? glfwGetMonitorName(primary) : nullptr;
+        std::ostringstream line;
+        line << "Display: " << monitorCount << " monitor(s)";
+        if (mode)
+            line << " | primary " << (monitorName ? monitorName : "?") << " " << mode->width << "x" << mode->height
+                 << " @ " << mode->refreshRate << " Hz, scale " << static_cast<int>(scaleX * 100 + 0.5f) << "%";
+        line << " | window framebuffer " << fbW << "x" << fbH;
+        Debug::Info("System") << line.str() << "\n";
+    }
 
     if (glDebugMessageCallback) {
         glEnable(GL_DEBUG_OUTPUT);

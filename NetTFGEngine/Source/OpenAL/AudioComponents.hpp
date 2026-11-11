@@ -29,6 +29,10 @@ struct AudioSourceComponent : public IComponent {
     bool initialized = false;
     bool pendingToDestroy = false;
 
+    // One-shots only: AudioSystem destroys the entity once the sound has finished playing. For fire-and-forget sounds
+    // whose entity nothing else cleans up (e.g. the ship explosion, kept around until a respawn that never comes).
+    bool destroyOnFinish = false;
+
     // Saved on device swap so looping sources resume from the same position
     // rather than restarting from the beginning.
     int32_t savedSampleOffset = 0;

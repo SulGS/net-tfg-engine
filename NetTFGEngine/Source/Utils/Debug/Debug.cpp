@@ -1,6 +1,35 @@
 #include "Debug.hpp"
 #include "LogRouter.hpp"
 #include "Utils/UserDataPath.hpp"
+#include "SystemInfo.hpp"
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <sys/syscall.h>
+#include <unistd.h>
+#endif
+
+static thread_local const char* t_threadName = nullptr;
+static thread_local uint32_t t_osThreadId = 0;
+
+static uint32_t CurrentOsThreadId() {
+    if (t_osThreadId == 0) {
+#ifdef _WIN32
+        t_osThreadId = static_cast<uint32_t>(GetCurrentThreadId());
+#else
+        t_osThreadId = static_cast<uint32_t>(syscall(SYS_gettid));
+#endif
+    }
+    return t_osThreadId;
+}
+
+void Debug::SetThreadName(const char* name) {
+    t_threadName = name;
+}
 
 static LogMessage CreateMessage(LogLevel level, const std::string& text, const std::string& channel) {
     LogMessage msg;
@@ -9,16 +38,21 @@ static LogMessage CreateMessage(LogLevel level, const std::string& text, const s
     msg.channel = channel;
     msg.timestamp = std::chrono::system_clock::now();
     msg.threadId = std::this_thread::get_id();
+    msg.osThreadId = CurrentOsThreadId();
+    msg.threadName = t_threadName;
     return msg;
 }
 
 static void InstallCrashHandler();
 
 void Debug::Initialize(const std::string& productName, bool consoleOutput) {
+    if (!t_threadName)
+        SetThreadName("Main");
     UserDataPath::SetProductName(productName);
     LogRouter::Instance().SetProductName(productName);
     LogRouter::Instance().Start(consoleOutput);
     InstallCrashHandler();
+    SystemInfo::Log();
 }
 
 void Debug::Shutdown() {

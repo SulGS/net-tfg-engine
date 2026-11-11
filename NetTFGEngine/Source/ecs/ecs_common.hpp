@@ -74,8 +74,9 @@ public:
         float t = 1.0f - std::exp(-speed * deltaTime);
         auto interpAngle = [&](float cur, float tgt) {
             float diff = tgt - cur;
-            while (diff > 180.0f) diff -= 360.0f;
-            while (diff <= -180.0f) diff += 360.0f;
+            // remainder() instead of +-360 loops: those never end once |diff| is past ~1e10 (360 is below a float's
+            // precision there), which froze the render thread on a garbage angle.
+            diff = std::remainder(diff, 360.0f);
             return cur + diff * t;
         };
         rotation.x = interpAngle(rotation.x, target.x);

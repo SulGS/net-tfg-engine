@@ -136,6 +136,7 @@ public:
 
         networkRunning_.store(true);
         networkThread_ = std::thread([this]() {
+            Debug::SetThreadName("ClientNet");
             NetworkThread(*prediction_, *cWindow_, networkRunning_);
             });
 

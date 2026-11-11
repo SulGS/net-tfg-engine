@@ -84,9 +84,24 @@ void LogRouter::Enqueue(const LogMessage& msg) {
 }
 
 void LogRouter::RouterThread() {
+    // FileOutput only flushes on its own for warnings/errors, so a killed process (hang -> "Not responding" -> end task)
+    // lost every INFO line since the last warning: the log seemed to stop well before the point of the hang. Flushed
+    // whenever the queue runs dry (before blocking), and at least every kMaxUnflushed during a burst.
+    constexpr auto kMaxUnflushed = std::chrono::milliseconds(250);
+    bool unflushed = false;
+    auto lastFlush = std::chrono::steady_clock::now();
+    auto flushFile = [&]() {
+        fileOutput.Flush();
+        unflushed = false;
+        lastFlush = std::chrono::steady_clock::now();
+    };
+
     try {
         while (running) {
             LogMessage msg;
+
+            if (unflushed && queue.Empty())
+                flushFile();
 
             if (!queue.WaitPop(msg))
                 break; // stopping
@@ -123,6 +138,9 @@ void LogRouter::RouterThread() {
 
             try {
                 fileOutput.Write(msg);
+                unflushed = true;
+                if (std::chrono::steady_clock::now() - lastFlush >= kMaxUnflushed)
+                    flushFile();
             }
             catch (const std::exception& e) {
                 // Can't log this anywhere safely, but catch to prevent thread crash

@@ -46,6 +46,7 @@ public:
                         audioEntity, AudioSourceComponent("explosion.wav", AudioChannel::SFX, false));
 					audio->gain = 1.0f;
                     audio->play = true;
+                    audio->destroyOnFinish = true;   // nothing else removes it: there is no respawn
                     ApplyArenaAttenuation(*audio, ARENA_EXPLOSION_MAX_DISTANCE);
                     entityManager.AddComponent<ExplosionPlayerID>(audioEntity, ExplosionPlayerID{ play->playerId });
                 }

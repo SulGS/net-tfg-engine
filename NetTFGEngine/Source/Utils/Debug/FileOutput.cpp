@@ -1,6 +1,7 @@
 #include "FileOutput.hpp"
 #include <chrono>
 #include <ctime>
+#include <cstdio>
 
 bool FileOutput::Open(const std::string& filepath) {
     file.open(filepath, std::ios::out | std::ios::app);
@@ -21,8 +22,18 @@ void FileOutput::Write(const LogMessage& msg) {
 
     char timeBuf[32];
     std::strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", &tm);
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(msg.timestamp.time_since_epoch()).count() % 1000;
 
-    file << timeBuf << ": " << LevelToString(msg.level) << " ["
+    // "2026-11-10 02:02:16.123 {Render:1234}: [INFO] [Channel] text" (thread: Debug::SetThreadName + OS thread id).
+    char prefix[96];
+    if (msg.threadName)
+        std::snprintf(prefix, sizeof(prefix), "%s.%03d {%s:%u}: ", timeBuf, static_cast<int>(ms), msg.threadName,
+            static_cast<unsigned>(msg.osThreadId));
+    else
+        std::snprintf(prefix, sizeof(prefix), "%s.%03d {%u}: ", timeBuf, static_cast<int>(ms),
+            static_cast<unsigned>(msg.osThreadId));
+
+    file << prefix << LevelToString(msg.level) << " ["
         << msg.channel << "] "
         << msg.text;
 

@@ -8,8 +8,10 @@
 #include <vector>
 #include <utility>
 #include <cstdio>
+#include <sstream>
 
 #include "Utils/UserDataPath.hpp"
+#include "Utils/Debug/Debug.hpp"
 
 enum class QualityPreset
 {
@@ -563,7 +565,43 @@ public:
     bool save() const
     {
         savePreset();
-        return saveSettings();
+        const bool ok = saveSettings();
+        logApplied("Saved");
+        return ok;
+    }
+
+    // One line with what is in effect, for the log: written at startup and on every save from the settings menu, so a
+    // tester's log says what its frame times were measured with. "preset" is the base the fine-tuning started from.
+    std::string describe() const
+    {
+        static const char* kPreset[] = { "VeryLow", "Low", "Medium", "High", "Ultra" };
+        static const char* kWindow[] = { "Windowed", "Borderless", "Fullscreen" };
+        static const char* kUpscale[] = { "Bilinear", "FSR1", "Nearest", "NIS" };
+        auto pick = [](const char* const* names, int count, int i) { return (i >= 0 && i < count) ? names[i] : "?"; };
+        auto onOff = [](bool b) { return b ? "on" : "off"; };
+
+        std::ostringstream o;
+        o << "preset " << pick(kPreset, 5, static_cast<int>(m_preset))
+          << " | " << pick(kWindow, 3, static_cast<int>(m_windowMode));
+        if (m_windowMode == WindowMode::Windowed)
+            o << " " << m_windowWidth << "x" << m_windowHeight;
+        o << " | render height " << (m_renderHeight > 0 ? std::to_string(m_renderHeight) : std::string("native"))
+          << " (" << pick(kUpscale, 4, static_cast<int>(m_upscaleMode)) << ")"
+          << " | VSync " << onOff(m_vsyncEnabled)
+          << " | FPS limit " << m_targetFPS
+          << " | MSAA " << m_msaaSamples << "x"
+          << " | aniso " << m_anisotropy << "x"
+          << " | textures mip " << m_baseMip << (m_useCompression ? " compressed" : " uncompressed")
+          << " | point shadows " << (m_shadowsEnabled ? std::to_string(m_shadowRes) + " x" + std::to_string(m_maxShadowLights) : std::string("off"))
+          << " | dir shadows " << (m_dirShadowsEnabled ? std::to_string(m_dirShadowRes) + " detail " + std::to_string(m_dirShadowDetail) : std::string("off"))
+          << " | SSAO " << (m_ssaoEnabled ? std::to_string(m_ssaoSamples) + " samples 1/" + std::to_string(m_ssaoResolutionScale) : std::string("off"))
+          << " | SSR " << (m_ssrEnabled ? std::to_string(m_ssrSteps) + " steps 1/" + std::to_string(m_ssrResolutionScale) : std::string("off"))
+          << " | bloom " << (m_bloomEnabled ? std::to_string(m_bloomPasses) + " passes" : std::string("off"))
+          << " | FXAA " << onOff(m_fxaaEnabled)
+          << " | motion blur " << (m_motionBlurEnabled ? std::to_string(m_motionBlurSamples) + " samples" : std::string("off"))
+          << " | env " << (m_envLightingEnabled ? std::to_string(getEnvMapResolution()) + (getEnvProbesEnabled() ? " + probes" : " sky only") : std::string("off"))
+          << " | max lights " << m_maxLights;
+        return o.str();
     }
 
     // Back to the current preset's table values, throwing away any
@@ -576,6 +614,18 @@ public:
     }
 
 private:
+    // Same text as the last line logged: "Guardar cambios" followed by "Volver" saves twice, log it once.
+    mutable std::string m_lastLogged;
+
+    void logApplied(const char* what) const
+    {
+        std::string d = describe();
+        if (d == m_lastLogged)
+            return;
+        Debug::Info("RenderSettings") << what << ": " << d << "\n";
+        m_lastLogged = std::move(d);
+    }
+
     // Resolved on every use (not cached) so they pick up the product name set by Debug::Initialize.
     static std::string cfgPath()      { return UserDataPath::File("render_quality.cfg"); }
     static std::string settingsPath() { return UserDataPath::File("render_settings.cfg"); }
@@ -588,7 +638,8 @@ private:
 
         // And render_settings.cfg refines it. If it is missing or corrupt,
         // loadSettings() applies nothing and we keep the preset values.
-        loadSettings();
+        const bool custom = loadSettings();
+        logApplied(custom ? "Loaded (render_settings.cfg)" : "Loaded (preset only)");
     }
 
     static QualityPreset loadPresetFromFile()

@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 
 #include "Matchmaking/MatchmakingClient.hpp"
+#include "Utils/Debug/Debug.hpp"
 #include "Utils/GameVersion.hpp"
 #include "Utils/PlayerKey.hpp"
 #include "Utils/UserDataPath.hpp"
@@ -57,6 +58,7 @@ namespace
 
     void RunSearch(std::shared_ptr<MatchmakingSearch> search, std::string playerName, std::string playerKey,
         MatchmakerAddress address) {
+        Debug::SetThreadName("Matchmaking");
         httplib::Client cli(address.host, address.port);
         cli.set_connection_timeout(3);
         cli.set_read_timeout(5);

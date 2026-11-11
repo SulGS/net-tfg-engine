@@ -716,6 +716,7 @@ private:
 
         std::atomic<bool> networkRunning(true);
         std::thread networkThread([this, &networkRunning]() {
+            Debug::SetThreadName("ServerNet");
             ServerNetworkThread(networkRunning);
             });
 

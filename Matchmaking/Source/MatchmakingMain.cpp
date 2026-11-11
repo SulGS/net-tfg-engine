@@ -295,6 +295,7 @@ int main(int argc, char** argv) {
     std::condition_variable tickCv;
     bool stopping = false;
     std::thread tickThread([&]() {
+        Debug::SetThreadName("Tick");
         std::unique_lock<std::mutex> lock(tickMutex);
         while (!tickCv.wait_for(lock, std::chrono::milliseconds(200), [&] { return stopping; })) {
             lock.unlock();

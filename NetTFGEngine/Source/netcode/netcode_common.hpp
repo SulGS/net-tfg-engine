@@ -149,7 +149,9 @@ static_assert(std::is_trivially_copyable<InputBlob>::value,
 
 struct GameStateBlob {
     int frame = 0;
-    uint8_t data[4096];
+    // Zeroed: a blob that was never written (e.g. a fresh ClientWindow's Previous*State) used to hold heap garbage, and
+    // interpolating from a garbage rotation (~3e35) hung the render thread in an angle-wrapping loop.
+    uint8_t data[4096]{};
     int len = 0;
 };
 

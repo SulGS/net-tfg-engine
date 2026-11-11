@@ -42,6 +42,7 @@ public:
         if (!threadRunning) {
             threadRunning = true;
             audioThread = std::thread([]() {
+                Debug::SetThreadName("Audio");
                 audioSystem = new AudioSystem();
                 LoadAudioSettings();
                 Debug::Info("AudioManager") << "Audio system initialized on dedicated thread\n";

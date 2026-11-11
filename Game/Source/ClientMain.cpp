@@ -26,6 +26,15 @@ int main(int argc, char** argv) {
 
 	std::cout << std::filesystem::current_path() << '\n';
 
+#if defined(_DEBUG) || defined(DEBUG)
+	Debug::Initialize("Last Chance", true);
+#else
+	Debug::Initialize("Last Chance", false);
+#endif
+
+	// After Debug::Initialize so it lands in the log; before any connection (it travels in CLIENT_HELLO and to the matchmaker).
+	GameVersion::Set(ASTEROIDS_GAME_VERSION);
+
 
 	std::unique_ptr<IGameLogic> gameLogic = std::make_unique<AsteroidShooterClientGame>();
 	std::unique_ptr<IGameRenderer> gameRenderer = std::make_unique<AsteroidShooterGameRenderer>();
@@ -34,14 +43,6 @@ int main(int argc, char** argv) {
 
 	auto& engine = NetTFG_Engine::Get();
 
-#if defined(_DEBUG) || defined(DEBUG)
-	Debug::Initialize("AsteroidsClient", true);
-#else
-	Debug::Initialize("AsteroidsClient", false);
-#endif
-
-	// After Debug::Initialize so it lands in the log; before any connection (it travels in CLIENT_HELLO and to the matchmaker).
-	GameVersion::Set(ASTEROIDS_GAME_VERSION);
 
 	// After Debug::Initialize: it sets the user data folder the saved bindings are read from.
 	RegisterGameActions();
@@ -83,7 +84,7 @@ int main(int argc, char** argv) {
 	engine.RegisterClient(SETTINGS_SCENE_ID, new OfflineClient(std::move(settingsLogic), std::move(settingsRenderer), "settings.bin"));
 
 	engine.ActivateClient(MENU_SCENE_ID);
-	engine.Start(800, 600, "Asteroids");
+	engine.Start(800, 600, "Last Chance");
 
 	Debug::Shutdown();
 

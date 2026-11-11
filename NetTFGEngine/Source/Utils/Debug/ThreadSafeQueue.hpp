@@ -26,6 +26,11 @@ public:
         return true;
     }
 
+    bool Empty() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return queue.empty();
+    }
+
     void Stop() {
         {
             std::lock_guard<std::mutex> lock(mutex);

@@ -5,6 +5,7 @@
 // and the renderer. The simulation itself is in AsteroidsLogic.hpp, which GameServer includes on its own.
 
 #include "AsteroidsLogic.hpp"
+#include <cmath>
 
 #include "OpenGL/OpenGLIncludes.hpp"
 #include "Utils/Input.hpp"
@@ -665,18 +666,16 @@ public:
             {
                 rend.posX[i] = prevLocal.posX[i] + (currLocal.posX[i] - prevLocal.posX[i]) * localInterpolation;
                 rend.posY[i] = prevLocal.posY[i] + (currLocal.posY[i] - prevLocal.posY[i]) * localInterpolation;
-                float delta = currLocal.rot[i] - prevLocal.rot[i];
-                while (delta > 180.0f) delta -= 360.0f;
-                while (delta < -180.0f) delta += 360.0f;
+                // remainder() instead of +-360 loops: with a garbage angle (~3e35, from a never-written state) those
+                // loops never ended and hung the render thread on entering a match.
+                float delta = std::remainder(currLocal.rot[i] - prevLocal.rot[i], 360.0f);
                 rend.rot[i] = prevLocal.rot[i] + delta * localInterpolation;
             }
             else
             {
                 rend.posX[i] = prevServer.posX[i] + (currServer.posX[i] - prevServer.posX[i]) * serverInterpolation;
                 rend.posY[i] = prevServer.posY[i] + (currServer.posY[i] - prevServer.posY[i]) * serverInterpolation;
-                float delta = currServer.rot[i] - prevServer.rot[i];
-                while (delta > 180.0f) delta -= 360.0f;
-                while (delta < -180.0f) delta += 360.0f;
+                float delta = std::remainder(currServer.rot[i] - prevServer.rot[i], 360.0f);
                 rend.rot[i] = prevServer.rot[i] + delta * serverInterpolation;
             }
 

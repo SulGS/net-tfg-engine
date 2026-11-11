@@ -407,11 +407,17 @@ public:
                 if (state == AL_STOPPED && !audio->loop) {
                     cleanupSource(*audio);
                     activeAudioEntities.erase(ent);
+                    if (audio->destroyOnFinish || audio->pendingToDestroy)
+                        entityManager.DestroyEntity(ent);
                     continue;
                 }
             }
 
-            if (!audio->initialized) {
+            // Only when there is something to sound: a loop, a pending play, or a loop resuming after a device swap. A
+            // finished one-shot (play already consumed) whose entity is still around stays released instead of taking a
+            // source and re-decoding its WAV every tick for nothing.
+            const bool wantsSource = audio->play || audio->loop || audio->savedSampleOffset > 0;
+            if (!audio->initialized && wantsSource) {
                 initializeSource(*audio);
                 activeAudioEntities.insert(ent);
 
@@ -880,6 +886,11 @@ private:
             if (sourcePool[i] == src)
             {
                 alSourceStop(src);
+                // Stop leaves the source AL_STOPPED, and attaching a new buffer doesn't change that: the next component
+                // to get it from the pool looked like a finished one-shot on its first tick and was cleaned up, re-
+                // initialised, cleaned up... (explosion.wav reloaded 30x/s for as long as its entity lived). Rewind
+                // puts it back to AL_INITIAL.
+                alSourceRewind(src);
                 alSourcei(src, AL_BUFFER, 0);
                 sourceInUse[i] = false;
                 return;

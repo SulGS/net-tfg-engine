@@ -8,6 +8,10 @@ public:
     static void Initialize(const std::string& productName, bool consoleOutput);
 	static void Shutdown();
 
+    // Names the calling thread in the log (each line carries the thread it was logged from). `name` must outlive the
+    // thread: pass a string literal. Initialize() names its own thread "Main".
+    static void SetThreadName(const char* name);
+
     static void Log(const std::string& msg, const std::string& channel = "General");
     static void LogWarning(const std::string& msg, const std::string& channel = "General");
     static void LogError(const std::string& msg, const std::string& channel = "General");

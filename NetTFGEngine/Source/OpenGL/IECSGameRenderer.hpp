@@ -27,9 +27,12 @@
 #include "ecs/UI/DebugOverlay.hpp"
 #include "OpenAL/AudioManager.hpp"
 #include "Utils/Input.hpp"
+#include "Utils/Debug/Debug.hpp"
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
+#include <system_error>
 #include <functional>
 
 
@@ -151,9 +154,41 @@ public:
 
         world.AddSystem(std::make_unique<UIUpdateSystem>(1920, 1080, window->getWindow(), uir->GetFontManager()));
 
-        uir->LoadFont("default", "C:/Windows/Fonts/arial.ttf", 32);
+        LoadDefaultFont(uir);
 
         LogGPUMemory("World set up");
+    }
+
+    // The UI font comes from the OS font folder; the first candidate that exists wins. A missing font leaves every
+    // UIText/WorldText invisible (no glyphs), which is what happened on Linux with the old hardcoded Windows path.
+    static void LoadDefaultFont(UIRenderSystem* uir) {
+        static const char* const candidates[] = {
+#ifdef _WIN32
+            "C:/Windows/Fonts/arial.ttf",
+            "C:/Windows/Fonts/segoeui.ttf",
+#else
+            // Debian/Ubuntu, then Fedora/Arch layouts.
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/TTF/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+            "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+            "/usr/share/fonts/google-noto/NotoSans-Regular.ttf",
+            "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+            "/usr/share/fonts/gnu-free/FreeSans.ttf",
+#endif
+        };
+        for (const char* path : candidates) {
+            std::error_code ec;
+            if (std::filesystem::exists(path, ec) && uir->LoadFont("default", path, 32)) return;
+        }
+        Debug::Error("IECSGameRenderer") << "No usable UI font found; text will not render. Install Liberation Sans or DejaVu Sans.\n";
     }
 
     // Destroys every component in this world, dropping AssetManager ref-counts and GL resources; must run on the render thread and takes the same EntityManager mutex as Render().

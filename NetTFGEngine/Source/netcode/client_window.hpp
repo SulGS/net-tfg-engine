@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <thread>
 #include <chrono>
+#include <iomanip>
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -129,6 +130,7 @@ public:
             closeRequested = false;
             renderThread = std::thread([width, height, title]() {
                 renderThreadId = std::this_thread::get_id();
+                Debug::SetThreadName("Render");
 
                 // Scoped to the whole thread body so it releases even if
                 // renderLoop() were to exit early.
@@ -206,7 +208,9 @@ public:
 
 
         if (state.frame > CurrentServerState.frame) {
-            PreviousServerState = CurrentServerState;
+            // First real state: Previous would otherwise be the never-written placeholder (frame -1), and renderLoop()
+            // would interpolate from it. Seeding it with the same state renders that first state as-is.
+            PreviousServerState = (CurrentServerState.frame == -1) ? state : CurrentServerState;
             previousStateUpdate = lastStateUpdate;
             CurrentServerState = state;
             lastStateUpdate = std::chrono::steady_clock::now();
@@ -220,7 +224,8 @@ public:
         // prediction (currentFrame = lastConfirmed + framesAhead). Rejecting it froze the local player until the frame
         // passed the old maximum again, then snapped.
         if (state.frame != CurrentLocalState.frame) {
-            PreviousLocalState = CurrentLocalState;
+            // See setServerState(): never let the frame -1 placeholder become the interpolation source.
+            PreviousLocalState = (CurrentLocalState.frame == -1) ? state : CurrentLocalState;
             previousLocalUpdate = lastLocalUpdate;
             CurrentLocalState = state;
             lastLocalUpdate = std::chrono::steady_clock::now();
@@ -287,8 +292,15 @@ private:
         auto frameStart = std::chrono::high_resolution_clock::now();
         auto previousFrameStart = frameStart;
 
-        int tickCount = 0;
-        std::vector<long long> tickDurations;
+        // ClientWindow log line, about once a second. FPS comes from the real frame-to-frame interval (what the player
+        // sees), so it never goes over the FPS limit; the old figure was 1000 / (time spent rendering one frame), which
+        // ignored the limiter's wait and read "2000 FPS" in menus. That render time is still logged, as "Work": the
+        // headroom left under the limit.
+        auto statsStart = frameStart;
+        int statsFrames = 0;            // frame intervals closed since statsStart
+        double statsWorstMs = 0.0;      // longest interval in the window (hitches)
+        double statsWorkMs = 0.0;       // summed render time (frame start -> after swap, before the wait)
+        std::vector<std::pair<int, double>> statsHistory; // (frames, seconds) of the last windows, for "Avg"
         const size_t MAX_SAMPLES = 30;
 
         while (threadRunning) {
@@ -304,6 +316,8 @@ private:
                     float prev = currentFps.load(std::memory_order_relaxed);
                     float smoothed = (prev <= 0.0f) ? instFps : (prev * 0.9f + instFps * 0.1f);
                     currentFps.store(smoothed, std::memory_order_relaxed);
+                    ++statsFrames;
+                    statsWorstMs = std::max(statsWorstMs, static_cast<double>(frameMs));
                 }
             }
 
@@ -402,35 +416,44 @@ private:
                 Debug::Info("ClientWindow") << "Window close requested; waiting for engine shutdown to release GL resources\n";
             }
 
-            tickCount++;
-            if (tickCount == CurrentTargetFPS()) {
-                tickCount = 0;
+            // Time-based window (not every N frames): an N tied to the FPS limit stopped matching when the limit was
+            // lowered mid-session, and a frame-count window at 30 FPS was several seconds long.
+            const double statsWindowS = std::chrono::duration<double>(frameStart - statsStart).count();
+            if (statsFrames > 0 && statsWindowS >= 1.0) {
+                const double limit = static_cast<double>(CurrentTargetFPS());
+                statsHistory.emplace_back(statsFrames, statsWindowS);
+                if (statsHistory.size() > MAX_SAMPLES)
+                    statsHistory.erase(statsHistory.begin());
+                int histFrames = 0;
+                double histSeconds = 0.0;
+                for (const auto& [frames, seconds] : statsHistory) {
+                    histFrames += frames;
+                    histSeconds += seconds;
+                }
+                // Pacing jitter can put the measured rate a hair over the limit: never report more than the limit.
+                const double fps = std::min(statsFrames / statsWindowS, limit);
+                const double avgFps = std::min(histFrames / histSeconds, limit);
 
-                auto frameEnd = std::chrono::high_resolution_clock::now();
-                auto frameDurationUs =
-                    std::chrono::duration_cast<std::chrono::microseconds>(frameEnd - frameStart).count();
-
-                tickDurations.push_back(frameDurationUs);
-                if (tickDurations.size() > MAX_SAMPLES)
-                    tickDurations.erase(tickDurations.begin());
-
-                long long sum = 0;
-                for (auto d : tickDurations)
-                    sum += d;
-
-                double currentMs = frameDurationUs / 1000.0;
-                double currentFps = 1000.0 / currentMs;
-                double meanMs = (sum / static_cast<double>(tickDurations.size())) / 1000.0;
-                double meanFps = 1000.0 / meanMs;
-
-                Debug::Info("ClientWindow")
-                    << "Frame: " << currentMs << " ms | "
-                    << "Avg: " << meanMs << " ms | "
-                    << "FPS: " << currentFps << " | "
-                    << "Avg FPS: " << meanFps << " | "
+                Debug::Info("ClientWindow") << std::fixed << std::setprecision(2)
+                    << "Frame: " << 1000.0 / fps << " ms | "
+                    << "Avg: " << 1000.0 / avgFps << " ms | "
+                    << "FPS: " << fps << " | "
+                    << "Avg FPS: " << avgFps << " | "
+                    << "Worst: " << statsWorstMs << " ms | "
+                    << "Work: " << statsWorkMs / statsFrames << " ms | "
+                    << "Limit: " << static_cast<int>(limit) << " | "
                     << "Active: " << instances.size()
                     << "\n";
+
+                statsStart = frameStart;
+                statsFrames = 0;
+                statsWorstMs = 0.0;
+                statsWorkMs = 0.0;
             }
+
+            // After the window check: this frame's interval closes at the next frame start, so it belongs to the next window.
+            statsWorkMs += std::chrono::duration<double, std::milli>(
+                std::chrono::high_resolution_clock::now() - frameStart).count();
 
             Input::Update();
             // Actions from the raw state just aged, and the snapshot the game tick reads (ConsumeTickInput).

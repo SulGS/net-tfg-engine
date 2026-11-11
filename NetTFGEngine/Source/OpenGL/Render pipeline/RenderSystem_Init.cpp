@@ -60,9 +60,11 @@ void RenderSystem::InitShadowCubeArray()
 {
     m_shadowRes = RenderSettings::instance().getShadowResolution();
 
-    // VRAM cap (see ShadowBudgetBytes): an eighth of the GPU's memory for the point-light cube array.
+    // VRAM cap (see ShadowBudgetBytes): a sixth of the GPU's memory for the point-light cube array. A sixth, not an
+    // eighth: Ultra's 16 lights at 2048 need 1.5 GB, which an eighth only allowed from ~13 GB of VRAM up (a 12 GB RTX
+    // 3060 always fell back to 1024); with a sixth it fits from ~9.2 GB.
     {
-        const long long budget = ShadowBudgetBytes(8);
+        const long long budget = ShadowBudgetBytes(6);
         auto bytes = [](int res, int lights) { return 6LL * res * res * 4 * std::max(1, lights); };
         const int wantRes = m_shadowRes, wantLights = MAX_SHADOW_LIGHTS;
         while (m_shadowRes > 256 && bytes(m_shadowRes, MAX_SHADOW_LIGHTS) > budget) m_shadowRes /= 2;
