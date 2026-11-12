@@ -4,6 +4,10 @@
 #include "netcode/netcode_common.hpp"
 #include "OpenGL/OpenGLWindow.hpp"
 #include "OpenGL/Mesh.hpp"
+#include "Utils/LoadPlan.hpp"
+#include "Utils/LoadingScreenStyle.hpp"
+
+#include <memory>
 
 class IGameRenderer {
 private:
@@ -15,6 +19,14 @@ public:
     int playerId = -1;
 
     virtual void Init(const GameStateBlob& state, OpenGLWindow* window) = 0;
+
+    // What the render loop actually runs to set this renderer up: Init() cut into steps that it spreads over frames,
+    // with the loading screen on top (see LoadPlan). The default is Init() as a single step. `state` is only valid
+    // during this call: steps that need it keep a copy.
+    virtual void BuildLoadPlan(LoadPlan& plan, const GameStateBlob& state, OpenGLWindow* window) {
+        auto initial = std::make_shared<GameStateBlob>(state);
+        plan.Add(GetLoadingScreenStyle().sceneSetupLabel, 1.0f, [this, initial, window]() { Init(*initial, window); });
+    }
 
     void LinkGameLogic(IGameLogic* logic) {
         gameLogic = logic;

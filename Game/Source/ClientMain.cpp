@@ -13,6 +13,7 @@
 #include "game/GameActions.hpp"
 #include "game/GameVersionInfo.hpp"
 #include "Utils/GameVersion.hpp"
+#include "Utils/LoadingScreenStyle.hpp"
 
 
 #include "NetTFG_Engine.hpp"
@@ -47,6 +48,22 @@ int main(int argc, char** argv) {
 	// After Debug::Initialize: it sets the user data folder the saved bindings are read from.
 	RegisterGameActions();
 
+	// The engine's loading screen in the game's language and colours (the match's own steps are labelled in
+	// AsteroidShooterGameRenderer::BuildECSLoadPlan).
+	{
+		LoadingScreenStyle style;
+		style.title = "Cargando";
+		style.warmUpLabel = "Preparando el escenario";
+		style.waitingForServerLabel = "Sincronizando con el servidor";
+		style.sceneSetupLabel = "Preparando la escena";
+		style.sceneBuildLabel = "Construyendo el escenario";
+		style.renderSetupLabel = "Iniciando el renderizado";
+		style.interfaceSetupLabel = "Preparando la interfaz";
+		style.backgroundColor = glm::vec4(0.0f, 0.0f, 0.03f, 1.0f);
+		style.barFillColor = glm::vec4(1.0f, 0.42f, 0.08f, 1.0f);   // lava orange
+		SetLoadingScreenStyle(style);
+	}
+
 	// Matchmaker address: --matchmaker host:port overrides matchmaking.cfg (created with defaults if missing).
 	// --gl-debug: OpenGL debug context, driver errors go to the log (same as NETTFG_GL_DEBUG=1).
 	MatchmakerAddress matchmaker = LoadMatchmakerAddress();
@@ -66,7 +83,12 @@ int main(int argc, char** argv) {
 
 
 
-	engine.RegisterClient(1, new OnlineClient(std::move(gameLogic), std::move(gameRenderer), "online_level.bin"));
+	OnlineClient* onlineClient = new OnlineClient(std::move(gameLogic), std::move(gameRenderer), "online_level.bin");
+	// Alpha test 2026-11-11: every match decoded and uploaded the level again (7-17 s median). Kept loaded after the
+	// first match, and the big meshes' CPU work starts while the player still waits in the lobby.
+	onlineClient->keepAssetsResident = true;
+	onlineClient->prefetchMeshes = { "tile.glb", "pilar.glb", "ship_low.glb", "lava.glb", "laser_beam.glb", GLOW_VOLUME_MESH };
+	engine.RegisterClient(1, onlineClient);
 
 	std::unique_ptr<IGameLogic> menuLogic = std::make_unique<StartScreenGame>();
 	std::unique_ptr<IGameRenderer> menuRenderer = std::make_unique<StartScreenGameRenderer>();

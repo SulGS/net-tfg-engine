@@ -4,6 +4,7 @@
 #error "NetTFG_Engine.hpp is client-only (OpenGL/GLFW/OpenAL/FreeType/SOIL): headless targets (NetTFGEngineCore, GameServer) must not include it"
 #endif
 #include <unordered_map>
+#include <set>
 #include <string>
 #include <iostream>
 #include <memory>
@@ -17,6 +18,7 @@
 #include "Utils/Debug/Debug.hpp"
 
 #include "Utils/AssetManager.hpp"
+#include "Utils/Debug/SystemInfo.hpp"
 
 #include <SOIL2/SOIL2.h>
 
@@ -26,6 +28,7 @@
 #include <tiny_gltf.h>
 
 #include "OpenGL/Render pipeline/RenderSettings.hpp"
+#include "OpenGL/MeshBufferLoader.hpp"
 
 
 class NetTFG_Engine {
@@ -54,11 +57,10 @@ public:
         const std::string& customClientId = "") {
         std::thread([this, id, host, port, customClientId, cb = std::forward<Callback>(callback)]() mutable {
             Debug::SetThreadName("Connect");
-            ActivateClientInternal(id, host, port, customClientId);
+            ConnectionCode code = ActivateClientInternal(id, host, port, customClientId) ? CONN_SUCCESS : CONN_TIMEOUT;
 
-            ConnectionCode code = CONN_TIMEOUT;
             auto it = clientIndexMap.find(id);
-            if (it != clientIndexMap.end()) {
+            if (code != CONN_SUCCESS && it != clientIndexMap.end()) {
                 std::lock_guard<std::mutex> lock(connectionsMutex_);
                 auto errorIt = clientErrorCodes_.find(it->second);
                 if (errorIt != clientErrorCodes_.end()) {
@@ -237,6 +239,14 @@ public:
         return ClientManager::Get().IsClientActive(it->second);
     }
 
+    // True while an activation of this client is running (e.g. an OnlineClient waiting for its match to start).
+    bool IsClientConnecting(int id) const {
+        auto it = clientIndexMap.find(id);
+        if (it == clientIndexMap.end()) return false;
+        std::lock_guard<std::mutex> lock(connectionsMutex_);
+        return settingUp_.count(it->second) != 0;
+    }
+
     bool IsClientActive(const Client* client) const {
         if (!client) return false;
 
@@ -302,437 +312,11 @@ public:
 private:
     NetTFG_Engine()
     {
-        AssetManager::instance().registerType<MeshBuffer>(
-            // Loader
-            [](const uint8_t* data, size_t size) -> MeshBuffer
-            {
-                MeshBuffer buffer{};
-                tinygltf::TinyGLTF loader;
-                tinygltf::Model    model;
-                std::string        err, warn;
-
-                if (!loader.LoadBinaryFromMemory(&model, &err, &warn, data, static_cast<unsigned int>(size), "")) {
-                    Debug::Error("GLTF") << err << "\n";
-                    return buffer;
-                }
-
-                if (!warn.empty())
-                    Debug::Warning("GLTF") << warn << "\n";
-
-                std::vector<Vertex>   vertices;
-                std::vector<uint32_t> indices;
-
-                // Read quality settings once for the whole load
-                const auto& rs = RenderSettings::instance();
-                const int    baseMip = rs.texBaseMip();
-                const bool   useCompression = rs.texCompression();
-
-                // Texture cache keyed by (imageSource << 1 | sRGB) so the same image uploaded sRGB vs linear gets two separate GL textures.
-                std::unordered_map<uint64_t, GLuint> texCache;
-
-                // isNormalMap applies GL_TEXTURE_LOD_BIAS=2.0: at large world scale the GPU otherwise always picks mip 0, producing a distinct specular dot on normal maps.
-                auto loadTex = [&](int texIndex, bool sRGB, bool isNormalMap = false) -> GLuint
-                    {
-                        if (texIndex < 0 || texIndex >= (int)model.textures.size())
-                            return 0;
-
-                        const auto& tex = model.textures[texIndex];
-                        if (tex.source < 0 || tex.source >= (int)model.images.size())
-                            return 0;
-
-                        uint64_t key = ((uint64_t)tex.source << 1) | (sRGB ? 1u : 0u);
-                        auto it = texCache.find(key);
-                        if (it != texCache.end())
-                            return it->second;
-
-                        const auto& img = model.images[tex.source];
-
-                        GLint internalFmt, uploadFmt;
-                        if (useCompression) {
-                            // BC7/BPTC — driver compresses at upload time
-                            internalFmt = sRGB ? GL_COMPRESSED_SRGB_ALPHA_BPTC_UNORM
-                                : GL_COMPRESSED_RGBA_BPTC_UNORM;
-                            uploadFmt = GL_RGBA; // BC7 requires RGBA input
-                        }
-                        else {
-                            if (img.component == 4) {
-                                internalFmt = sRGB ? GL_SRGB8_ALPHA8 : GL_RGBA8;
-                                uploadFmt = GL_RGBA;
-                            }
-                            else {
-                                internalFmt = sRGB ? GL_SRGB8 : GL_RGB8;
-                                uploadFmt = GL_RGB;
-                            }
-                        }
-
-                        // If compression is on or the source is RGB, pad to RGBA (BC7 always needs 4 channels).
-                        std::vector<uint8_t> paddedRGBA;
-                        const uint8_t* uploadData = img.image.data();
-
-                        if ((useCompression || uploadFmt == GL_RGBA) && img.component == 3)
-                        {
-                            paddedRGBA.resize(img.width * img.height * 4);
-                            for (int i = 0; i < img.width * img.height; ++i)
-                            {
-                                paddedRGBA[i * 4 + 0] = img.image[i * 3 + 0];
-                                paddedRGBA[i * 4 + 1] = img.image[i * 3 + 1];
-                                paddedRGBA[i * 4 + 2] = img.image[i * 3 + 2];
-                                paddedRGBA[i * 4 + 3] = 255;
-                            }
-                            uploadData = paddedRGBA.data();
-                        }
-
-                        // Resolution reduction: box-filter downsample on CPU by skipping `baseMip` mip levels.
-                        std::vector<uint8_t> downsampled;
-                        int uploadW = img.width;
-                        int uploadH = img.height;
-
-                        if (baseMip > 0)
-                        {
-                            uploadW = std::max(1, img.width >> baseMip);
-                            uploadH = std::max(1, img.height >> baseMip);
-
-                            int scale = 1 << baseMip;
-                            // RGBA unless an RGB image goes up uncompressed (only then is it not padded above).
-                            int components = (uploadFmt == GL_RGBA) ? 4 : 3;
-                            int sampleArea = scale * scale;
-                            downsampled.resize(uploadW * uploadH * components);
-
-                            auto toLinear = [](uint8_t v) -> float {
-                                float f = v / 255.0f;
-                                return f * f;
-                                };
-                            auto toSRGB = [](float v) -> uint8_t {
-                                v = glm::clamp(v, 0.0f, 1.0f);
-                                return static_cast<uint8_t>(sqrtf(v) * 255.0f + 0.5f);
-                                };
-
-                            for (int y = 0; y < uploadH; ++y)
-                            {
-                                for (int x = 0; x < uploadW; ++x)
-                                {
-                                    for (int c = 0; c < components; ++c)
-                                    {
-                                        bool isAlpha = (c == 3);
-                                        bool doGamma = sRGB && !isAlpha;
-
-                                        if (doGamma)
-                                        {
-                                            float sum = 0.0f;
-                                            for (int dy = 0; dy < scale; ++dy)
-                                                for (int dx = 0; dx < scale; ++dx)
-                                                {
-                                                    int sx = std::min(x * scale + dx, img.width - 1);
-                                                    int sy = std::min(y * scale + dy, img.height - 1);
-                                                    sum += toLinear(uploadData[(sy * img.width + sx) * components + c]);
-                                                }
-                                            downsampled[(y * uploadW + x) * components + c] =
-                                                toSRGB(sum / sampleArea);
-                                        }
-                                        else
-                                        {
-                                            uint32_t sum = 0;
-                                            for (int dy = 0; dy < scale; ++dy)
-                                                for (int dx = 0; dx < scale; ++dx)
-                                                {
-                                                    int sx = std::min(x * scale + dx, img.width - 1);
-                                                    int sy = std::min(y * scale + dy, img.height - 1);
-                                                    sum += uploadData[(sy * img.width + sx) * components + c];
-                                                }
-                                            downsampled[(y * uploadW + x) * components + c] =
-                                                static_cast<uint8_t>(sum / sampleArea);
-                                        }
-                                    }
-                                }
-                            }
-
-                            uploadData = downsampled.data();
-                        }
-
-                        // Upload to GPU
-                        GLuint id = 0;
-                        glGenTextures(1, &id);
-                        glBindTexture(GL_TEXTURE_2D, id);
-                        glTexImage2D(GL_TEXTURE_2D, 0, internalFmt,
-                            (GLsizei)uploadW, (GLsizei)uploadH,
-                            0, uploadFmt, GL_UNSIGNED_BYTE, uploadData);
-
-                        if (useCompression) {
-                            // BC7 is not color-renderable, so glGenerateMipmap on it is INVALID_OPERATION per spec; drivers
-                            // that accept it decompress/recompress internally, and the Radeon 520's 21.19 driver crashed
-                            // inside itself in the first draw after a match's textures were freed. Build the chain on the
-                            // CPU (2x2 box, gamma-aware for sRGB colour) and let the driver compress each level instead.
-                            auto toLinear = [](uint8_t v) { const float f = v / 255.0f; return f * f; };
-                            auto toSRGB = [](float v) {
-                                return static_cast<uint8_t>(sqrtf(glm::clamp(v, 0.0f, 1.0f)) * 255.0f + 0.5f);
-                                };
-
-                            std::vector<uint8_t> prev(uploadData, uploadData + static_cast<size_t>(uploadW) * uploadH * 4);
-                            std::vector<uint8_t> next;
-                            int w = uploadW, h = uploadH, level = 0;
-                            while (w > 1 || h > 1) {
-                                const int nw = std::max(1, w / 2), nh = std::max(1, h / 2);
-                                next.resize(static_cast<size_t>(nw) * nh * 4);
-                                for (int y = 0; y < nh; ++y)
-                                    for (int x = 0; x < nw; ++x)
-                                        for (int c = 0; c < 4; ++c) {
-                                            const int x0 = std::min(2 * x, w - 1), x1 = std::min(2 * x + 1, w - 1);
-                                            const int y0 = std::min(2 * y, h - 1), y1 = std::min(2 * y + 1, h - 1);
-                                            const uint8_t s[4] = {
-                                                prev[(static_cast<size_t>(y0) * w + x0) * 4 + c], prev[(static_cast<size_t>(y0) * w + x1) * 4 + c],
-                                                prev[(static_cast<size_t>(y1) * w + x0) * 4 + c], prev[(static_cast<size_t>(y1) * w + x1) * 4 + c] };
-                                            uint8_t out;
-                                            if (sRGB && c != 3)
-                                                out = toSRGB((toLinear(s[0]) + toLinear(s[1]) + toLinear(s[2]) + toLinear(s[3])) * 0.25f);
-                                            else
-                                                out = static_cast<uint8_t>((s[0] + s[1] + s[2] + s[3] + 2) / 4);
-                                            next[(static_cast<size_t>(y) * nw + x) * 4 + c] = out;
-                                        }
-                                ++level;
-                                glTexImage2D(GL_TEXTURE_2D, level, internalFmt, nw, nh, 0, GL_RGBA, GL_UNSIGNED_BYTE, next.data());
-                                prev.swap(next);
-                                w = nw;
-                                h = nh;
-                            }
-                            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, level);
-                        }
-                        else {
-                            glGenerateMipmap(GL_TEXTURE_2D);
-                        }
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
-                        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                        glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY,
-                            RenderSettings::instance().getAnisotropy());
-
-                        if (isNormalMap)
-                            glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_LOD_BIAS, 0.0f);
-
-                        glBindTexture(GL_TEXTURE_2D, 0);
-
-                        texCache[key] = id;
-                        return id;
-                    };
-
-                // Stride-aware accessor helper.
-                auto getAccessor = [&](const tinygltf::Primitive& prim,
-                    const std::string& name)
-                    -> std::function<const float* (size_t)>
-                    {
-                        auto it = prim.attributes.find(name);
-                        if (it == prim.attributes.end())
-                            return nullptr;
-
-                        const auto& acc = model.accessors[it->second];
-                        const auto& view = model.bufferViews[acc.bufferView];
-                        const auto& buf = model.buffers[view.buffer];
-                        const uint8_t* base = buf.data.data()
-                            + view.byteOffset
-                            + acc.byteOffset;
-
-                        size_t componentSize = tinygltf::GetComponentSizeInBytes(acc.componentType);
-                        size_t numComponents = tinygltf::GetNumComponentsInType(acc.type);
-                        size_t stride = (view.byteStride != 0)
-                            ? view.byteStride
-                            : componentSize * numComponents;
-
-                        return [base, stride](size_t i) -> const float* {
-                            return reinterpret_cast<const float*>(base + i * stride);
-                            };
-                    };
-
-                // Pack all primitives into a single VBO/EBO
-                for (const auto& mesh : model.meshes) {
-                    for (const auto& prim : mesh.primitives) {
-
-                        auto getPos = getAccessor(prim, "POSITION");
-                        auto getNorm = getAccessor(prim, "NORMAL");
-                        auto getUV = getAccessor(prim, "TEXCOORD_0");
-                        auto getTan = getAccessor(prim, "TANGENT");
-
-                        if (!getPos) continue;
-
-                        const auto& posAcc = model.accessors[prim.attributes.at("POSITION")];
-                        size_t      vertOffset = vertices.size();
-                        vertices.resize(vertOffset + posAcc.count);
-
-                        for (size_t i = 0; i < posAcc.count; ++i) {
-                            Vertex& v = vertices[vertOffset + i];
-
-                            const float* p = getPos(i);
-                            v.position = glm::vec3(p[0], p[1], p[2]);
-
-                            if (getNorm) {
-                                const float* n = getNorm(i);
-                                v.normal = glm::vec3(n[0], n[1], n[2]);
-                            }
-                            else {
-                                v.normal = glm::vec3(0.0f, 1.0f, 0.0f);
-                            }
-
-                            if (getUV) {
-                                const float* u = getUV(i);
-                                v.uv = glm::vec2(u[0], u[1]);
-                            }
-                            else {
-                                v.uv = glm::vec2(0.0f);
-                            }
-
-                            if (getTan) {
-                                const float* t = getTan(i);
-                                v.tangent = glm::vec4(t[0], t[1], t[2], t[3]);
-                            }
-                        }
-
-                        // Generate tangents if the mesh didn't provide them
-                        if (!getTan) {
-                            std::vector<glm::vec3> tangentAccum(posAcc.count, glm::vec3(0.0f));
-
-                            if (prim.indices >= 0) {
-                                const auto& idxAcc = model.accessors[prim.indices];
-                                const auto& idxView = model.bufferViews[idxAcc.bufferView];
-                                const auto& idxBuf = model.buffers[idxView.buffer];
-
-                                auto getIdx = [&](size_t i) -> uint32_t {
-                                    if (idxAcc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT)
-                                        return reinterpret_cast<const uint16_t*>(
-                                            idxBuf.data.data() + idxView.byteOffset + idxAcc.byteOffset)[i];
-                                    return reinterpret_cast<const uint32_t*>(
-                                        idxBuf.data.data() + idxView.byteOffset + idxAcc.byteOffset)[i];
-                                    };
-
-                                for (size_t i = 0; i + 2 < idxAcc.count; i += 3) {
-                                    uint32_t i0 = getIdx(i),
-                                        i1 = getIdx(i + 1),
-                                        i2 = getIdx(i + 2);
-
-                                    Vertex& v0 = vertices[vertOffset + i0];
-                                    Vertex& v1 = vertices[vertOffset + i1];
-                                    Vertex& v2 = vertices[vertOffset + i2];
-
-                                    glm::vec3 edge1 = v1.position - v0.position;
-                                    glm::vec3 edge2 = v2.position - v0.position;
-                                    glm::vec2 dUV1 = v1.uv - v0.uv;
-                                    glm::vec2 dUV2 = v2.uv - v0.uv;
-
-                                    float det = dUV1.x * dUV2.y - dUV2.x * dUV1.y;
-                                    if (glm::abs(det) < 1e-6f) continue;
-
-                                    float     f = 1.0f / det;
-                                    glm::vec3 T = f * (dUV2.y * edge1 - dUV1.y * edge2);
-
-                                    tangentAccum[i0] += T;
-                                    tangentAccum[i1] += T;
-                                    tangentAccum[i2] += T;
-                                }
-                            }
-
-                            for (size_t i = 0; i < posAcc.count; ++i) {
-                                Vertex& v = vertices[vertOffset + i];
-                                glm::vec3 N = v.normal;
-                                glm::vec3 T = tangentAccum[i];
-
-                                if (glm::length(T) < 1e-6f) {
-                                    if (glm::abs(N.x) > 0.9f)
-                                        T = glm::normalize(glm::cross(N, glm::vec3(0.0f, 1.0f, 0.0f)));
-                                    else
-                                        T = glm::normalize(glm::cross(N, glm::vec3(1.0f, 0.0f, 0.0f)));
-                                }
-                                else {
-                                    T = glm::normalize(T - glm::dot(T, N) * N);
-                                }
-
-                                v.tangent = glm::vec4(T, 1.0f);
-                            }
-                        }
-
-                        std::vector<uint32_t> primIndices;
-                        if (prim.indices >= 0) {
-                            const auto& idxAcc = model.accessors[prim.indices];
-                            const auto& idxView = model.bufferViews[idxAcc.bufferView];
-                            const auto& idxBuf = model.buffers[idxView.buffer];
-
-                            primIndices.resize(idxAcc.count);
-                            for (size_t i = 0; i < idxAcc.count; ++i) {
-                                if (idxAcc.componentType == TINYGLTF_COMPONENT_TYPE_UNSIGNED_SHORT)
-                                    primIndices[i] = static_cast<uint32_t>(
-                                        reinterpret_cast<const uint16_t*>(
-                                            idxBuf.data.data()
-                                            + idxView.byteOffset
-                                            + idxAcc.byteOffset)[i]);
-                                else
-                                    primIndices[i] =
-                                    reinterpret_cast<const uint32_t*>(
-                                        idxBuf.data.data()
-                                        + idxView.byteOffset
-                                        + idxAcc.byteOffset)[i];
-
-                                primIndices[i] += static_cast<uint32_t>(vertOffset);
-                            }
-                            indices.insert(indices.end(), primIndices.begin(), primIndices.end());
-                        }
-
-                        // Load PBR textures; normalTex passes isNormalMap=true to apply LOD bias.
-                        SubMeshRange smr{};
-                        smr.indexOffset = static_cast<uint32_t>(indices.size() - primIndices.size());
-                        smr.indexCount = static_cast<uint32_t>(primIndices.size());
-
-                        if (prim.material >= 0 && prim.material < (int)model.materials.size()) {
-                            const auto& mat = model.materials[prim.material];
-                            const auto& pbr = mat.pbrMetallicRoughness;
-
-                            smr.diffuseTex = loadTex(pbr.baseColorTexture.index, true);        // sRGB
-                            smr.normalTex = loadTex(mat.normalTexture.index, false, true);  // linear, isNormalMap
-                            smr.mrTex = loadTex(pbr.metallicRoughnessTexture.index, false);        // linear
-                            smr.occlusionTex = loadTex(mat.occlusionTexture.index, false);        // linear
-                            smr.emissiveTex = loadTex(mat.emissiveTexture.index, false);        // linear
-                        }
-
-                        buffer.subMeshes.push_back(smr);
-                    }
-                }
-
-                glGenVertexArrays(1, &buffer.VAO);
-                glGenBuffers(1, &buffer.VBO);
-                glGenBuffers(1, &buffer.EBO);
-
-                glBindVertexArray(buffer.VAO);
-
-                glBindBuffer(GL_ARRAY_BUFFER, buffer.VBO);
-                glBufferData(GL_ARRAY_BUFFER,
-                    vertices.size() * sizeof(Vertex),
-                    vertices.data(), GL_STATIC_DRAW);
-
-                glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, buffer.EBO);
-                glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-                    indices.size() * sizeof(uint32_t),
-                    indices.data(), GL_STATIC_DRAW);
-
-                // location 0 — position
-                glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                    (void*)offsetof(Vertex, position));
-                glEnableVertexAttribArray(0);
-
-                // location 1 — normal
-                glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                    (void*)offsetof(Vertex, normal));
-                glEnableVertexAttribArray(1);
-
-                // location 2 — uv
-                glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                    (void*)offsetof(Vertex, uv));
-                glEnableVertexAttribArray(2);
-
-                // location 3 — tangent (vec4, w = bitangent handedness)
-                glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, sizeof(Vertex),
-                    (void*)offsetof(Vertex, tangent));
-                glEnableVertexAttribArray(3);
-
-                glBindVertexArray(0);
-
-                return buffer;
-            },
+        // Two phases (see MeshBufferLoader.hpp): AssetManager::prefetch runs the CPU half on a worker thread while the
+        // player waits for the match, and loadAsset on the render thread then only uploads.
+        AssetManager::instance().registerTwoPhaseType<MeshBuffer, PreparedMesh>(
+            [](const uint8_t* data, size_t size) { return MeshBufferLoader::PrepareMeshBuffer(data, size); },
+            [](PreparedMesh& prepared) { return MeshBufferLoader::FinishMeshBuffer(prepared); },
 
             // Destroyer
             [](MeshBuffer buffer)
@@ -894,9 +478,30 @@ private:
             return false;
         }
 
+        // One setup at a time per client, and never on an active one: SetupClient on a live client destroys the window
+        // and prediction its network thread and tick still use (alpha test 2026-11-11: two Connect threads on the same
+        // OnlineClient, and a client left active behind the settings menu).
+        {
+            std::lock_guard<std::mutex> lock(connectionsMutex_);
+            if (settingUp_.count(index) || ClientManager::Get().IsClientActive(index)) {
+                Debug::Warning("NetTFG_Engine") << "Client " << id << " is already "
+                    << (settingUp_.count(index) ? "connecting" : "active") << ", activation ignored\n";
+                clientErrorCodes_[index] = CONN_BUSY;
+                return false;
+            }
+            settingUp_.insert(index);
+        }
+        struct SetupGuard {
+            NetTFG_Engine* engine; size_t index;
+            ~SetupGuard() { std::lock_guard<std::mutex> lock(engine->connectionsMutex_); engine->settingUp_.erase(index); }
+        } setupGuard{ this, index };
+
         Debug::Info("NetTFG_Engine") << "Setting up client " << id << "...\n";
 
+        if (client->keepAssetsResident)
+            AssetManager::instance().setKeepResident(client->binName, true);
         AssetManager::instance().loadBin(client->binName);
+        StartPrefetch(*client);
 
         // Setup the client with connection parameters (may block)
         ConnectionCode result = client->SetupClient(host, port, customClientId);
@@ -922,6 +527,24 @@ private:
 
         Debug::Info("NetTFG_Engine") << "Activated client " << id << " (index " << index << ")\n";
         return true;
+    }
+
+    // Prefetch needs room for the decoded images until the render thread uploads them (a few hundred MB for the big
+    // meshes); below this much free RAM they load the old way, one at a time on the render thread.
+    static constexpr uint64_t PREFETCH_MIN_FREE_RAM = 3ULL << 30;
+
+    void StartPrefetch(const Client& client) {
+        if (client.prefetchMeshes.empty()) return;
+
+        const uint64_t freeRam = SystemInfo::AvailableMemoryBytes();
+        if (freeRam != 0 && freeRam < PREFETCH_MIN_FREE_RAM) {
+            Debug::Info("NetTFG_Engine") << "Skipping mesh prefetch: only " << (freeRam >> 20) << " MB of RAM free\n";
+            return;
+        }
+
+        const size_t queued = AssetManager::instance().prefetch<MeshBuffer>(client.prefetchMeshes);
+        if (queued > 0)
+            Debug::Info("NetTFG_Engine") << "Prefetching " << queued << " meshes for " << client.binName << "\n";
     }
 
     void ClientStartup(int width, int height, std::string windowName) {
@@ -956,7 +579,8 @@ private:
     std::unordered_map<int, size_t> clientIndexMap;  // Maps user-friendly ID to ClientManager index
     std::unordered_map<size_t, ConnectionInfo> clientConnections;  // Connection info per client index
     std::unordered_map<size_t, ConnectionCode> clientErrorCodes_;  // Last error code per client index
-    mutable std::mutex connectionsMutex_;  // Protect clientConnections and clientErrorCodes_ for async access
+    mutable std::mutex connectionsMutex_;  // Protect clientConnections, clientErrorCodes_ and settingUp_ for async access
+    std::set<size_t> settingUp_;           // Client indices inside ActivateClientInternal right now (see there)
 
     // Deferred deactivation queue: ActivateClientAsync callbacks fire on a background thread and can't call DeactivateClient directly (target may be mid-tick), so they queue here for Start() to drain post-tick.
     std::vector<int> pendingDeactivations_;

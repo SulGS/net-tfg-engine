@@ -609,10 +609,22 @@ private:
 
         // Puro ritmo del bucle de render (ver renderLoop() en client_window.hpp):
         // se aplica en el siguiente tick, sin reinit.
-        AddIntChoice(em, data, baseLayer, TAB_CALIDAD, row++, "Límite de FPS",
-            { 30, 60, 90, 120, 144, 165, 240 }, "",
-            []() { return RenderSettings::instance().getTargetFPS(); },
-            [](int v) { RenderSettings::instance().setTargetFPS(v); });
+        // 0 = "Sin límite" (RenderSettings::isFPSUnlimited), la última opción.
+        {
+            static const std::vector<int> fpsOptions = { 30, 60, 90, 120, 144, 165, 240, 0 };
+            std::vector<std::string> fpsNames = SettingsUI::IntOptionNames({ 30, 60, 90, 120, 144, 165, 240 }, "");
+            fpsNames.push_back("Sin límite");
+            AddChoice(em, data, baseLayer, TAB_CALIDAD, row++, "Límite de FPS", fpsNames,
+                []() {
+                    const RenderSettings& rs = RenderSettings::instance();
+                    if (rs.isFPSUnlimited()) return static_cast<int>(fpsOptions.size()) - 1;
+                    return SettingsUI::IndexOfNearest({ 30, 60, 90, 120, 144, 165, 240 }, rs.getTargetFPS());
+                },
+                [](int index) {
+                    if (index >= 0 && index < static_cast<int>(fpsOptions.size()))
+                        RenderSettings::instance().setTargetFPS(fpsOptions[index]);
+                });
+        }
 
         // Aplicado directamente sobre GLFW: el onClick corre en el hilo de
         // render (dentro de world.Update(), llamado desde Render() en

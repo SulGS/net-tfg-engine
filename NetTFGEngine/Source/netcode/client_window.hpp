@@ -4,6 +4,9 @@
 #include "OpenGL/OpenGLWindow.hpp"
 #include "OpenGL/Mesh.hpp"
 #include "OpenGL/Render pipeline/RenderSettings.hpp"
+#include "OpenGL/GPUInfo.hpp"
+#include "OpenGL/LoadingScreen.hpp"
+#include "Utils/LoadPlan.hpp"
 #include "Utils/Input.hpp"
 #include "Utils/InputMap.hpp"
 #include "Utils/Debug/Debug.hpp"
@@ -44,7 +47,10 @@ public:
 
 // Target render FPS now lives in RenderSettings (RenderSettings::instance().getTargetFPS()),
 // adjustable at runtime from the settings menu instead of being fixed at compile time.
-inline int CurrentTargetFPS() { return std::max(1, RenderSettings::instance().getTargetFPS()); }
+// With "no limit" (0) this returns a nominal 240 for the code that only needs a rough frame rate (first-frame dt,
+// counters); the pacer and the FPS log check FPSUnlimited() instead.
+inline bool FPSUnlimited() { return RenderSettings::instance().isFPSUnlimited(); }
+inline int CurrentTargetFPS() { return FPSUnlimited() ? 240 : std::max(1, RenderSettings::instance().getTargetFPS()); }
 
 // Microsecond tick period: milliseconds are too coarse above ~60 FPS (144 and 165 both floor to 6ms, ~166 FPS).
 // Microseconds keep the rounding error under ~0.05% across the whole FPS-limit dropdown.
@@ -81,6 +87,39 @@ class ClientWindow {
     // which is the configured cap, not what's actually being achieved.
     static std::atomic<float> currentFps;
 
+    // Drawn over the scenes while one loads (render thread only; created on first use, released before the context).
+    static std::unique_ptr<LoadingScreen> loadingScreen;
+
+    // Load plan steps run each frame until this much time is spent (a single step can't be cut, so it may overrun).
+    static constexpr std::chrono::microseconds kLoadSliceBudget{ 12000 };
+    // Share of the bar for the load plan; the rest is the warm-up (first frames: lazily loaded lighting, server state).
+    static constexpr float kPlanProgressShare = 0.85f;
+    // The warm-up screen gives up after this long, so a scene that never renders smoothly isn't hidden forever.
+    static constexpr std::chrono::seconds kMaxWarmUp{ 20 };
+    // One frame this long kept the window from pumping its events: logged (Windows calls it "No responde" at ~5 s).
+    static constexpr double kBlockedFrameWarnMs = 1000.0;
+
+    // Per-instance load state (render thread only).
+    LoadPlan loadPlan;
+    bool loading = false;            // loadPlan still has steps to run
+    bool loadScreenShown = false;    // this load lasted long enough to show the loading screen
+    bool warmedUp = false;           // IsLevelLoaded() was reached once after the load (latched: later hitches don't count)
+    bool lastHadRealState = false;   // both states had ticked at the last frame
+    std::chrono::steady_clock::time_point loadStart;
+    std::chrono::steady_clock::time_point loadEnd;
+
+    void BeginLoad(OpenGLWindow* win) {
+        needsInit = false;
+        loadPlan = LoadPlan{};
+        if (buildLoadPlanCallback) buildLoadPlanCallback(loadPlan, RenderState, win);
+        loading = !loadPlan.Done();
+        loadScreenShown = false;
+        warmedUp = false;
+        lastHadRealState = false;
+        loadStart = loadEnd = std::chrono::steady_clock::now();
+        smoothFramesSinceInit.store(0);
+    }
+
 public:
 
     // Real, measured FPS (exponential moving average), not the configured target.
@@ -96,16 +135,29 @@ public:
     std::chrono::steady_clock::time_point previousStateUpdate;
     std::chrono::steady_clock::time_point lastLocalUpdate;
     std::chrono::steady_clock::time_point previousLocalUpdate;
-    std::function<void(GameStateBlob&, OpenGLWindow*)> renderInitCallback;
+    // Fills the plan that sets the scene up (IGameRenderer::BuildLoadPlan); renderLoop() runs it a slice per frame.
+    std::function<void(LoadPlan&, const GameStateBlob&, OpenGLWindow*)> buildLoadPlanCallback;
     std::function<void(GameStateBlob&, OpenGLWindow*)> renderCallback;
     std::function<void(const GameStateBlob&, const GameStateBlob&, const GameStateBlob&, const GameStateBlob&, GameStateBlob&, float, float)> interpolationCallback;
 
     bool needsInit;  // Track per-instance initialization
 
-    ClientWindow(std::function<void(GameStateBlob&, OpenGLWindow*)> initCb,
+    // Its first state comes from a server (OnlineClient): the loading screen says so while waiting for it.
+    bool waitsForServer = false;
+
+    // Consecutive rendered frames, since Init, that took less than LOADED_FRAME_MS: lazily loaded assets (sky, probes,
+    // spritesheets...) still stall the first frames after Init, so "Init returned" alone isn't "loaded".
+    static constexpr float LOADED_FRAME_MS = 150.0f;
+    static constexpr int LOADED_SMOOTH_FRAMES = 20;
+    std::atomic<int> smoothFramesSinceInit{ 0 };
+
+    // True once the scene is loaded and renders smoothly (any thread).
+    bool IsLevelLoaded() const { return smoothFramesSinceInit.load() >= LOADED_SMOOTH_FRAMES; }
+
+    ClientWindow(std::function<void(LoadPlan&, const GameStateBlob&, OpenGLWindow*)> loadPlanCb,
         std::function<void(GameStateBlob&, OpenGLWindow*)> renderCb,
         std::function<void(const GameStateBlob&, const GameStateBlob&, const GameStateBlob&, const GameStateBlob&, GameStateBlob&, float, float)> interpolationCb)
-        : renderInitCallback(initCb), renderCallback(renderCb), interpolationCallback(interpolationCb), needsInit(true)
+        : buildLoadPlanCallback(loadPlanCb), renderCallback(renderCb), interpolationCallback(interpolationCb), needsInit(true)
     {
         lastStateUpdate = std::chrono::steady_clock::now();
         previousStateUpdate = std::chrono::steady_clock::now();
@@ -146,6 +198,17 @@ public:
                 window->setWindowedSize(windowW, windowH); // clamps to the monitor and centres
                 Input::Init(window->getWindow());
 
+                // Needs the context just created; before any scene's RenderSystem reads the settings.
+                {
+                    int fbW = 0, fbH = 0;
+                    glfwGetFramebufferSize(window->getWindow(), &fbW, &fbH);
+                    if (rs.getWindowMode() != WindowMode::Windowed) {
+                        if (const GLFWvidmode* mode = glfwGetVideoMode(glfwGetPrimaryMonitor())) fbH = mode->height;
+                    }
+                    RenderSettings::instance().autoDetectIfFirstRun(GPUInfo::RendererName(), GPUInfo::IsIntegrated(),
+                        GPUInfo::VideoMemoryBytes(), fbH);
+                }
+
                 // Engine-level GL resources that don't belong to any scene: compile the default surface shader now, with the context just created, instead of on the first mesh.
                 Mesh::InitDefaultMaterial();
 
@@ -156,6 +219,8 @@ public:
                 renderLoop();
 
                 // While the GL context still exists (deleting the window destroys it).
+                if (loadingScreen) loadingScreen->Release();
+                loadingScreen.reset();
                 Mesh::ReleaseDefaultMaterial();
 
                 delete window;
@@ -288,6 +353,54 @@ public:
     static OpenGLWindow* GetWindow() { return window; }
 
 private:
+    // Loading screen for the first instance that is loading: during its plan, then over its warm-up frames (lighting
+    // built on the first frames, waiting for the first server state) if the screen was already up. True if drawn.
+    static bool DrawLoadingScreen(const std::vector<ClientWindow*>& instances, bool anySceneDrawn, bool minimized) {
+        using Clock = std::chrono::steady_clock;
+        static Clock::time_point lastDraw = Clock::now();
+        const auto now = Clock::now();
+        const float dt = std::chrono::duration<float>(now - lastDraw).count();
+        lastDraw = now;
+
+        const LoadingScreenStyle style = GetLoadingScreenStyle();
+        // A load shorter than this never shows the screen's text and bar (no flash when a menu reloads).
+        const auto showAfter = std::chrono::milliseconds(std::max(0, style.showAfterMs));
+
+        for (ClientWindow* instance : instances) {
+            if (!instance || !instance->gRunning) continue;
+
+            float progress = 0.0f;
+            std::string label;
+            if (instance->loading) {
+                if (!instance->loadScreenShown && now - instance->loadStart >= showAfter) {
+                    instance->loadScreenShown = true;
+                    if (!loadingScreen) loadingScreen = std::make_unique<LoadingScreen>();
+                    loadingScreen->Begin();
+                }
+                progress = instance->loadPlan.Progress() * kPlanProgressShare;
+                label = instance->loadPlan.CurrentLabel();
+            }
+            else if (instance->loadScreenShown && !instance->warmedUp && now - instance->loadEnd < kMaxWarmUp) {
+                const float warm = std::min(1.0f,
+                    float(instance->smoothFramesSinceInit.load()) / float(LOADED_SMOOTH_FRAMES));
+                progress = kPlanProgressShare + (1.0f - kPlanProgressShare) * (instance->lastHadRealState ? warm : 0.0f);
+                label = (instance->lastHadRealState || !instance->waitsForServer)
+                    ? style.warmUpLabel : style.waitingForServerLabel;
+            }
+            else {
+                continue;
+            }
+
+            // Before the delay only a blank frame, and only when no scene drew one (a short load shows nothing).
+            if (!instance->loadScreenShown && anySceneDrawn) return false;
+            if (minimized) return true;
+            if (!loadingScreen) loadingScreen = std::make_unique<LoadingScreen>();
+            loadingScreen->Draw(window, progress, label, instance->loadScreenShown, dt);
+            return true;
+        }
+        return false;
+    }
+
     static void renderLoop() {
         auto frameStart = std::chrono::high_resolution_clock::now();
         auto previousFrameStart = frameStart;
@@ -343,21 +456,34 @@ private:
             // ECS/audio keep advancing (it skips draw systems when minimized); only the swap is skipped.
             const bool minimized = window->isMinimized();
 
+            bool anySceneDrawn = false;   // some scene drew this frame (the loading screen's blank phase leaves it be)
+
             for (ClientWindow* instance : instances) {
                 if (!instance || !instance->gRunning) continue;
 
-                if (instance->needsInit && instance->renderInitCallback) {
-                    instance->renderInitCallback(instance->RenderState, window);
-                    instance->needsInit = false;
+                if (instance->needsInit) instance->BeginLoad(window);
+
+                // The scene's setup, a slice per frame: this loop keeps pumping window events and drawing the loading
+                // screen in between. The scene isn't rendered until its whole plan has run; the frame its last step
+                // runs isn't rendered either, so that step and the first (heaviest) scene frame don't add up.
+                if (instance->loading) {
+                    instance->loadPlan.Run(kLoadSliceBudget);
+                    if (instance->loadPlan.Done()) {
+                        instance->loading = false;
+                        instance->loadEnd = std::chrono::steady_clock::now();
+                        instance->smoothFramesSinceInit.store(0);
+                    }
+                    continue;
                 }
 
                 instance->gStateMutex.lock();
 
                 // Both states start at frame=-1 until TickClient() completes once on the game thread. Interpolating before that
                 // blends toward zeroed placeholders (e.g. a ship at (0,0)) and then snaps. Skip interpolation and rendering until
-                // both have ticked; Init() still runs above so the scene exists.
+                // both have ticked; the load plan still runs above so the scene exists.
                 bool hasRealState = instance->CurrentLocalState.frame != -1
                     && instance->CurrentServerState.frame != -1;
+                instance->lastHadRealState = hasRealState;
 
                 if (!hasRealState) {
                     instance->gStateMutex.unlock();
@@ -405,10 +531,41 @@ private:
 
                 if (instance->renderCallback) {
                     instance->renderCallback(stateCopy, window);
+                    anySceneDrawn = true;
+                }
+
+                // This frame so far (tasks + every instance up to this one): a lazy asset load shows up here.
+                const float workMs = std::chrono::duration<float, std::milli>(
+                    std::chrono::high_resolution_clock::now() - frameStart).count();
+                if (workMs < LOADED_FRAME_MS) {
+                    if (instance->smoothFramesSinceInit.load() < LOADED_SMOOTH_FRAMES)
+                        instance->smoothFramesSinceInit.fetch_add(1);
+                }
+                else {
+                    instance->smoothFramesSinceInit.store(0);
+                }
+
+                if (!instance->warmedUp && instance->IsLevelLoaded()) {
+                    instance->warmedUp = true;
+                    const auto now = std::chrono::steady_clock::now();
+                    Debug::Info("Loading") << "Scene ready "
+                        << std::chrono::duration<double, std::milli>(now - instance->loadStart).count() << " ms after its load started ("
+                        << std::chrono::duration<double, std::milli>(now - instance->loadEnd).count() << " ms of warm-up frames)\n";
                 }
             }
 
+            const bool loadOnScreen = DrawLoadingScreen(instances, anySceneDrawn, minimized);
+
             if (!minimized) window->swapBuffers();
+
+            // Whatever this frame did, the window's events waited for all of it.
+            {
+                const double frameWorkMs = std::chrono::duration<double, std::milli>(
+                    std::chrono::high_resolution_clock::now() - frameStart).count();
+                if (frameWorkMs >= kBlockedFrameWarnMs)
+                    Debug::Warning("ClientWindow") << "One frame took " << frameWorkMs << " ms without pumping window events"
+                        << (loadOnScreen ? " (loading)" : "") << "\n";
+            }
 
             // Signal-only: NetTFG_Engine::Start() sees IsCloseRequested() and runs shutdown; stopRenderThread() sets threadRunning false once done.
             if (!closeRequested && window->shouldClose()) {
@@ -420,7 +577,8 @@ private:
             // lowered mid-session, and a frame-count window at 30 FPS was several seconds long.
             const double statsWindowS = std::chrono::duration<double>(frameStart - statsStart).count();
             if (statsFrames > 0 && statsWindowS >= 1.0) {
-                const double limit = static_cast<double>(CurrentTargetFPS());
+                // No limit: nothing to clamp to (logged as "Limit: 0").
+                const double limit = FPSUnlimited() ? 1e9 : static_cast<double>(CurrentTargetFPS());
                 statsHistory.emplace_back(statsFrames, statsWindowS);
                 if (statsHistory.size() > MAX_SAMPLES)
                     statsHistory.erase(statsHistory.begin());
@@ -441,7 +599,7 @@ private:
                     << "Avg FPS: " << avgFps << " | "
                     << "Worst: " << statsWorstMs << " ms | "
                     << "Work: " << statsWorkMs / statsFrames << " ms | "
-                    << "Limit: " << static_cast<int>(limit) << " | "
+                    << "Limit: " << (FPSUnlimited() ? 0 : static_cast<int>(limit)) << " | "
                     << "Active: " << instances.size()
                     << "\n";
 
@@ -462,6 +620,8 @@ private:
             // Deadline from this frame's own start, not an accumulated total: a slow frame only costs itself. An accumulated
             // nextTick fell permanently behind "now" (sleep_until on a past time returns instantly), so the FPS limit
             // effectively vanished once VSync stopped masking it.
+            // No FPS limit: straight to the next frame.
+            if (FPSUnlimited()) continue;
             auto frameDeadline = frameStart + std::chrono::microseconds(CurrentTickPeriodUs());
 
             // Hybrid wait: sleep_until() alone overshoots by the scheduler granularity (~11-12ms observed even with
@@ -488,5 +648,6 @@ std::vector<std::function<void()>> ClientWindow::pendingTasks;
 std::atomic<bool> ClientWindow::closeRequested{ false };
 std::thread::id ClientWindow::renderThreadId;
 std::atomic<float> ClientWindow::currentFps{ 0.0f };
+std::unique_ptr<LoadingScreen> ClientWindow::loadingScreen;
 
 #endif //NETCODE_CLIENT_WINDOW_H

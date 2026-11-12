@@ -111,4 +111,33 @@ for APP in $APPS; do
     done
 done
 
+# Release keeps -g (symbols "On") and vcpkg's .so carry their own DWARF: shipped as is, the client was ~36 MB and
+# libGameNetworkingSockets.so ~11 MB of mostly debug info, plus every internal symbol name. The debug info goes to
+# Symbols/<app>/<file>.debug, outside the deployable folders (gdb finds it through the .gnu_debuglink section, e.g.
+# with `set debug-file-directory` or by copying the .debug next to the binary), and the shipped files are stripped:
+# executables completely, shared libraries down to the dynamic symbols they need to load. KEEP_DEBUG=1 skips this.
+if [ "$KEEP_DEBUG" != "1" ]; then
+    echo ">>> Splitting debug info and stripping binaries..."
+    OBJCOPY="${OBJCOPY:-objcopy}"
+    STRIP="${STRIP:-strip}"
+    for APP in $APPS; do
+        APP_DIR="$OUTPUT_DIR/$APP"
+        SYM_DIR="$OUTPUT_DIR/Symbols/$APP"
+        mkdir -p "$SYM_DIR"
+        for BIN in "$APP_DIR/$APP" "$APP_DIR"/*.so*; do
+            [ -f "$BIN" ] || continue
+            NAME="$(basename "$BIN")"
+            BEFORE=$(stat -c %s "$BIN")
+            "$OBJCOPY" --only-keep-debug "$BIN" "$SYM_DIR/$NAME.debug"
+            if [ "$BIN" = "$APP_DIR/$APP" ]; then
+                "$STRIP" --strip-all "$BIN"
+            else
+                "$STRIP" --strip-unneeded "$BIN"
+            fi
+            "$OBJCOPY" --add-gnu-debuglink="$SYM_DIR/$NAME.debug" "$BIN"
+            echo "    $APP/$NAME: $((BEFORE / 1024)) KB -> $(( $(stat -c %s "$BIN") / 1024 )) KB"
+        done
+    done
+fi
+
 echo ">>> Done!"

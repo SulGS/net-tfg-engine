@@ -43,8 +43,8 @@ public:
         gameLogic_->playerId = assignedPlayerId_;
 
         cWindow_ = new ClientWindow(
-            [this](GameStateBlob& state, OpenGLWindow* win) {
-                gameRenderer_->Init(state, win);
+            [this](LoadPlan& plan, const GameStateBlob& state, OpenGLWindow* win) {
+                gameRenderer_->BuildLoadPlan(plan, state, win);
             },
             [this](GameStateBlob& state, OpenGLWindow* win) {
                 gameRenderer_->Render(state, win);

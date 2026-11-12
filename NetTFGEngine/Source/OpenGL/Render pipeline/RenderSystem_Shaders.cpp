@@ -1,4 +1,5 @@
 ﻿#include "RenderSystem.hpp"
+#include <cstdlib>
 #include "FSR_SDK/FSR1_GLSL.inl"
 #include "NIS_SDK/NIS_Config.h"
 #include "NIS_SDK/NIS_GLSL.inl"
@@ -1140,6 +1141,44 @@ void RenderSystem::DeleteNIS()
 // (the one source texel each target pixel falls in). Used instead of glBlitFramebuffer to reach the window: a blit
 // into the default framebuffer is INVALID_OPERATION when it is multisampled (e.g. AA forced in the driver) and the
 // sizes or formats differ, and then the window was never written nor cleared.
+// Forward+ tile culling (LightGrid.hpp). Needs compute shaders (GL 4.3); without them, on a failed build or with
+// NETTFG_NO_FORWARD_PLUS=1, m_lightCullShader stays 0 and every fragment loops over all lights as before.
+void RenderSystem::CompileLightCullShader()
+{
+    if (m_lightCullShader) { glDeleteProgram(m_lightCullShader); m_lightCullShader = 0; }
+
+#ifdef _WIN32
+    char* off = nullptr;
+    size_t offLen = 0;
+    _dupenv_s(&off, &offLen, "NETTFG_NO_FORWARD_PLUS");
+    m_forwardPlusEnabled = !(off && off[0] == '1');
+    free(off);
+#else
+    const char* off = std::getenv("NETTFG_NO_FORWARD_PLUS");
+    m_forwardPlusEnabled = !(off && off[0] == '1');
+#endif
+    if (!m_forwardPlusEnabled) {
+        Debug::Warning("RenderSystem") << "Forward+ off (NETTFG_NO_FORWARD_PLUS=1): every light per fragment\n";
+        return;
+    }
+    if (!glDispatchCompute || !glMemoryBarrier) {
+        Debug::Warning("RenderSystem") << "No compute shader support (GL 4.3); Forward+ light culling off\n";
+        return;
+    }
+
+    GLuint prog = LinkProgram({ CompileStage(GL_COMPUTE_SHADER, LightGrid::CullSource) });
+    GLint ok = 0;
+    glGetProgramiv(prog, GL_LINK_STATUS, &ok);
+    if (!ok) {
+        glDeleteProgram(prog);
+        Debug::Error("RenderSystem") << "Light culling shader failed to build; Forward+ off\n";
+        return;
+    }
+    m_lightCullShader = prog;
+    Debug::Info("RenderSystem") << "Forward+ light culling on (" << LightGrid::kTileSize << "x" << LightGrid::kTileSize
+        << " tiles, up to " << LightGrid::kMaxLightsPerTile << " lights per tile)\n";
+}
+
 void RenderSystem::CompileCopyShader()
 {
     glDeleteProgram(m_copyShader);

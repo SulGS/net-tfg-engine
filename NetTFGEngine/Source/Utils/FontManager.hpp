@@ -24,7 +24,8 @@ public:
     FontManager();
     ~FontManager();
 
-    bool LoadFont(const std::string& fontName, const std::string& fontPath, unsigned int fontSize);
+    // quiet: a font that fails to open is not logged as an error (the caller has more candidates to try).
+    bool LoadFont(const std::string& fontName, const std::string& fontPath, unsigned int fontSize, bool quiet = false);
     // Glyph for a Unicode codepoint; '?' when the font doesn't have it loaded. Text is UTF-8:
     // walk it with Utf8::Next / Utf8::Decode, never byte by byte.
     const Character* GetCharacter(const std::string& fontName, char32_t c) const;

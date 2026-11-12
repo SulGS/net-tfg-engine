@@ -31,8 +31,12 @@ static void APIENTRY GLDebugCallback(GLenum source, GLenum type, GLuint id, GLen
         : type == GL_DEBUG_TYPE_PORTABILITY ? "PORTABILITY"
         : type == GL_DEBUG_TYPE_PERFORMANCE ? "PERFORMANCE" : "OTHER";
     const char* sev = severity == GL_DEBUG_SEVERITY_HIGH ? "high" : severity == GL_DEBUG_SEVERITY_MEDIUM ? "medium" : "low";
+    // Errors carry the stack (synchronous output: the offending call is on it), so a report like Intel's "no VAO
+    // bound" in the alpha test says which draw it was; the offsets resolve against the build's .pdb.
+    const std::string stack = (type == GL_DEBUG_TYPE_ERROR || type == GL_DEBUG_TYPE_UNDEFINED_BEHAVIOR)
+        ? Debug::CallerStack(1, 10) : std::string();
     Debug::Warning("GL") << t << " (" << sev << ", id " << id << ", source 0x" << std::hex << source << std::dec
-        << "): " << (message ? message : "") << "\n";
+        << "): " << (message ? message : "") << (stack.empty() ? "" : " | stack: " + stack) << "\n";
 }
 
 OpenGLWindow::OpenGLWindow(int width, int height, const std::string& title)

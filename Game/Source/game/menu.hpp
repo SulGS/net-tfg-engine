@@ -40,6 +40,53 @@ inline MenuFormMemory g_menuForm;
 // address is set in main() from --matchmaker or matchmaking.cfg.
 inline MatchmakingClient g_matchmaker;
 
+// The connection to the game server (ActivateClientAsync of the online client), also outside the ECS: the menu world
+// is rebuilt when going to settings and back, and the old per-world flag let a rebuilt menu connect a second time
+// while the first connection was still running (alpha test 2026-11-11, two crashes). The async callback only writes
+// here; the menu reads it every frame.
+class GameConnectionState {
+public:
+    bool IsConnecting() const { return connecting_.load(); }
+
+    // False if a connection is already running.
+    bool TryBegin() {
+        bool expected = false;
+        return connecting_.compare_exchange_strong(expected, true);
+    }
+
+    // From the Connect thread when the attempt ends.
+    void Finish(bool success, const std::string& errorMessage) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (!success) {
+                failed_ = true;
+                errorMessage_ = errorMessage;
+            }
+        }
+        connecting_.store(false);
+    }
+
+    // The failure of the last attempt, once (the menu shows it and resets its button).
+    bool TakeFailure(std::string& message) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!failed_) return false;
+        failed_ = false;
+        message = errorMessage_;
+        return true;
+    }
+
+private:
+    std::atomic<bool> connecting_{ false };
+    std::mutex mutex_;
+    bool failed_ = false;
+    std::string errorMessage_;
+};
+
+inline GameConnectionState g_gameConnection;
+
+// Marks the menu's settings button, disabled while connecting (see ConnectButtonSystem).
+class MenuSettingsButton : public IComponent {};
+
 struct StartScreenGameState {
     bool spacePressed;
     int frameCount;
@@ -77,9 +124,7 @@ public:
     std::string port;
     std::string clientName;
     bool goingToConnect = false;
-    bool connecting = false;
-    bool errorConnecting = false;
-    std::string errorMessage;  // shown instead of the generic error when set (written before errorConnecting)
+    bool connecting = false;   // this world already handed its request to g_gameConnection
 
     ConnectionData() : ip(""), port(""), clientName(""), goingToConnect(false), connecting(false) {}
     ConnectionData(const std::string& ip, const std::string& port, const std::string& clientName)
@@ -117,8 +162,15 @@ class ConnectButtonSystem : public ISystem {
 public:
     void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override {
         auto query = entityManager.CreateQuery<UIButton, ConnectButton>();
+        const bool connecting = g_gameConnection.IsConnecting();
         for (auto [entity, button, connectBtn] : query) {
-            button->isInteractable = !connectBtn->busy;
+            button->isInteractable = !connectBtn->busy && !connecting;
+        }
+
+        // Leaving for settings while connecting left the online client active behind the menu (alpha test 2026-11-11).
+        auto settingsQuery = entityManager.CreateQuery<UIButton, MenuSettingsButton>();
+        for (auto [entity, button, tag] : settingsQuery) {
+            button->isInteractable = !connecting;
         }
     }
 };
@@ -155,33 +207,50 @@ public:
         for (auto [entity, conn] : query) {
 
             if (conn->goingToConnect && !conn->connecting) {
+                conn->connecting = true;
+                if (!g_gameConnection.TryBegin()) {
+                    // A connection from an earlier menu world is still running; it finishes (or fails) on its own.
+                    Debug::Warning("StartScreen") << "Already connecting to a game server, request ignored\n";
+                    continue;
+                }
+
                 Debug::Info("StartScreen") << "Connecting to server at " << conn->ip << ":" << conn->port << "\n";
+                // Captures nothing of this world: it can be rebuilt (or gone) by the time the callback runs.
                 NetTFG_Engine::Get().ActivateClientAsync(1,
-                    [conn](int id, ConnectionCode code) {
+                    [](int id, ConnectionCode code) {
                         if (code == CONN_SUCCESS) {
                             Debug::Info("StartScreen") << "Client " << id << " activated!\n";
                             // Deferred (not DeactivateClient) since client 0 may still be mid-tick on this background thread.
-                            NetTFG_Engine::Get().RequestDeactivateClient(MENU_SCENE_ID);
+                            // Whichever menu scene is showing goes away (settings is disabled while connecting, but just in case).
+                            auto& engine = NetTFG_Engine::Get();
+                            if (engine.IsClientActive(MENU_SCENE_ID)) engine.RequestDeactivateClient(MENU_SCENE_ID);
+                            if (engine.IsClientActive(SETTINGS_SCENE_ID)) engine.RequestDeactivateClient(SETTINGS_SCENE_ID);
+                            g_gameConnection.Finish(true, "");
+                            return;
                         }
-                        else {
-                            Debug::Error("StartScreen") << "Client " << id << " failed: " << code << "\n";
-                            conn->errorMessage.clear();
-                            if (code == CONN_VERSION_MISMATCH) {
-                                // Same thread as SetupClient, so the server's version is already stored.
-                                const auto* online = dynamic_cast<const OnlineClient*>(NetTFG_Engine::Get().GetClient(id));
-                                const std::string serverVersion = online ? online->GetServerGameVersion() : "";
-                                conn->errorMessage = serverVersion.empty()
-                                    ? "Versión incompatible con el servidor (tienes la v" + GameVersion::Get() + "). Actualiza el juego"
-                                    : "Versión incompatible: tienes la v" + GameVersion::Get()
-                                        + " y el servidor usa la v" + serverVersion + ". Actualiza el juego";
-                            }
-                            conn->errorConnecting = true;
-                            conn->connecting = false;
-                            conn->goingToConnect = false;
 
+                        Debug::Error("StartScreen") << "Client " << id << " failed: " << code << "\n";
+                        std::string message;
+                        if (code == CONN_VERSION_MISMATCH) {
+                            // Same thread as SetupClient, so the server's version is already stored.
+                            const auto* online = dynamic_cast<const OnlineClient*>(NetTFG_Engine::Get().GetClient(id));
+                            const std::string serverVersion = online ? online->GetServerGameVersion() : "";
+                            message = serverVersion.empty()
+                                ? "Versión incompatible con el servidor (tienes la v" + GameVersion::Get() + "). Actualiza el juego"
+                                : "Versión incompatible: tienes la v" + GameVersion::Get()
+                                    + " y el servidor usa la v" + serverVersion + ". Actualiza el juego";
                         }
+                        else if (code == CONN_MATCH_ABORTED) {
+                            message = "La partida se canceló: no llegaron suficientes jugadores. Vuelve a buscar partida";
+                        }
+                        else if (code == CONN_TIMEOUT) {
+                            message = "La partida no llegó a empezar. Vuelve a buscar partida";
+                        }
+                        else if (code == CONN_BUSY) {
+                            message = "Ya hay una conexión en curso";
+                        }
+                        g_gameConnection.Finish(false, message);
                     }, conn->ip, stoi(conn->port), conn->clientName);
-                conn->connecting = true;
             }
 
         }
@@ -389,9 +458,12 @@ public:
         element->size = glm::vec2(300.0f, 40.0f);
         element->layer = 10;
 
+        em.RegisterComponentType<MenuSettingsButton>();
         UIButton* settingsBtn = em.AddComponent<UIButton>(settingsButton);
+        em.AddComponent<MenuSettingsButton>(settingsButton);
         settingsBtn->text = "Ajustes";
         settingsBtn->onClick = [nameInput]() {
+            if (g_gameConnection.IsConnecting()) return;   // also disabled by ConnectButtonSystem
             // Guarda el formulario antes de que este mundo se destruya.
             g_menuForm.clientName = nameInput->text;
             // Una partida encontrada mientras se esta en ajustes no tendria quien la recogiera.
@@ -451,13 +523,20 @@ public:
 
                 for (auto [buttonEntity, button, connectBtn] : buttonQuery) {
 
-                    if (connData->errorConnecting)
+                    std::string failure;
+                    if (g_gameConnection.TakeFailure(failure))
                     {
-                        connData->errorConnecting = false;
+                        connData->goingToConnect = false;
+                        connData->connecting = false;
                         connectBtn->Reset();
-                        SetConnectStatus(em, false, !connData->errorMessage.empty()
-                            ? connData->errorMessage
+                        SetConnectStatus(em, false, !failure.empty()
+                            ? failure
                             : "Error conectando a la partida " + connData->ip + ":" + connData->port);
+                    }
+                    else if (g_gameConnection.IsConnecting() && !connData->goingToConnect) {
+                        // Menu rebuilt while a connection runs: show it instead of offering a new search.
+                        connectBtn->busy = true;
+                        SetConnectStatus(em, true, "Conectando a la partida");
                     }
                     else if (connectBtn->ConsumePress()) {
                         if (mm.IsSearching()) {

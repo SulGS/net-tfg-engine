@@ -257,17 +257,64 @@ public:
         // Match-start countdown
         {
             auto timerQuery = em.CreateQuery<MatchStartTimer>();
-            for (auto [entity, timer] : timerQuery)
+            for (auto [entity, timer] : timerQuery) {
                 timer->ticksRemaining = s.startCountdownTicks;
+                timer->waitingForPlayers = s.startWaitingForPlayers != 0;
+            }
         }
     }
 
+    // The match scene cut into load steps; ClientWindow pumps window events and draws the loading screen between them.
+    // Weights follow the durations measured in the logs. Labels are what the player reads: nothing names an asset.
+    void BuildECSLoadPlan(LoadPlan& plan, const GameStateBlob& state, OpenGLWindow* window) override {
+        auto initial = std::make_shared<GameStateBlob>(state);
+        plan.Add("Preparando la partida", 0.3f, [this, initial, window]() {
+            BeginScene(*initial, window);
+            RegisterSceneComponents();
+        });
+        plan.Add("Compilando shaders", 0.3f, [this]() { PrecompileEffectShaders(); });
+        plan.Add("Preparando la iluminación", 0.1f, [this]() { CreateLighting(); });
+        // The meshes' CPU half (decompression, glTF parse, image decode) runs on a worker since the client was activated
+        // (Client::prefetchMeshes): waited for here without blocking, so the steps below only upload to the GPU.
+        AddPrefetchWait(plan, "Cargando modelos", 6.0f);
+        plan.Add("Creando jugadores", 0.5f, [this]() { CreatePlayers(); });
+        plan.Add("Preparando la interfaz", 0.1f, [this]() { CreateCameraAndHud(); });
+        plan.Add("Construyendo la arena", 0.2f, [this]() { CreateLavaFloor(); });
+        plan.Add("Construyendo la arena", 1.5f, [this]() { CreateArenaFloor(); });
+        plan.Add("Construyendo la arena", 0.6f, [this]() { CreatePillars(); });
+        plan.Add("Construyendo la arena", 0.2f, [this]() { CreateLaserWalls(); });
+        plan.Add("Iniciando sistemas", 0.2f, [this]() { AddSceneSystems(); });
+    }
+
+    // The same steps back to back.
     void InitECSRenderer(const GameStateBlob& state, OpenGLWindow* window) override {
+        BeginScene(state, window);
+        RegisterSceneComponents();
+        PrecompileEffectShaders();
+        CreateLighting();
+        CreatePlayers();
+        CreateCameraAndHud();
+        CreateLavaFloor();
+        CreateArenaFloor();
+        CreatePillars();
+        CreateLaserWalls();
+        AddSceneSystems();
+    }
+
+private:
+    // Kept between the load steps: the initial state (players' spawn) and the arena geometry shared with the logic.
+    AsteroidShooterGameState initState_{};
+    ArenaLayout::Layout arena_;
+
+    void BeginScene(const GameStateBlob& state, OpenGLWindow* window) {
         this->window = window;
+        std::memcpy(&initState_, state.data, sizeof(AsteroidShooterGameState));
+        // Arena geometry comes from ArenaLayout, shared with InitECSLogic: every beam matches its logic entity one to one
+        // (same cellId, dir, half), so each reads exactly its own state slot (EdgeWallSlot).
+        arena_ = ArenaLayout::Build();
+    }
 
-        AsteroidShooterGameState s;
-        std::memcpy(&s, state.data, sizeof(AsteroidShooterGameState));
-
+    void RegisterSceneComponents() {
         world.GetEntityManager().RegisterComponentType<SpaceShip>();
         world.GetEntityManager().RegisterComponentType<ECSBullet>();
         world.GetEntityManager().RegisterComponentType<ChargingShootEffect>();
@@ -293,8 +340,18 @@ public:
 		world.GetEntityManager().RegisterComponentType<MatchStartTimer>();
 
 		Entity matchStartEntity = world.GetEntityManager().CreateEntity();
-        world.GetEntityManager().AddComponent<MatchStartTimer>(matchStartEntity, MatchStartTimer{ MATCH_START_COUNTDOWN_TICKS });
+        world.GetEntityManager().AddComponent<MatchStartTimer>(matchStartEntity, MatchStartTimer{ MATCH_START_COUNTDOWN_TICKS, true });
+    }
 
+    void PrecompileEffectShaders() {
+        // Compile the laser shaders now, during the load, not on the first shot / charge / shield of the match: the
+        // ShaderLoader cache keeps them after these temporary Materials go away (alpha test 2026-11-11: most in-match
+        // hitches on integrated GPUs were these compiles).
+        for (const char* frag : { "laser_bolt.frag", "laser_charge.frag", "laser_shield.frag" })
+            Material warmUp("glow_volume.vert", frag);
+    }
+
+    void CreateLighting() {
         // Sun
         Entity sunEntity = world.GetEntityManager().CreateEntity();
         world.GetEntityManager().AddComponent<Transform>(sunEntity, Transform{});
@@ -318,6 +375,10 @@ public:
         sky->upAxis = glm::vec3(0.0f, 0.0f, 1.0f);
         sky->rotationDegrees = -68.0f;
         sky->intensity = 1.0f;
+    }
+
+    void CreatePlayers() {
+        const AsteroidShooterGameState& s = initState_;
 
         // Players
         for (int i = 0; i < NUM_PLAYERS; ++i)
@@ -411,7 +472,9 @@ public:
                 }
             }
         }
+    }
 
+    void CreateCameraAndHud() {
         // Camera
         Entity camera = world.GetEntityManager().CreateEntity();
         Transform* camTrans = world.GetEntityManager().AddComponent<Transform>(camera, Transform{});
@@ -484,8 +547,9 @@ public:
 					}
 				}
             };
-		
+    }
 
+    void CreateLavaFloor() {
         // Lava floor
         Entity lavaFloor = world.GetEntityManager().CreateEntity();
         Transform* lavaTrans = world.GetEntityManager().AddComponent<Transform>(lavaFloor, Transform{});
@@ -508,12 +572,11 @@ public:
             lavaFloor, MeshComponent(new Mesh("lava.glb", lavaMat)));
         lavaMesh->castShadows = false;
         world.GetEntityManager().AddComponent<FluidSurface>(lavaFloor, FluidSurface{});
+    }
 
+    void CreateArenaFloor() {
         auto& em = world.GetEntityManager();
-
-        // Arena geometry comes from ArenaLayout, shared with InitECSLogic: every beam matches its logic entity one to one
-        // (same cellId, dir, half), so each reads exactly its own state slot (EdgeWallSlot).
-        const ArenaLayout::Layout arena = ArenaLayout::Build();
+        const ArenaLayout::Layout& arena = arena_;
 
         // Tiles
         for (const auto& tile : arena.tiles)
@@ -550,6 +613,11 @@ public:
                     probe->captureFar = 1000.0f;
                 }
         }
+    }
+
+    void CreatePillars() {
+        auto& em = world.GetEntityManager();
+        const ArenaLayout::Layout& arena = arena_;
 
         // Pillars
         for (const auto& pillar : arena.pillars)
@@ -562,6 +630,11 @@ public:
             em.AddComponent<PillarID>(e, pillar.id);
             em.AddComponent<MeshComponent>(e, MeshComponent(new Mesh("pilar.glb")));
         }
+    }
+
+    void CreateLaserWalls() {
+        auto& em = world.GetEntityManager();
+        const ArenaLayout::Layout& arena = arena_;
 
         // Beam mesh at its design scale: local Z spans +-20 world units so each end lands on a pillar axis (40 apart); radius 2,
         // tapering over the last 8 units to 0.9 so the ends hide inside the pillar (radius ~1.3). The taper is baked into
@@ -572,17 +645,29 @@ public:
         // One Material per wall/spoke (own power/warning/flash uniforms, driven by LaserWallRenderSystem); the program is
         // shared via ShaderLoader's cache. seed desyncs the noise between neighbours. Drawn additively, so the colours
         // below are light ADDED to the scene, not a surface colour.
-        auto makeLaserWallMaterial = [](const glm::vec3& pos)
+        // uSeed desyncs neighbouring beams; the lights use the same value (LaserWallVisual::seed).
+        auto laserWallSeed = [](const glm::vec3& pos) { return pos.x * 0.173f + pos.y * 0.291f; };
+        auto makeLaserWallMaterial = [&laserWallSeed](const glm::vec3& pos)
             {
                 auto mat = std::make_shared<Material>("laser_wall.vert", "laser_wall.frag");
-                mat->setVec3("uBeamColor", glm::vec3(1.0f, 0.07f, 0.04f));
-                mat->setVec3("uWarnColor", glm::vec3(1.0f, 0.5f, 0.04f));
-                mat->setVec3("uHotColor", glm::vec3(1.0f, 0.7f, 0.55f));
+                mat->setVec3("uBeamColor", LASER_WALL_BEAM_COLOR);
+                mat->setVec3("uWarnColor", LASER_WALL_WARN_COLOR);
+                mat->setVec3("uHotColor", LASER_WALL_HOT_COLOR);
                 mat->setFloat("uGlowStrength", 1.6f);
                 mat->setFloat("uCoreStrength", 3.0f);
-                mat->setFloat("uSeed", pos.x * 0.173f + pos.y * 0.291f);
+                mat->setFloat("uSeed", laserWallSeed(pos));
                 return mat;
             };
+
+        // Beam light row (LaserVisuals.hpp) along the axis of the transform already set up, plus the animation state
+        // that drives it (LaserWallRenderSystem).
+        auto addLightsAndVisual = [&em, &laserWallSeed](Entity beam, const glm::vec3& pos) {
+            const glm::vec3 axis = glm::normalize(glm::vec3(em.GetComponent<Transform>(beam)->getModelMatrix()[2]));
+            em.AddComponent<PointLightGroupComponent>(beam, MakeLaserWallLights(axis));
+            LaserWallVisual vis{};
+            vis.seed = laserWallSeed(pos);
+            em.AddComponent<LaserWallVisual>(beam, vis);
+        };
 
         for (const auto& w : arena.walls)
         {
@@ -591,10 +676,10 @@ public:
             t->setPosition(w.pos);
             t->setRotation(w.rot);
             t->setScale(laserBeamScale);
+            addLightsAndVisual(e, w.pos);
             LaserWallID lwid(ArenaLayout::CellId(w.cellX, w.cellY), w.dir, w.half);
             lwid.enabled = w.onBorder;
             em.AddComponent<LaserWallID>(e, lwid);
-            em.AddComponent<LaserWallVisual>(e, LaserWallVisual{});
             MeshComponent* mc = em.AddComponent<MeshComponent>(e,
                 MeshComponent(new Mesh(laserBeamMesh, makeLaserWallMaterial(w.pos))));
             mc->castShadows = false;
@@ -609,17 +694,19 @@ public:
             t->setPosition(s.pos);
             t->setRotation(s.rot);
             t->setScale(laserBeamScale);
+            addLightsAndVisual(e, s.pos);
             LaserWallID lwid(s.cellId, s.dir);
             lwid.enabled = false;
             em.AddComponent<LaserWallID>(e, lwid);
             em.AddComponent<CenterSpoke>(e, CenterSpoke{});
-            em.AddComponent<LaserWallVisual>(e, LaserWallVisual{});
             MeshComponent* mc = em.AddComponent<MeshComponent>(e,
                 MeshComponent(new Mesh(laserBeamMesh, makeLaserWallMaterial(s.pos))));
             mc->castShadows = false;
             mc->additive = true;
         }
+    }
 
+    void AddSceneSystems() {
         // Render systems
         world.AddSystem(std::make_unique<CameraFollowSystem>());
         world.AddSystem(std::make_unique<OnDeathRenderSystem>());
@@ -644,6 +731,8 @@ public:
         AudioManager::PlayMusic("lava_sound.wav", true);
         AudioManager::SetMusicVolume(1.00f);
     }
+
+public:
 
     void Interpolate(
         const GameStateBlob& previousServerState,
@@ -767,6 +856,7 @@ public:
         }
 
         rend.startCountdownTicks = currServer.startCountdownTicks;
+        rend.startWaitingForPlayers = currServer.startWaitingForPlayers;
     }
 
     ~AsteroidShooterGameRenderer() override {

@@ -2,6 +2,8 @@
 #define MESH_HPP
 
 #include <string>
+#include <cmath>
+#include <algorithm>
 #include <glm/glm.hpp>
 #include "Material.hpp"
 #include "Utils/AssetManager.hpp"
@@ -42,6 +44,19 @@ public:
     void drawDepthOnly(const glm::mat4& mvp, GLuint depthShader) const;
 
     Material* getMaterial() const { return material.get(); }
+
+    // World-space bounding sphere under `model` (radius scaled by its largest axis scale). False when the bounds are
+    // unknown (no buffer, or one built without them): treat the mesh as visible from everywhere.
+    bool worldBoundingSphere(const glm::mat4& model, glm::vec3& center, float& radius) const
+    {
+        if (!buffer || buffer->boundsRadius < 0.0f) return false;
+        center = glm::vec3(model * glm::vec4(buffer->boundsCenter, 1.0f));
+        const float sx = glm::dot(glm::vec3(model[0]), glm::vec3(model[0]));
+        const float sy = glm::dot(glm::vec3(model[1]), glm::vec3(model[1]));
+        const float sz = glm::dot(glm::vec3(model[2]), glm::vec3(model[2]));
+        radius = buffer->boundsRadius * std::sqrt(std::max(sx, std::max(sy, sz)));
+        return true;
+    }
 
 private:
 

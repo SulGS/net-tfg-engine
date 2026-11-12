@@ -53,6 +53,7 @@ void RenderSystem::Init(int screenW, int screenH, int outputW, int outputH)
     CompileMotionBlurShaders();
     CompileFSRShaders();
     CompileNISShader();
+    CompileLightCullShader();
     CompileCopyShader();
     CompileEnvironmentShaders();
     InitScreenQuad();
@@ -133,6 +134,9 @@ void RenderSystem::Update(EntityManager& entityManager,
 	}
     EnsureEffectTargets();
 
+    m_gpuTimer.BeginFrame();
+    m_gpuTimer.Mark("Setup");
+
 
 
     if (m_hdrFBO == 0) {
@@ -159,6 +163,7 @@ void RenderSystem::Update(EntityManager& entityManager,
         glViewport(0, 0, m_outputW, m_outputH);
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
+        m_gpuTimer.AbortFrame();
         entityManager.releaseMutex();
         return;
     }
@@ -186,14 +191,17 @@ void RenderSystem::Update(EntityManager& entityManager,
 
     // Lights first: the environment pass needs the directional light (sun halo in the sky, shadows in the captures).
     // CollectLightsPass now handles both point lights and the directional light.
-    CollectLightsPass(entityManager);
+    CollectLightsPass(entityManager, cameraPos);
 
+    m_gpuTimer.Mark("Environment");
     // Sky / reflection probe maps, before anything that reads them (the GBuffer flags the env reflection for SSR).
     // Only does work when they changed or captures are pending.
     EnvironmentPass(entityManager, meshQuery);
 
     // The GBuffer only feeds SSAO/SSR/motion blur: with all of them off, skip the whole extra geometry pass.
     const bool screenSpace = rs.getSSAOEnabled() || rs.getSSREnabled() || rs.getMotionBlurEnabled();
+    m_gpuTimer.Mark("GBuffer");
+    m_gbufferDepthReady = screenSpace;
     if (screenSpace) {
         GBufferPass(meshQuery, view, projection);
         // At the SSAO scale: SSAO and motion blur read it, and SSR too when its scale is the same.
@@ -205,18 +213,26 @@ void RenderSystem::Update(EntityManager& entityManager,
     }
 
     // Needs only the GBuffer; ShadingPass samples its result (all 1.0 when SSAO is off).
+    m_gpuTimer.Mark("SSAO");
     SSAOPass(projection);
     if (rs.getSSAOEnabled())
         DumpStage("ssao_buffer", StageImage::Grey, m_ssaoBlurTex, m_ssaoW, m_ssaoH);
 
+    m_gpuTimer.Mark("PointShadows");
+    m_shadowCasterDraws = 0;
     if (rs.getPointShadowsEnabled())
-        ShadowPass(entityManager, meshQuery);   // point light cubemap shadows
+        ShadowPass(entityManager, meshQuery, projection * view, cameraPos);   // point light cubemap shadows
     else
         m_shadowCount = 0;
 
+    m_gpuTimer.Mark("DirShadows");
     if (rs.getDirShadowsEnabled())
         DirShadowPass(meshQuery, view, projection,          // directional light cascaded shadows
             activeCamera->getNearPlane(), activeCamera->getFarPlane());
+
+    // Forward+ light lists: needs this frame's lights and, when it ran, the GBuffer depth.
+    m_gpuTimer.Mark("LightCull");
+    LightCullPass(view, projection);
 
     // SSAO has no pass of its own on the scene: the materials multiply their ambient by it while shading. To see what it
     // adds, the dump frame is shaded once more first with the AO at 1.0 (as if it were off), then SSAO is recomputed.
@@ -227,20 +243,24 @@ void RenderSystem::Update(EntityManager& entityManager,
         SSAOPass(projection);
     }
 
+    m_gpuTimer.Mark("Shading");
     ShadingPass(meshQuery, view, projection, cameraPos);
     DumpStage(rs.getSSAOEnabled() ? "shading_ssao" : "shading", StageImage::HDR, m_hdrColorTex, m_screenW, m_screenH);
 
     // Before the particles so their distortion pass (which copies the scene) sees the beams too.
+    m_gpuTimer.Mark("Additive");
     AdditivePass(meshQuery, view, projection, cameraPos);
     DumpStage("additive", StageImage::HDR, m_hdrColorTex, m_screenW, m_screenH);
 
     // After the beams so they show up in reflections; before the particles, which aren't in the GBuffer and would
     // otherwise be reflected as if they were the opaque surface behind them.
+    m_gpuTimer.Mark("SSR");
     if (rs.getSSREnabled()) {
         SSRPass(projection);
         DumpStage("ssr", StageImage::HDR, m_hdrColorTex, m_screenW, m_screenH);
     }
 
+    m_gpuTimer.Mark("Particles");
     if (m_particleSystem) {
         m_particleSystem->Draw(view, projection);
         DumpStage("particles", StageImage::HDR, m_hdrColorTex, m_screenW, m_screenH);
@@ -248,6 +268,7 @@ void RenderSystem::Update(EntityManager& entityManager,
 
     // On the finished HDR scene (particles and beams included) and before bloom, so bright streaks bloom too.
     const glm::mat4 viewProjection = projection * view;
+    m_gpuTimer.Mark("MotionBlur");
     if (rs.getMotionBlurEnabled()) {
         MotionBlurPass(viewProjection, deltaTime);
         DumpStage("motion_blur", StageImage::HDR, m_hdrColorTex, m_screenW, m_screenH);
@@ -257,12 +278,14 @@ void RenderSystem::Update(EntityManager& entityManager,
 
     // Bloom doesn't touch the scene (the tonemap shader adds it): dumped as the blurred bloom alone (half res), then
     // the scene with it added the way the tonemap does.
+    m_gpuTimer.Mark("Bloom");
     if (rs.getBloomEnabled()) {
         BloomPass();
         DumpStage("bloom_blur", StageImage::HDR, m_bloomPingTex, std::max(1, m_screenW / 2), std::max(1, m_screenH / 2));
         DumpStage("bloom", StageImage::HDRBloom, m_hdrColorTex, m_screenW, m_screenH);
     }
 
+    m_gpuTimer.Mark("Tonemap+AA+Scale");
     TonemapPass();
     DumpStage("tonemap", StageImage::LDR, m_ldrTex, m_screenW, m_screenH);
 
@@ -297,6 +320,8 @@ void RenderSystem::Update(EntityManager& entityManager,
         m_stageDumpDir.clear();
     }
 
+    m_gpuTimer.EndFrame(m_shadowCount, m_shadowCasterDraws);
+
     // F11: the finished frame alone, before the UI is drawn over it.
     if (m_finalDumpRequested.exchange(false))
         DumpFinalFrame();
@@ -319,8 +344,13 @@ void RenderSystem::ReleaseGPUResources()
     auto smp  = [](GLuint& n) { if (n) glDeleteSamplers(1, &n);      n = 0; };
     auto prog = [](GLuint& n) { if (n) glDeleteProgram(n);           n = 0; };
 
+    m_gpuTimer.Release();
+
     // Point / directional light shadows
     buf(m_lightSSBO);
+    buf(m_lightGridSSBO);
+    m_lightGridTilesX = m_lightGridTilesY = 0;
+    prog(m_lightCullShader);
     fbo(m_shadowFBO);
     tex(m_shadowCubeArray);
     smp(m_shadowCmpSampler);

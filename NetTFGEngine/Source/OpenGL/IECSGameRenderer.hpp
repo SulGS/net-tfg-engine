@@ -25,6 +25,10 @@
 #include "ecs/UI/WorldText.hpp"
 #include "ecs/UI/WorldTextRenderSystem.hpp"
 #include "ecs/UI/DebugOverlay.hpp"
+#include "ecs/UI/DefaultFont.hpp"
+#include "Utils/LoadPlan.hpp"
+#include "Utils/LoadingScreenStyle.hpp"
+#include "Utils/AssetManager.hpp"
 #include "OpenAL/AudioManager.hpp"
 #include "Utils/Input.hpp"
 #include "Utils/Debug/Debug.hpp"
@@ -34,6 +38,8 @@
 #include <filesystem>
 #include <system_error>
 #include <functional>
+#include <memory>
+#include <thread>
 
 
 class IECSGameRenderer : public IGameRenderer {
@@ -91,7 +97,47 @@ public:
     // not in the logic world — see Client::GetRendererEntityManager().
     EntityManager& GetEntityManager() { return world.GetEntityManager(); }
 
+    // The game's part of the load plan. By default InitECSRenderer() as one step; a scene with a long setup overrides
+    // this to cut it into several (labels are shown to the player: generic, no asset names). Runs between the engine's
+    // own steps below: after the world's base components exist, before the render systems are created.
+    virtual void BuildECSLoadPlan(LoadPlan& plan, const GameStateBlob& state, OpenGLWindow* window) {
+        auto initial = std::make_shared<GameStateBlob>(state);
+        plan.Add(GetLoadingScreenStyle().sceneBuildLabel, 1.0f, [this, initial, window]() { InitECSRenderer(*initial, window); });
+    }
+
+    void BuildLoadPlan(LoadPlan& plan, const GameStateBlob& state, OpenGLWindow* window) override {
+        const LoadingScreenStyle style = GetLoadingScreenStyle();
+        plan.Add(style.sceneSetupLabel, 0.1f, [this]() { InitWorldBase(); });
+        BuildECSLoadPlan(plan, state, window);
+        plan.Add(style.renderSetupLabel, 0.5f, [this, window]() { InitRenderSystems(window); });
+        plan.Add(style.interfaceSetupLabel, 0.1f, [this, window]() { InitInterface(window); });
+    }
+
+    // Everything at once (the same steps back to back), for callers that don't go through the render loop's plan.
     void Init(const GameStateBlob& state, OpenGLWindow* window) override {
+        LoadPlan plan;
+        BuildLoadPlan(plan, state, window);
+        while (!plan.Done()) {
+            plan.Run(std::chrono::hours(1));
+            if (!plan.Done()) std::this_thread::yield();   // a polled step is waiting on a worker
+        }
+    }
+
+    // Polled step that waits for the mesh prefetch the client's activation started (AssetManager::prefetch) without
+    // blocking: loadAsset on a mesh still being prefetched would wait for the worker inside the render thread, with
+    // no window events pumped. Put it before the steps that create those meshes.
+    static void AddPrefetchWait(LoadPlan& plan, std::string label, float weight) {
+        auto most = std::make_shared<size_t>(0);
+        plan.AddPolled(std::move(label), weight, [most]() -> float {
+            const size_t left = AssetManager::instance().prefetchesInFlight();
+            if (left == 0) return 1.0f;
+            *most = std::max(*most, left);
+            return 1.0f - float(left) / float(*most);
+        });
+    }
+
+private:
+    void InitWorldBase() {
         world.Reset();
         hasLastRenderTime = false;
         playerNamesVersion = -1;
@@ -113,6 +159,7 @@ public:
 
         world.GetEntityManager().RegisterComponentType<DirectionalLightComponent>();
         world.GetEntityManager().RegisterComponentType<PointLightComponent>();
+        world.GetEntityManager().RegisterComponentType<PointLightGroupComponent>();
         world.GetEntityManager().RegisterComponentType<EnvironmentSkyComponent>();
         world.GetEntityManager().RegisterComponentType<ReflectionProbeComponent>();
 
@@ -124,9 +171,9 @@ public:
         DebugOverlay::Register(world.GetEntityManager());
 
         world.AddSystem(std::make_unique<DestroyingSystem>());
+    }
 
-        InitECSRenderer(state, window);
-
+    void InitRenderSystems(OpenGLWindow* window) {
         // Built after InitECSRenderer so it draws over whatever the scene added.
         DebugOverlay::Build(world.GetEntityManager());
         world.AddSystem(std::make_unique<DebugOverlaySystem>());
@@ -151,45 +198,18 @@ public:
 
         UIRenderSystem* uir = world.GetSystem<UIRenderSystem>();
         world.GetSystem<WorldTextRenderSystem>()->SetFontManager(uir->GetFontManager());
+    }
 
+    void InitInterface(OpenGLWindow* window) {
+        UIRenderSystem* uir = world.GetSystem<UIRenderSystem>();
         world.AddSystem(std::make_unique<UIUpdateSystem>(1920, 1080, window->getWindow(), uir->GetFontManager()));
 
-        LoadDefaultFont(uir);
+        LoadDefaultUIFont(uir);
 
         LogGPUMemory("World set up");
     }
 
-    // The UI font comes from the OS font folder; the first candidate that exists wins. A missing font leaves every
-    // UIText/WorldText invisible (no glyphs), which is what happened on Linux with the old hardcoded Windows path.
-    static void LoadDefaultFont(UIRenderSystem* uir) {
-        static const char* const candidates[] = {
-#ifdef _WIN32
-            "C:/Windows/Fonts/arial.ttf",
-            "C:/Windows/Fonts/segoeui.ttf",
-#else
-            // Debian/Ubuntu, then Fedora/Arch layouts.
-            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-            "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
-            "/usr/share/fonts/liberation-sans/LiberationSans-Regular.ttf",
-            "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
-            "/usr/share/fonts/TTF/LiberationSans-Regular.ttf",
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
-            "/usr/share/fonts/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/TTF/DejaVuSans.ttf",
-            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-            "/usr/share/fonts/noto/NotoSans-Regular.ttf",
-            "/usr/share/fonts/google-noto/NotoSans-Regular.ttf",
-            "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
-            "/usr/share/fonts/gnu-free/FreeSans.ttf",
-#endif
-        };
-        for (const char* path : candidates) {
-            std::error_code ec;
-            if (std::filesystem::exists(path, ec) && uir->LoadFont("default", path, 32)) return;
-        }
-        Debug::Error("IECSGameRenderer") << "No usable UI font found; text will not render. Install Liberation Sans or DejaVu Sans.\n";
-    }
+public:
 
     // Destroys every component in this world, dropping AssetManager ref-counts and GL resources; must run on the render thread and takes the same EntityManager mutex as Render().
     void ReleaseECSAssets() override {

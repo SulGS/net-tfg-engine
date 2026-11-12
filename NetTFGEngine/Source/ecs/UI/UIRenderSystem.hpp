@@ -28,7 +28,7 @@ public:
     void Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) override;
     void UpdateScreenSize(int width, int height);
 
-    bool LoadFont(const std::string& fontName, const std::string& fontPath, unsigned int fontSize = 48);
+    bool LoadFont(const std::string& fontName, const std::string& fontPath, unsigned int fontSize = 48, bool quiet = false);
     FontManager* GetFontManager() { return fontManager.get(); }
 
     // Call from your input system.

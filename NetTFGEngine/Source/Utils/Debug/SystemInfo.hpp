@@ -155,6 +155,13 @@ namespace SystemInfo {
         return o.str();
     }
 
+    // Physical memory available right now, in bytes (0 = unknown).
+    inline uint64_t AvailableMemoryBytes() {
+        MEMORYSTATUSEX ms{};
+        ms.dwLength = sizeof(ms);
+        return GlobalMemoryStatusEx(&ms) ? static_cast<uint64_t>(ms.ullAvailPhys) : 0;
+    }
+
     inline std::string MemoryDescription() {
         MEMORYSTATUSEX ms{};
         ms.dwLength = sizeof(ms);
@@ -229,6 +236,16 @@ namespace SystemInfo {
         if (cores) o << " | " << cores << " cores";
         o << " / " << (threads > 0 ? threads : static_cast<long>(std::thread::hardware_concurrency())) << " threads";
         return o.str();
+    }
+
+    // Physical memory available right now, in bytes (0 = unknown).
+    inline uint64_t AvailableMemoryBytes() {
+#ifdef __linux__
+        const std::string avail = ReadKeyValue("/proc/meminfo", "MemAvailable", ':'); // "7864320 kB"
+        if (!avail.empty())
+            return std::strtoull(avail.c_str(), nullptr, 10) * 1024ULL;
+#endif
+        return 0;
     }
 
     inline std::string MemoryDescription() {

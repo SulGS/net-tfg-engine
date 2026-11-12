@@ -77,7 +77,24 @@ public:
         float worstLatencyMs = worstRttMs / 2.0f;
 
         const int SAFETY_MARGIN_FRAMES = 2;
-        m_lastInputDelayFrames = static_cast<int>(std::ceil(worstLatencyMs / frameTimeMs)) + SAFETY_MARGIN_FRAMES;
+        const int target = static_cast<int>(std::ceil(worstLatencyMs / frameTimeMs)) + SAFETY_MARGIN_FRAMES;
+
+        // Up at once (a late input is lost), down only after the lower value held for a while, one frame at a time.
+        // Following every jitter spike both ways changed the delay 4-5 times a minute on Wi-Fi (alpha test
+        // 2026-11-11), and each change shifts the controls' timing.
+        if (target >= m_lastInputDelayFrames || m_lastInputDelayFrames == 0) {
+            m_lastInputDelayFrames = target;
+            m_lowerStreak = 0;
+        }
+        else if (++m_lowerStreak >= LOWER_AFTER_SAMPLES) {
+            m_lastInputDelayFrames--;
+            m_lowerStreak = 0;
+        }
     }
+
+    // Consecutive samples (one a second, see OnlineClient's DELAY_SYNC_INTERVAL_TICKS) asking for a lower delay before
+    // it goes down a frame.
+    static constexpr int LOWER_AFTER_SAMPLES = 10;
+    int m_lowerStreak = 0;
 };
 #pragma once

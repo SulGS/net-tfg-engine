@@ -18,6 +18,10 @@
 #include <filesystem>
 #include <cstring>
 #include <mutex>
+#include <future>
+#include <thread>
+#include <set>
+#include <chrono>
 #include "Utils/Debug/Debug.hpp"
 
 #include <AL/al.h>
@@ -76,6 +80,10 @@ struct MeshBuffer {
     GLuint VBO = 0;
     GLuint EBO = 0;
     std::vector<SubMeshRange> subMeshes; // multi-primitive support
+    // Local-space bounding sphere of the vertices (for culling, e.g. point light shadow casters). Radius < 0 = unknown:
+    // never culled.
+    glm::vec3 boundsCenter{ 0.0f };
+    float     boundsRadius = -1.0f;
 };
 
 
@@ -173,6 +181,11 @@ public:
         auto itBin = binNameToId.find(binFile);
         if (itBin == binNameToId.end()) return;
 
+        if (residentBins_.count(binFile)) {
+            Debug::Info("AssetManager") << "Kept resident bin loaded: " << binFile << "\n";
+            return;
+        }
+
         uint32_t binId = itBin->second;
 
         // Remove all assets referencing this bin
@@ -217,17 +230,62 @@ public:
     template<typename Handle>
     std::optional<Handle> loadAsset(const Key& key)
     {
-        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        std::unique_lock<std::recursive_mutex> lock(mutex_);
         AssetID id = hashAsset(key);
 
-        auto& typeMap = assets[typeid(Handle)];
-
-        auto itLoaded = typeMap.find(id);
-        if (itLoaded != typeMap.end())
+        auto itLoaded = assets[typeid(Handle)].find(id);
+        if (itLoaded != assets[typeid(Handle)].end())
         {
             ++itLoaded->second.refCount;
             return std::any_cast<Handle>(itLoaded->second.handle);
         }
+
+        // Prefetched (or being prefetched): wait for its CPU half without holding the lock (the audio thread keeps
+        // loading meanwhile), then only the finishing step (GL upload) runs here.
+        auto itPending = pending_.find({ std::type_index(typeid(Handle)), id });
+        if (itPending != pending_.end())
+        {
+            std::shared_future<std::any> future = itPending->second;
+            lock.unlock();
+            const auto waitStart = std::chrono::steady_clock::now();
+            std::any prepared = future.get();
+            const double waitedMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - waitStart).count();
+            lock.lock();
+            pending_.erase({ std::type_index(typeid(Handle)), id });
+
+            // Another thread may have finished it while this one waited.
+            auto itNow = assets[typeid(Handle)].find(id);
+            if (itNow != assets[typeid(Handle)].end())
+            {
+                ++itNow->second.refCount;
+                return std::any_cast<Handle>(itNow->second.handle);
+            }
+
+            auto finisherIt = finishers.find(typeid(Handle));
+            auto itIndex = assetIndex.find(id);
+            if (prepared.has_value() && finisherIt != finishers.end() && itIndex != assetIndex.end())
+            {
+                const auto finishStart = std::chrono::steady_clock::now();
+                std::any anyHandle = finisherIt->second(prepared);
+                prepared.reset();
+                if (anyHandle.has_value())
+                {
+                    Entry entry;
+                    entry.handle = anyHandle;
+                    entry.refCount = 1;
+                    entry.binId = itIndex->second.binId;
+                    assets[typeid(Handle)][id] = std::move(entry);
+                    Debug::Info("AssetManager") << "Loaded prefetched asset: " << key << " (waited " << waitedMs
+                        << " ms for the worker, upload "
+                        << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - finishStart).count()
+                        << " ms)\n";
+                    return std::any_cast<Handle>(anyHandle);
+                }
+            }
+            Debug::Warning("AssetManager") << "Prefetch of " << key << " gave nothing, loading it normally\n";
+        }
+
+        auto& typeMap = assets[typeid(Handle)];
 
         auto itIndex = assetIndex.find(id);
         if (itIndex == assetIndex.end())
@@ -298,6 +356,10 @@ public:
         assert(entry.refCount > 0);
         --entry.refCount;
 
+        // A resident bin's assets stay loaded at zero references, so the next match finds them ready.
+        if (entry.refCount == 0 && entry.binId < bins.size() && residentBins_.count(bins[entry.binId].name))
+            return;
+
         if (entry.refCount == 0)
         {
             destroy<Handle>(std::any_cast<Handle>(entry.handle));
@@ -334,6 +396,124 @@ public:
         destroyers[typeid(Handle)] = [destroyer](std::any h) {
             destroyer(std::any_cast<Handle>(h));
             };
+    }
+
+    // A type whose loader splits in two: `prepare` (CPU only, any thread) and `finish` (needs the GL/AL context). Loaded
+    // normally it runs both in a row; prefetch<Handle>() runs `prepare` early on a worker thread.
+    template<typename Handle, typename Prepared>
+    void registerTwoPhaseType(
+        std::function<Prepared(const uint8_t*, size_t)> prepare,
+        std::function<Handle(Prepared&)> finish,
+        std::function<void(Handle)> destroyer)
+    {
+        registerType<Handle>(
+            [prepare, finish](const uint8_t* data, size_t size) -> Handle {
+                Prepared prepared = prepare(data, size);
+                return finish(prepared);
+            },
+            destroyer);
+
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        rawPreparers[typeid(Handle)] = [prepare](const uint8_t* data, size_t size) -> std::any {
+            return std::any(std::make_shared<Prepared>(prepare(data, size)));
+            };
+        finishers[typeid(Handle)] = [finish](std::any& prepared) -> std::any {
+            auto p = std::any_cast<std::shared_ptr<Prepared>>(prepared);
+            return std::any(finish(*p));
+            };
+    }
+
+    // Starts the CPU half of these assets (registerTwoPhaseType types only) on one worker thread, in order, so a later
+    // loadAsset on the render thread only has to upload. Assets already loaded or prefetching are skipped; their bin
+    // must be loaded. Returns how many were queued.
+    template<typename Handle>
+    size_t prefetch(const std::vector<Key>& keys)
+    {
+        struct Job { Key key; std::vector<uint8_t> stored; uint64_t rawSize; std::shared_ptr<std::promise<std::any>> promise; };
+        std::vector<Job> jobs;
+        std::function<std::any(const uint8_t*, size_t)> preparer;
+
+        {
+            std::lock_guard<std::recursive_mutex> lock(mutex_);
+            auto prepIt = rawPreparers.find(typeid(Handle));
+            if (prepIt == rawPreparers.end()) return 0;
+            preparer = prepIt->second;
+
+            for (const Key& key : keys) {
+                const AssetID id = hashAsset(key);
+                if (assets[typeid(Handle)].count(id) || pending_.count({ std::type_index(typeid(Handle)), id })) continue;
+
+                auto itIndex = assetIndex.find(id);
+                if (itIndex == assetIndex.end()) continue;
+                const AssetLocation& loc = itIndex->second;
+                if (loc.binId >= bins.size() || bins[loc.binId].data.empty()) continue;
+                const BinData& bin = bins[loc.binId];
+                const uint64_t available = bin.data.size() - bin.dataOffset;
+                if (loc.offset > available || loc.size > available - loc.offset) continue;
+
+                // A copy of the compressed bytes: the worker then needs nothing from the manager.
+                const uint8_t* stored = bin.data.data() + bin.dataOffset + loc.offset;
+                Job job{ key, std::vector<uint8_t>(stored, stored + loc.size), loc.rawSize, std::make_shared<std::promise<std::any>>() };
+                pending_[{ std::type_index(typeid(Handle)), id }] = job.promise->get_future().share();
+                jobs.push_back(std::move(job));
+            }
+        }
+
+        if (jobs.empty()) return 0;
+
+        const size_t count = jobs.size();
+        std::thread([jobs = std::move(jobs), preparer]() mutable {
+            Debug::SetThreadName("AssetPrefetch");
+            for (Job& job : jobs) {
+                const auto start = std::chrono::steady_clock::now();
+                std::any result;
+                try {
+                    std::vector<uint8_t> raw;
+                    if (decompress(job.stored.data(), job.stored.size(), static_cast<size_t>(job.rawSize), raw)) {
+                        std::vector<uint8_t>().swap(job.stored);
+                        result = preparer(raw.data(), raw.size());
+                    }
+                    else {
+                        Debug::Error("AssetManager") << "Prefetch: Zstd decompression failed for " << job.key << "\n";
+                    }
+                }
+                catch (const std::exception& e) {
+                    Debug::Error("AssetManager") << "Prefetch of " << job.key << " failed: " << e.what() << "\n";
+                    result.reset();
+                }
+                Debug::Info("AssetManager") << "Prefetched " << job.key << " in "
+                    << std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count() << " ms\n";
+                job.promise->set_value(std::move(result));
+            }
+            }).detach();
+
+        return count;
+    }
+
+    // Prefetches (any type) whose worker hasn't finished the CPU half yet. A load step polls this rather than calling
+    // loadAsset, which would block the render thread (and its window's message pump) until the worker is done.
+    size_t prefetchesInFlight() const
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        size_t count = 0;
+        for (const auto& [key, future] : pending_)
+            if (future.wait_for(std::chrono::seconds(0)) != std::future_status::ready) ++count;
+        return count;
+    }
+
+    // Resident bins are never unloaded and their assets stay loaded at zero references: the next scene that uses them
+    // (e.g. the next match) finds them ready instead of decoding and uploading everything again.
+    void setKeepResident(const std::string& binFile, bool keep)
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        if (keep) residentBins_.insert(binFile);
+        else residentBins_.erase(binFile);
+    }
+
+    bool isResident(const std::string& binFile) const
+    {
+        std::lock_guard<std::recursive_mutex> lock(mutex_);
+        return residentBins_.count(binFile) != 0;
     }
 
     void setAssetIndex(const std::unordered_map<AssetID, AssetLocation>& idx)
@@ -477,6 +657,20 @@ private:
     std::unordered_map<std::type_index, std::function<std::any(const AssetLocation&, const BinData&)>> loaders;
     std::unordered_map<std::type_index, std::function<void(std::any)>> destroyers;
     std::unordered_map<AssetID, AssetLocation> assetIndex;
+
+    // registerTwoPhaseType: the CPU half (on decompressed bytes) and the finishing half, per type.
+    std::unordered_map<std::type_index, std::function<std::any(const uint8_t*, size_t)>> rawPreparers;
+    std::unordered_map<std::type_index, std::function<std::any(std::any&)>> finishers;
+
+    struct PendingKeyHash {
+        size_t operator()(const std::pair<std::type_index, AssetID>& k) const {
+            return k.first.hash_code() ^ static_cast<size_t>(k.second * 0x9E3779B97F4A7C15ULL);
+        }
+    };
+    // Prefetches not yet picked up by loadAsset: the worker's result (a Prepared, or empty on failure).
+    std::unordered_map<std::pair<std::type_index, AssetID>, std::shared_future<std::any>, PendingKeyHash> pending_;
+
+    std::set<std::string> residentBins_;
 
     template<typename Handle>
     void destroy(Handle h)

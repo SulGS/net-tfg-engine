@@ -84,14 +84,15 @@ GLuint ShaderLoader::acquireProgram(const std::string& vertexAssetKey,
     CacheKey key{ vertexAssetKey, displayFrag };
     auto& c = cache();
 
-    // Cache hit � just bump the ref count
+    // Cache hit: just bump the ref count (not logged: it happens for every laser bolt)
     auto it = c.find(key);
     if (it != c.end()) {
         ++it->second.refCount;
-        Debug::Info("ShaderLoader") << "Cache hit for shader: "
-            << vertexAssetKey << " + " << displayFrag << "\n";
         return it->second.program;
     }
+
+    if (!define.empty() && missingVariants().count(key))
+        return 0;
 
     // Cache miss - get the sources (engine built-ins or game assets)
     std::string vertCode, fragCode;
@@ -123,6 +124,7 @@ GLuint ShaderLoader::acquireProgram(const std::string& vertexAssetKey,
         // Shader doesn't implement this variant: not an error, the caller falls back to its default path.
         if (fragCode.find(define) == std::string::npos) {
             releaseSources();
+            missingVariants()[key] = true;
             return 0;
         }
 
@@ -172,13 +174,9 @@ void ShaderLoader::releaseProgram(const CacheKey& key)
     auto it = c.find(key);
     if (it == c.end()) return;
 
-    --it->second.refCount;
-    if (it->second.refCount == 0) {
-        glDeleteProgram(it->second.program);
-        Debug::Info("ShaderLoader") << "Destroyed cached shader: "
-            << key.first << " + " << key.second << "\n";
-        c.erase(it);
-    }
+    // Kept at zero references (see destroyProgram).
+    if (it->second.refCount > 0)
+        --it->second.refCount;
 }
 
 // Raw compile + link — no cache, no asset manager

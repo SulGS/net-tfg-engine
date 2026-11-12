@@ -38,7 +38,7 @@ struct MatchmakerConfig {
     std::filesystem::path gameServerPath;
 
     int serverReadyTimeoutS = 15;  // launch -> /server/ready
-    int joinTimeoutS = 60;         // passed to GameServer --join-timeout
+    int joinTimeoutS = 25;         // passed to GameServer --join-timeout (then it starts with whoever came, see Server::WaitForClients)
     int emptyTimeoutS = 30;        // passed to GameServer --empty-timeout
     int ticketTimeoutS = MatchmakingProtocol::TICKET_TIMEOUT_S;
 };

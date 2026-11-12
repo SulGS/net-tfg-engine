@@ -19,7 +19,7 @@ FontManager::~FontManager() {
     FT_Done_FreeType(ft);
 }
 
-bool FontManager::LoadFont(const std::string& fontName, const std::string& fontPath, unsigned int fontSize) {
+bool FontManager::LoadFont(const std::string& fontName, const std::string& fontPath, unsigned int fontSize, bool quiet) {
 
 	if (fonts.find(fontName) != fonts.end()) {
 		Debug::Warning("FontManager") << "Font already loaded: " << fontName << "\n";
@@ -28,7 +28,10 @@ bool FontManager::LoadFont(const std::string& fontName, const std::string& fontP
 
     FT_Face face;
     if (FT_New_Face(ft, fontPath.c_str(), 0, &face)) {
-        Debug::Error("FontManager") << "ERROR: Failed to load font: " << fontPath << "\n";
+        if (quiet)
+            Debug::Info("FontManager") << "Font not usable, trying the next one: " << fontPath << "\n";
+        else
+            Debug::Error("FontManager") << "ERROR: Failed to load font: " << fontPath << "\n";
         return false;
     }
 

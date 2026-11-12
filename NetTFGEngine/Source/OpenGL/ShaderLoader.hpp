@@ -21,7 +21,10 @@ public:
     static GLuint createProgram(const std::string& vertexAssetKey,
         const std::string& fragmentAssetKey);
 
-    // Releases one reference. Deletes the GL program only when refcount hits 0.
+    // Releases one reference. The program stays cached at zero references for the rest of the session: every laser
+    // bolt creates and destroys a Material, and deleting the program with the last bolt on screen made the next shot
+    // compile it again, the cause of most in-match hitches on integrated GPUs (alpha test 2026-11-11). Programs are
+    // small, and a key names one shader file of the single asset root, so a cached one never goes stale.
     static void destroyProgram(const std::string& vertexAssetKey,
         const std::string& fragmentAssetKey);
 
@@ -58,6 +61,14 @@ private:
     static std::unordered_map<CacheKey, CacheEntry, CacheKeyHash>& cache()
     {
         static std::unordered_map<CacheKey, CacheEntry, CacheKeyHash> instance;
+        return instance;
+    }
+
+    // Variant keys whose fragment shader turned out not to implement the define: answered with 0 at once instead of
+    // decompressing and scanning both sources again for every Material (each laser bolt).
+    static std::unordered_map<CacheKey, bool, CacheKeyHash>& missingVariants()
+    {
+        static std::unordered_map<CacheKey, bool, CacheKeyHash> instance;
         return instance;
     }
 

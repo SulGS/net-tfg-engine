@@ -338,6 +338,23 @@ void RenderSystem::CompileEnvironmentShaders()
         CompileStage(GL_VERTEX_SHADER,   kEnvVert),
         CompileStage(GL_FRAGMENT_SHADER, equirectFrag.c_str())
         });
+
+    // LinkProgram hands back the program even when it failed (and logs only the first 512 chars of the log): drop a
+    // failed one here, so EnvironmentPass sees it missing and says which (alpha test 2026-11-11: the RX 9060 XT ran
+    // without environment lighting and the log never said why).
+    auto keepIfLinked = [](GLuint& program, const char* what) {
+        GLint ok = 0;
+        if (program) glGetProgramiv(program, GL_LINK_STATUS, &ok);
+        if (!ok) {
+            Debug::Error("RenderSystem") << "Environment lighting: the " << what << " shader failed to compile or link\n";
+            if (program) glDeleteProgram(program);
+            program = 0;
+        }
+    };
+    keepIfLinked(m_envSkyShader, "sky");
+    keepIfLinked(m_envPrefilterShader, "prefilter");
+    keepIfLinked(m_envBrdfShader, "BRDF LUT");
+    keepIfLinked(m_envEquirectShader, "panorama");
 }
 
 void RenderSystem::InitEnvironment()
@@ -374,8 +391,12 @@ void RenderSystem::InitEnvironment()
 
     glBindFramebuffer(GL_FRAMEBUFFER, m_envFBO);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_envBrdfLUT, 0);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-        Debug::Error("RenderSystem") << "BRDF LUT FBO incomplete\n";
+    const GLenum lutStatus = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (lutStatus != GL_FRAMEBUFFER_COMPLETE)
+        Debug::Error("RenderSystem") << "BRDF LUT FBO incomplete (status 0x" << std::hex << lutStatus << std::dec
+            << ", RG16F " << kBrdfLutSize << "x" << kBrdfLutSize << ")\n";
+    if (!m_envBrdfShader)
+        Debug::Error("RenderSystem") << "BRDF LUT not rendered: no BRDF shader\n";
     glViewport(0, 0, kBrdfLutSize, kBrdfLutSize);
     glUseProgram(m_envBrdfShader);
     glUniform1i(glGetUniformLocation(m_envBrdfShader, "uSize"), kBrdfLutSize);
@@ -474,7 +495,16 @@ void RenderSystem::EnvironmentPass(EntityManager& em, EntityManager::Query<MeshC
         DeleteSkyCubemap();
         return;
     }
-    if (!m_envSkyShader || !m_envPrefilterShader || !m_envBrdfLUT || !m_envFBO) return;
+    if (!m_envSkyShader || !m_envPrefilterShader || !m_envBrdfLUT || !m_envFBO) {
+        // Once per RenderSystem: why environment lighting is off although the settings want it.
+        if (!m_envMissingWarned) {
+            Debug::Error("RenderSystem") << "Environment lighting enabled but unavailable, missing:"
+                << (m_envSkyShader ? "" : " sky shader") << (m_envPrefilterShader ? "" : " prefilter shader")
+                << (m_envBrdfLUT ? "" : " BRDF LUT") << (m_envFBO ? "" : " FBO") << "\n";
+            m_envMissingWarned = true;
+        }
+        return;
+    }
 
     EnvironmentSkyComponent sky{};
     {

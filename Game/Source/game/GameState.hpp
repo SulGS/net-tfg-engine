@@ -65,6 +65,8 @@ struct AsteroidShooterGameState {
 
     // Pre-match freeze countdown, in ticks; see MatchStartTimer/MatchStartSystem.
     int startCountdownTicks;
+    // 1 while the server still waits for every player to load the level (the countdown doesn't run yet), else 0.
+    int startWaitingForPlayers;
 };
 
 // Must fit GameStateBlob::data (4096 bytes).

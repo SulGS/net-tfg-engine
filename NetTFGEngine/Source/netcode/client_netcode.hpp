@@ -6,6 +6,8 @@
 #include <map>
 #include <deque>
 #include <algorithm>
+#include <chrono>
+#include <string>
 
 // Client-side prediction with server reconciliation and lag compensation
 class ClientPredictionNetcode {
@@ -70,6 +72,11 @@ public:
 		if (!(gameLogic->CompareStateWithDeltas(snapshot.state, deltas)))
 		{
 			needsCorrection = true;
+			// Before the deltas overwrite the prediction: which field it got wrong (the first one per log window).
+			if (reconcileStats_.firstMismatch.empty()) {
+				reconcileStats_.firstMismatch = gameLogic->DescribeDeltaMismatch(snapshot.state, deltas);
+				reconcileStats_.firstMismatchFrame = deltaFrame;
+			}
 			gameLogic->ApplyDeltasToGameState(snapshot.state, deltas);
 		}
 
@@ -90,10 +97,12 @@ public:
 			currentState.len = lastSnapshot.state.len;
 			memcpy(currentState.data, lastSnapshot.state.data, currentState.len);
 
-			Debug::Info("ClientNetcode") << "[CLIENT] Reconciled to server state at frame " << deltaFrame
-				<< ". Current frame: " << currentFrame << "\n";
-
+			reconcileStats_.reconciled++;
+			reconcileStats_.maxRollback = std::max(reconcileStats_.maxRollback, currentFrame - deltaFrame);
 		}
+
+		reconcileStats_.serverFrames++;
+		LogReconcileStatsIfDue();
 
 		RemoveYetConfirmedSnapshots();
 	}
@@ -201,6 +210,38 @@ private:
 	std::map<int, Snapshot> snapshots;
 
 	mutable std::mutex mtx;
+
+	// Reconciliations used to be one log line each: ~88 % of server frames, 60 % of all log volume. Now one summary a
+	// second, with the field that differed first in that second (what tells a remote input apart from float drift).
+	struct ReconcileStats {
+		int serverFrames = 0;
+		int reconciled = 0;
+		int maxRollback = 0;
+		std::string firstMismatch;
+		int firstMismatchFrame = -1;
+		std::chrono::steady_clock::time_point windowStart = std::chrono::steady_clock::now();
+	} reconcileStats_;
+
+	// Caller holds mtx.
+	void LogReconcileStatsIfDue()
+	{
+		const auto now = std::chrono::steady_clock::now();
+		if (now - reconcileStats_.windowStart < std::chrono::seconds(1))
+			return;
+
+		if (reconcileStats_.serverFrames > 0) {
+			auto line = Debug::Info("ClientNetcode");
+			line << "[CLIENT] Reconciled " << reconcileStats_.reconciled << "/" << reconcileStats_.serverFrames
+				<< " server frames (" << (100 * reconcileStats_.reconciled / reconcileStats_.serverFrames) << " %)"
+				<< " | Max rollback: " << reconcileStats_.maxRollback << " frames";
+			if (!reconcileStats_.firstMismatch.empty())
+				line << " | First mismatch at frame " << reconcileStats_.firstMismatchFrame << ": " << reconcileStats_.firstMismatch;
+			line << "\n";
+		}
+
+		reconcileStats_ = ReconcileStats{};
+		reconcileStats_.windowStart = now;
+	}
 
 	// A new snapshot starts as a copy of the nearest earlier one. Not snapshots[frame - 1]: when the client has fallen
 	// behind the server (a stall longer than the engine's catch-up window drops ticks), a delta or event can name a frame

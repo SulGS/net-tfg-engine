@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <memory>
+#include <vector>
 #include <glm/glm.hpp>
 
 #include "ecs/ecs_common.hpp"
@@ -53,7 +54,7 @@ inline PointLightComponent* AddLaserBoltLight(EntityManager& em, Entity bullet)
     light->color = LASER_BOLT_LIGHT_COLOR;
     light->intensity = 0.0f;
     light->radius = LASER_BOLT_LIGHT_RADIUS;
-    light->castShadows = true;
+    light->castShadows = false;
     return light;
 }
 
@@ -109,4 +110,41 @@ inline PointLightComponent* AddShieldLight(EntityManager& em, Entity shield)
     light->radius = SHIELD_LIGHT_RADIUS;
     light->castShadows = false;
     return light;
+}
+
+// ---- Laser wall / spoke beams ---- Colours shared by the beam material (laser_wall.frag, set in CreateLaserWalls)
+// and the light the beam casts (LaserWallRenderSystem), so both always agree.
+inline const glm::vec3 LASER_WALL_BEAM_COLOR(1.0f, 0.07f, 0.04f);   // halo, normal state
+inline const glm::vec3 LASER_WALL_WARN_COLOR(1.0f, 0.5f, 0.04f);    // halo, warning (amber stutter) state
+inline const glm::vec3 LASER_WALL_HOT_COLOR(1.0f, 0.7f, 0.55f);     // filament / energise flash
+
+// Light a beam casts on the tiles, pillars and ships around it, meant to read as ONE even strip of light along the
+// whole beam: a row of point lights spaced so their sum is flat. With 6 per 40-unit beam (6.7 apart, the same step
+// across the pillar into the next beam) about 6 above the tiles, the floor beside the beam varies under 5% along it;
+// at beam height (4 above the tiles) the same row would ripple ~25%, hence the lift. Forward+ keeps the cost per pixel
+// to the few lights that reach it. Lights of a beam that is down have intensity 0 and are not sent to the GPU.
+inline constexpr int   LASER_WALL_LIGHTS_PER_BEAM = 6;
+inline constexpr float LASER_WALL_BEAM_HALF_LENGTH = 20.0f;  // laser_beam.glb is +-1 along Z, scaled x20
+inline constexpr float LASER_WALL_LIGHT_LIFT = 2.0f;         // above the beam axis (z = 0, tiles at -4)
+inline constexpr float LASER_WALL_LIGHT_RADIUS = 18.0f;
+inline constexpr float LASER_WALL_LIGHT_INTENSITY = 60.0f;   // per light, beam fully energised
+inline constexpr float LASER_WALL_LIGHT_FLASH = 1.5f;        // hot colour added at the energise flash (x flash 0..1)
+
+// The switched-off light row of one beam (unit axis along it), as offsets from the beam centre. One component on the
+// beam entity, not one entity per light: every ECS query scans all entities, and 1320 light entities (220 beams x 6)
+// made every system slower each frame.
+inline PointLightGroupComponent MakeLaserWallLights(const glm::vec3& axis)
+{
+    PointLightGroupComponent lights;
+    lights.offsets.reserve(LASER_WALL_LIGHTS_PER_BEAM);
+    const float step = 2.0f * LASER_WALL_BEAM_HALF_LENGTH / LASER_WALL_LIGHTS_PER_BEAM;
+    for (int k = 0; k < LASER_WALL_LIGHTS_PER_BEAM; ++k)
+    {
+        const float along = -LASER_WALL_BEAM_HALF_LENGTH + (k + 0.5f) * step;
+        lights.offsets.push_back(axis * along + glm::vec3(0.0f, 0.0f, LASER_WALL_LIGHT_LIFT));
+    }
+    lights.color = LASER_WALL_BEAM_COLOR;
+    lights.intensity = 0.0f;   // LaserWallRenderSystem drives it
+    lights.radius = LASER_WALL_LIGHT_RADIUS;
+    return lights;
 }

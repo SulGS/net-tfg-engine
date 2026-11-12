@@ -111,7 +111,11 @@ public:
             return 1;
         }
 
+        // The lobby's names in one round, ahead of GAME_START on the same reliable channel.
+        BroadcastPlayerNames();
         BroadcastGameStart();
+        gameRunning_.store(true);
+        gameStartTime_ = std::chrono::steady_clock::now();
 
         Debug::Info("Server") << "Starting server game loop.\n";
         RunServerLoop();
@@ -135,6 +139,35 @@ private:
 
     std::vector<long long> tickDurations_;
     const size_t MAX_SAMPLES = 30;
+
+    // True from GAME_START on. Before it, a returning player is just a player again (it waits for GAME_START like the
+    // rest); after it, anyone joining needs the full state, so it is accepted as a reconnection.
+    std::atomic<bool> gameRunning_{ false };
+
+    // Start gate: the game's start countdown waits (IGameLogic::OnAllPlayersReady) until every connected player sent
+    // PACKET_CLIENT_READY, or READY_WAIT_CAP after GAME_START so one stuck loader can't hold the match forever.
+    static constexpr std::chrono::seconds READY_WAIT_CAP{ 30 };
+    bool allReadyAnnounced_ = false;
+    std::chrono::steady_clock::time_point gameStartTime_;
+
+    // Fewest players a match starts with when the join timeout runs out before everyone joined.
+    static constexpr size_t MIN_PLAYERS_TO_START_EARLY = 2;
+
+    // Ticks slower than this are logged with where the time went (alpha test 2026-11-11: 0.4-0.9 s stalls hit every
+    // client of a match at once, and there were no server logs to say why).
+    static constexpr long long SLOW_TICK_US = 50000;
+    // Longest the network thread held peersMutex_ in one pass since the last slow-tick report (the tick loop waits on it).
+    std::atomic<long long> netLockMaxUs_{ 0 };
+    std::atomic<long long> netPumpMaxUs_{ 0 };   // longest PumpCallbacks (GNS connection callbacks), same window
+
+    static void StoreMax(std::atomic<long long>& target, long long value) {
+        long long prev = target.load();
+        while (value > prev && !target.compare_exchange_weak(prev, value)) {}
+    }
+
+    static long long UsSince(std::chrono::steady_clock::time_point t) {
+        return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - t).count();
+    }
 
     bool IsValidClientId(const std::string& clientId) {
         if (clientId.empty() || clientId.length() > 63) {
@@ -380,6 +413,16 @@ private:
             return;
         }
 
+        if (type == PACKET_CLIENT_READY) {
+            if (!sender.levelReady) {
+                sender.levelReady = true;
+                const auto loadS = std::chrono::duration<double>(std::chrono::steady_clock::now() - gameStartTime_).count();
+                Debug::Info("Server") << "Player " << sender.playerId << " (" << sender.clientId << ") loaded the level "
+                    << std::fixed << std::setprecision(1) << loadS << " s after game start\n";
+            }
+            return;
+        }
+
         if (type == PACKET_INPUT_DELAY) {
             InputDelayPacket packet = net_.ParseInputDelaySync(data, len);
 
@@ -556,11 +599,20 @@ private:
             existingPlayer->connection = conn;
             existingPlayer->isConnected = true;
             peerInfo_[conn] = *existingPlayer;
+            peerInfo_[conn].levelReady = false;
             activePlayerCount_++;
 
             Debug::Info("Server") << "Player " << existingPlayer->playerId
                 << " (" << clientId << ") reconnected after "
                 << elapsed.count() << "s\n";
+
+            // Back before the game started (left the lobby and came back): nothing to resync, it waits for GAME_START
+            // like everyone else. As a reconnection it would wait for a full state the tick loop doesn't send yet.
+            if (!gameRunning_.load()) {
+                SendServerAccept(conn, existingPlayer->playerId, false);
+                // Names go out once, right before GAME_START (RunServer): not one round per player joining the lobby.
+                return true;
+            }
 
             SendServerAccept(conn, existingPlayer->playerId, true);
             BroadcastPlayerNames();
@@ -598,8 +650,19 @@ private:
             << ". Total clients: " << peerInfo_.size() << "/"
             << config_.maxPlayers << "\n";
 
+        if (gameRunning_.load()) {
+            // Joined after the match started (e.g. it started without this player at the join timeout). There is no
+            // GAME_START left to wait for and it needs the current state: to the client that is a reconnection.
+            Debug::Info("Server") << "Player " << info.playerId << " joined the running match, sending it the full state\n";
+            SendServerAccept(conn, info.playerId, true);
+            BroadcastPlayerNames();
+            server_.OnPlayerConnected(info.playerId);
+            peerInfo_[conn].pendingReceiveFullState = true;   // sent by the tick loop, after the accept
+            return true;
+        }
+
         SendServerAccept(conn, info.playerId, false);
-        BroadcastPlayerNames();
+        // Names go out once, right before GAME_START (RunServer): broadcasting on every join sent 12 rounds to a full lobby.
 
         if (peerInfo_.size() == config_.minPlayers) {
             Debug::Info("Server") << "Minimum players reached. Game will start.\n";
@@ -645,17 +708,106 @@ private:
                 HandleClientHello(conn, data, len);
                 }, false);
 
+            DropClosedPeersWhileWaiting();
+
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
             if (config_.joinTimeout.count() > 0 &&
                 std::chrono::steady_clock::now() - waitStart > config_.joinTimeout) {
+                // A matched player that crashed or never came used to leave the rest waiting until this ran out, then
+                // the server just stopped and they saw a CONN_TIMEOUT (alpha test 2026-11-11). Start with whoever came
+                // (the missing ones can still join the running match), or tell them the match is off.
+                if (peerInfo_.size() >= MIN_PLAYERS_TO_START_EARLY) {
+                    Debug::Info("Server") << "Only " << peerInfo_.size() << "/" << config_.minPlayers
+                        << " players joined within " << config_.joinTimeout.count() << "s. Starting without the rest.\n";
+                    return true;
+                }
+
                 Debug::Info("Server") << "Only " << peerInfo_.size() << "/" << config_.minPlayers
-                    << " players joined within " << config_.joinTimeout.count() << "s. Stopping server.\n";
+                    << " players joined within " << config_.joinTimeout.count() << "s. Calling the match off.\n";
+                AbortWaitingPeers();
                 running = false;
             }
         }
 
         return running && peerInfo_.size() >= config_.minPlayers;
+    }
+
+    // Before the game: a player that left (crashed, closed the game) frees its place so the count is real. It keeps its
+    // player id in allPlayers_, so coming back reuses it (HandleNewClient's reconnection path).
+    void DropClosedPeersWhileWaiting() {
+        ISteamNetworkingSockets* sockets = net_.GetSockets();
+        if (!sockets) return;
+
+        std::vector<HSteamNetConnection> gone;
+        for (const auto& [conn, info] : peerInfo_) {
+            SteamNetConnectionInfo_t connInfo;
+            if (!sockets->GetConnectionInfo(conn, &connInfo) ||
+                connInfo.m_eState == k_ESteamNetworkingConnectionState_ClosedByPeer ||
+                connInfo.m_eState == k_ESteamNetworkingConnectionState_ProblemDetectedLocally ||
+                connInfo.m_eState == k_ESteamNetworkingConnectionState_Dead) {
+                gone.push_back(conn);
+            }
+        }
+
+        for (HSteamNetConnection conn : gone) {
+            auto it = peerInfo_.find(conn);
+            const int playerId = it->second.playerId;
+            Debug::Info("Server") << "Player " << playerId << " (" << it->second.clientId << ") left before the game started\n";
+            for (auto& p : allPlayers_) {
+                if (p.playerId == playerId) {
+                    p.isConnected = false;
+                    p.disconnectTime = std::chrono::steady_clock::now();
+                }
+            }
+            peerInfo_.erase(it);
+            if (activePlayerCount_ > 0) activePlayerCount_--;
+            sockets->CloseConnection(conn, k_ESteamNetConnectionEnd_App_Generic, nullptr, false);
+        }
+    }
+
+    // Tells everyone still waiting that the match won't start, then gives GNS a moment to deliver it before exiting.
+    void AbortWaitingPeers() {
+        ISteamNetworkingSockets* sockets = net_.GetSockets();
+        if (!sockets) return;
+
+        const uint8_t packet = PACKET_MATCH_ABORTED;
+        for (const auto& [conn, info] : peerInfo_) {
+            sockets->SendMessageToConnection(conn, &packet, sizeof(packet), k_nSteamNetworkingSend_Reliable, nullptr);
+            sockets->CloseConnection(conn, k_ESteamNetConnectionEnd_App_Min + REJECT_MATCH_ABORTED, "match called off", true);
+        }
+
+        const auto flushUntil = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        while (std::chrono::steady_clock::now() < flushUntil) {
+            net_.PumpCallbacks();
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+    }
+
+    // Tick thread, peersMutex_ held. Releases the game's start once every connected player has loaded, or at the cap.
+    void CheckAllPlayersReady() {
+        if (allReadyAnnounced_) return;
+
+        std::vector<int> missing;
+        for (const auto& [conn, info] : peerInfo_) {
+            if (info.isConnected && !info.levelReady) missing.push_back(info.playerId);
+        }
+
+        const auto waited = std::chrono::steady_clock::now() - gameStartTime_;
+        if (!missing.empty() && waited < READY_WAIT_CAP) return;
+
+        if (missing.empty()) {
+            Debug::Info("Server") << "Every player loaded the level, starting the countdown\n";
+        }
+        else {
+            std::ostringstream ids;
+            for (int id : missing) ids << " " << id;
+            Debug::Warning("Server") << "Players" << ids.str() << " still loading after " << READY_WAIT_CAP.count()
+                << " s, starting the countdown without them\n";
+        }
+
+        allReadyAnnounced_ = true;
+        server_.GetGameLogic()->OnAllPlayersReady();
     }
 
     void BroadcastGameStart() {
@@ -666,11 +818,18 @@ private:
 
     void ServerNetworkThread(std::atomic<bool>& running) {
         while (running.load()) {
+            const auto pumpStart = std::chrono::steady_clock::now();
             net_.PumpCallbacks();  // CRITICAL: process connection state changes
+            StoreMax(netPumpMaxUs_, UsSince(pumpStart));
 
             {
                 // The handlers below insert/erase peers while RunServerLoop iterates them on the tick thread.
                 std::lock_guard<std::mutex> lock(peersMutex_);
+                const auto lockedAt = std::chrono::steady_clock::now();
+                struct HoldTimer {
+                    Server* s; std::chrono::steady_clock::time_point t;
+                    ~HoldTimer() { StoreMax(s->netLockMaxUs_, UsSince(t)); }
+                } holdTimer{ this, lockedAt };
 
                 net_.Poll([&](const uint8_t* data, int len, HSteamNetConnection conn) {
                     HandleReceiveEventInGame(conn, data, len);
@@ -722,11 +881,21 @@ private:
 
         while (running_ && (activePlayerCount_ >= config_.minPlayers || !config_.stopOnBelowMin) && !server_.GetGameLogic()->gameFinished) {
 
+            const auto tickStart = std::chrono::steady_clock::now();
             StateUpdate update = server_.Tick();
+            const long long simulateUs = UsSince(tickStart);
+            long long lockWaitUs = 0;
+            long long sendUs = 0;
+            size_t fullStatesSent = 0;
 
             {
                 // Held while walking peerInfo_: the network thread inserts/erases peers (hello, disconnect) concurrently.
+                const auto lockRequested = std::chrono::steady_clock::now();
                 std::lock_guard<std::mutex> peersLock(peersMutex_);
+                lockWaitUs = UsSince(lockRequested);
+                const auto sendStart = std::chrono::steady_clock::now();
+
+                CheckAllPlayersReady();
 
                 for (auto& [conn, info] : peerInfo_) {
                     if (!info.isConnected) {
@@ -783,6 +952,26 @@ private:
                         net_.SendDeltasUpdate(conn, generatedDeltas, server_.GetCurrentFrame());
                     }
                 }
+
+                fullStatesSent = sentFullState.size();
+                sendUs = UsSince(sendStart);
+            }
+
+            // Where a slow tick went, plus what the network thread did meanwhile (its longest lock hold and GNS pump).
+            const long long tickUs = UsSince(tickStart);
+            if (tickUs > SLOW_TICK_US) {
+                Debug::Warning("Server") << "Slow tick at frame " << server_.GetCurrentFrame() << ": " << tickUs / 1000.0
+                    << " ms (simulate " << simulateUs / 1000.0 << " ms, wait for peers lock " << lockWaitUs / 1000.0
+                    << " ms, send " << sendUs / 1000.0 << " ms, " << fullStatesSent << " full states) | network thread max lock hold "
+                    << netLockMaxUs_.exchange(0) / 1000.0 << " ms, max GNS pump " << netPumpMaxUs_.exchange(0) / 1000.0 << " ms\n";
+            }
+            // Ticks that were on time but late to start (sleep_until woke late, or the process was descheduled) show
+            // up as a gap between ticks instead.
+            const long long behindUs = std::chrono::duration_cast<std::chrono::microseconds>(
+                std::chrono::high_resolution_clock::now() - nextTick).count();
+            if (behindUs > SLOW_TICK_US + std::chrono::duration_cast<std::chrono::microseconds>(TICK_DURATION).count()) {
+                Debug::Warning("Server") << "Tick loop " << behindUs / 1000.0 << " ms behind schedule at frame "
+                    << server_.GetCurrentFrame() << " (this tick took " << tickUs / 1000.0 << " ms)\n";
             }
 
             if (server_.GetCurrentFrame() % 30 == 0) {

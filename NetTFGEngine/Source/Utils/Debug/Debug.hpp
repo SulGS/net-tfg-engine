@@ -17,6 +17,10 @@ public:
     static void LogError(const std::string& msg, const std::string& channel = "General");
     static void LogCritical(const std::string& msg, const std::string& channel = "General");
 
+    // The calling code's stack as "module+offset < module+offset ...", innermost first (resolve the offsets against
+    // the build's .pdb). For rare diagnostics, e.g. which draw a GL error came from. "" where not supported.
+    static std::string CallerStack(int skip = 0, int maxFrames = 12);
+
     static DebugStream Info(const std::string& channel = "General") {
         return DebugStream(LogLevel::Info, channel);
     }

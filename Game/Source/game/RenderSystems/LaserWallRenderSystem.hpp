@@ -1,11 +1,13 @@
 ﻿#pragma once
 
 #include <algorithm>
+#include <cmath>
 #include <unordered_set>
 
 #include "ecs/ecs_common.hpp"
 #include "OpenGL/MeshComponent.hpp"
 #include "../Components.hpp"
+#include "LaserVisuals.hpp"
 
 // Drives tile/wall/spoke/pillar visibility from replicated state, and each wall's beam animation (laser_wall.frag)
 // easing toward solid/warning/off via LaserWallVisual. Purely render-side, never synced or predicted.
@@ -22,6 +24,54 @@ class LaserWallRenderSystem : public ISystem
 
     float time = 0.0f; // render-side clock for the beam shader ("uTime")
 
+    // CPU twins of laser_wall.frag's hash11 / valueNoise1, so the lights dip and stutter in step with the beam.
+    static float Fract(float x) { return x - std::floor(x); }
+    static float Hash11(float p)
+    {
+        p = Fract(p * 0.1031f);
+        p *= p + 33.33f;
+        p *= p + p;
+        return Fract(p);
+    }
+    static float ValueNoise1(float x)
+    {
+        const float i = std::floor(x);
+        float f = x - i;
+        f = f * f * (3.0f - 2.0f * f);
+        return glm::mix(Hash11(i), Hash11(i + 1.0f), f);
+    }
+    static float SmoothStep(float e0, float e1, float x)
+    {
+        const float t = std::clamp((x - e0) / (e1 - e0), 0.0f, 1.0f);
+        return t * t * (3.0f - 2.0f * t);
+    }
+
+    // The beam's light row (LASER_WALL_* in LaserVisuals.hpp) follows what laser_wall.frag draws: colour blended to
+    // amber while warning, the hot colour on top at the energise flash, brightness from power (width x brightness, as
+    // the shader scales both) times the warning stutter and the supply dips. The shader's spatial shimmer/bands are
+    // left out: per light they would read as separate flickering bulbs instead of one strip.
+    void UpdateWallLights(PointLightGroupComponent* lights, const LaserWallVisual* vis)
+    {
+        float level = 0.0f;
+        glm::vec3 color = LASER_WALL_BEAM_COLOR;
+        if (vis->power > 0.002f)
+        {
+            const float tension = std::min(vis->warnTime / WARNING_RAMP_TIME, 1.0f);
+            const float stutterOn = SmoothStep(0.0f, 0.12f,
+                ValueNoise1(time * 11.0f + vis->seed * 17.0f) - glm::mix(0.75f, 0.25f, tension));
+            const float stutter = glm::mix(1.0f, 0.2f + 0.8f * stutterOn, vis->warning);
+            const float mains = 1.0f - 0.28f * SmoothStep(0.82f, 1.0f, ValueNoise1(time * 13.0f + vis->seed * 31.0f));
+            level = vis->power * (0.25f + 0.75f * vis->power) * stutter * mains;
+            color = glm::mix(LASER_WALL_BEAM_COLOR, LASER_WALL_WARN_COLOR, vis->warning)
+                  + LASER_WALL_HOT_COLOR * (vis->flash * LASER_WALL_LIGHT_FLASH);
+        }
+        if (lights)
+        {
+            lights->color = color;
+            lights->intensity = LASER_WALL_LIGHT_INTENSITY * level;
+        }
+    }
+
     static float MoveToward(float current, float target, float maxDelta)
     {
         if (current < target) return std::min(current + maxDelta, target);
@@ -30,7 +80,7 @@ class LaserWallRenderSystem : public ISystem
 
     // Eases one wall/spoke toward what the replicated state says (solid /
     // warning / off), toggles its mesh, and pushes the result to the shader.
-    void AnimateWall(MeshComponent* mesh, LaserWallVisual* vis, bool solid, bool warning, float deltaTime)
+    void AnimateWall(MeshComponent* mesh, LaserWallVisual* vis, PointLightGroupComponent* lights, bool solid, bool warning, float deltaTime)
     {
         // Just energised: white-hot burst that decays.
         if (solid && !vis->wasSolid) vis->flash = 1.0f;
@@ -46,6 +96,7 @@ class LaserWallRenderSystem : public ISystem
 
         // Fully faded out: stop drawing it altogether (also skips the uniform uploads).
         mesh->enabled = vis->power > 0.002f;
+        UpdateWallLights(lights, vis);
         if (!mesh->enabled || !mesh->mesh) return;
 
         if (Material* mat = mesh->mesh->getMaterial())
@@ -141,7 +192,7 @@ public:
                     }
                 }
 
-                AnimateWall(mesh, visual, solid, warning, deltaTime);
+                AnimateWall(mesh, visual, entityManager.GetComponent<PointLightGroupComponent>(entity), solid, warning, deltaTime);
             }
         }
 

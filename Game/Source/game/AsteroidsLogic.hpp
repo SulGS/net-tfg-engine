@@ -40,7 +40,7 @@
 
 
 // Pre-match freeze: see MatchStartTimer/MatchStartSystem in LogicSystems/MatchStartSystem.hpp.
-inline constexpr int MATCH_START_COUNTDOWN_TICKS = 20 * TICKS_PER_SECOND;
+inline constexpr int MATCH_START_COUNTDOWN_TICKS = 5 * TICKS_PER_SECOND;   // starts once every player has loaded (see MatchStartTimer)
 
 // Returns the world-space centre of tile (cx, cy).
 // Matches the formula used in InitECSLogic / InitECSRenderer.
@@ -90,15 +90,30 @@ static void GetPlayerSpawnWorld(int playerIndex, float& outX, float& outY, float
 class AsteroidShooterGame : public IECSGameLogic {
 private:
     int debugTicks = 0;
+    // Set by OnAllPlayersReady (server tick thread, between ticks), consumed by the next SimulateFrame.
+    std::atomic<bool> allPlayersReady_{ false };
 public:
 
     // ArenaSystem stamps each wall's turn-on frame into its warning code (see EncodeWallWarning), so it needs the frame
     // being simulated; the ECS systems themselves only get deltaTime.
     void SimulateFrame(GameStateBlob& state, std::vector<EventEntry> events, std::map<int, InputEntry> inputs) override {
-        if (isServer)
+        if (isServer) {
             if (ArenaSystem* arena = world.GetSystem<ArenaSystem>())
                 arena->SetCurrentFrame(state.frame);
+
+            // Released into the world (and from there the state and its delta) on the next simulated frame.
+            if (allPlayersReady_.exchange(false)) {
+                auto timerQuery = world.GetEntityManager().CreateQuery<MatchStartTimer>();
+                for (auto [entity, timer] : timerQuery)
+                    timer->waitingForPlayers = false;
+                Debug::Info("AsteroidShooterGame") << "All players ready at frame " << state.frame << ", start countdown running\n";
+            }
+        }
         IECSGameLogic::SimulateFrame(state, std::move(events), std::move(inputs));
+    }
+
+    void OnAllPlayersReady() override {
+        allPlayersReady_.store(true);
     }
 
     void printGameState(const AsteroidShooterGameState& state) const
@@ -246,8 +261,10 @@ public:
         // Match-start countdown
         {
             auto timerQuery = world.GetEntityManager().CreateQuery<MatchStartTimer>();
-            for (auto [entity, timer] : timerQuery)
+            for (auto [entity, timer] : timerQuery) {
                 timer->ticksRemaining = s.startCountdownTicks;
+                timer->waitingForPlayers = s.startWaitingForPlayers != 0;
+            }
         }
     }
 
@@ -341,8 +358,10 @@ public:
         // Match-start countdown
         {
             auto timerQuery = world.GetEntityManager().CreateQuery<MatchStartTimer>();
-            for (auto [entity, timer] : timerQuery)
+            for (auto [entity, timer] : timerQuery) {
                 s.startCountdownTicks = timer->ticksRemaining;
+                s.startWaitingForPlayers = timer->waitingForPlayers ? 1 : 0;
+            }
         }
 
         state.len = sizeof(AsteroidShooterGameState);
@@ -390,6 +409,7 @@ public:
         s->bulletCount = 0;
 
         s->startCountdownTicks = MATCH_START_COUNTDOWN_TICKS;
+        s->startWaitingForPlayers = 1;
 
         state.len = sizeof(AsteroidShooterGameState);
 
@@ -407,7 +427,7 @@ public:
         world.GetEntityManager().AddComponent<ExitButtonChecker>(exitCheckerEntity, ExitButtonChecker{});
 
 		Entity matchStartEntity = world.GetEntityManager().CreateEntity();
-        world.GetEntityManager().AddComponent<MatchStartTimer>(matchStartEntity, MatchStartTimer{ MATCH_START_COUNTDOWN_TICKS });
+        world.GetEntityManager().AddComponent<MatchStartTimer>(matchStartEntity, MatchStartTimer{ MATCH_START_COUNTDOWN_TICKS, true });
 
 
         for (int i = 0; i < NUM_PLAYERS; i++)
@@ -536,12 +556,8 @@ public:
         }
 
 
-        if (isServer)
-        {
-            // Must run before InputSystem/ArenaSystem so both see this
-            // tick's already-decremented value, not last tick's.
-            world.AddSystem(std::make_unique<MatchStartSystem>());
-        }
+        // Must run before InputSystem/ArenaSystem so both see this tick's already-decremented value, not last tick's.
+        world.AddSystem(std::make_unique<MatchStartSystem>());
         world.AddSystem(std::make_unique<InputSystem>());
         if (isServer)
         {

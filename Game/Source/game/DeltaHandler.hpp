@@ -4,6 +4,8 @@
 #include "GameState.hpp"
 #include "Deltas.hpp"
 #include <cstring>
+#include <cstdio>
+#include <string>
 
 class GamePositionsDeltaHandler : public IDeltaHandler {
 public:
@@ -21,8 +23,12 @@ public:
 			gs->dashCooldown[i] = gpd.dashCooldown[i];
 			gs->shieldTicks[i] = gpd.shieldTicks[i];
 			gs->shieldCooldown[i] = gpd.shieldCooldown[i];
+			gs->velX[i] = gpd.velX[i];
+			gs->velY[i] = gpd.velY[i];
+			gs->angularVel[i] = gpd.angularVel[i];
 		}
 		gs->startCountdownTicks = gpd.startCountdownTicks;
+		gs->startWaitingForPlayers = gpd.startWaitingForPlayers;
 	}
 	void Check(const GameStateBlob& prevState,
 		const GameStateBlob& currentState,
@@ -42,8 +48,12 @@ public:
 			gpd.dashCooldown[i] = static_cast<uint16_t>(currGS.dashCooldown[i]);
 			gpd.shieldTicks[i] = static_cast<uint16_t>(currGS.shieldTicks[i]);
 			gpd.shieldCooldown[i] = static_cast<uint16_t>(currGS.shieldCooldown[i]);
+			gpd.velX[i] = currGS.velX[i];
+			gpd.velY[i] = currGS.velY[i];
+			gpd.angularVel[i] = currGS.angularVel[i];
 		}
 		gpd.startCountdownTicks = currGS.startCountdownTicks;
+		gpd.startWaitingForPlayers = currGS.startWaitingForPlayers;
 
 		DeltaStateBlob deltaBlob;
 		deltaBlob.delta_type = DELTA_GAME_POSITIONS;
@@ -58,19 +68,62 @@ public:
 		GamePositionsDelta gpd = *reinterpret_cast<const GamePositionsDelta*>(delta.data);
 		AsteroidShooterGameState gs = *reinterpret_cast<const AsteroidShooterGameState*>(currentState.data);
 
+		return FindMismatch(gpd, gs, nullptr);
+	}
+
+	// First field where the predicted state differs from the server's, described into *what (if given): field, player,
+	// both values and, for floats, how many ULP apart. Used by Compare and by the reconciliation diagnostic.
+	static bool FindMismatch(const GamePositionsDelta& gpd, const AsteroidShooterGameState& gs, std::string* what)
+	{
+		auto describeF = [&](const char* field, int i, float predicted, float server) {
+			if (!what) return;
+			int32_t a, b;
+			std::memcpy(&a, &predicted, 4);
+			std::memcpy(&b, &server, 4);
+			const long long ulp = static_cast<long long>(a) - static_cast<long long>(b);
+			*what = std::string(field) + "[" + std::to_string(i) + "] predicted " + FloatText(predicted) + " server "
+				+ FloatText(server) + " (" + std::to_string(ulp < 0 ? -ulp : ulp) + " ULP)";
+		};
+		auto describeI = [&](const char* field, int i, long long predicted, long long server) {
+			if (!what) return;
+			*what = std::string(field) + (i >= 0 ? "[" + std::to_string(i) + "]" : std::string()) + " predicted "
+				+ std::to_string(predicted) + " server " + std::to_string(server);
+		};
+
 		for (int i = 0; i < NUM_PLAYERS; i++)
 		{
-			if (gs.posX[i] != gpd.posX[i]) return false;
-			if (gs.posY[i] != gpd.posY[i]) return false;
-			if (gs.rot[i] != gpd.rot[i]) return false;
-			if (gs.dashTicks[i] != gpd.dashTicks[i]) return false;
-			if (gs.dashCooldown[i] != gpd.dashCooldown[i]) return false;
-			if (gs.shieldTicks[i] != gpd.shieldTicks[i]) return false;
-			if (gs.shieldCooldown[i] != gpd.shieldCooldown[i]) return false;
+			if (gs.posX[i] != gpd.posX[i]) { describeF("posX", i, gs.posX[i], gpd.posX[i]); return false; }
+			if (gs.posY[i] != gpd.posY[i]) { describeF("posY", i, gs.posY[i], gpd.posY[i]); return false; }
+			if (gs.rot[i] != gpd.rot[i]) { describeF("rot", i, gs.rot[i], gpd.rot[i]); return false; }
+			if (gs.velX[i] != gpd.velX[i]) { describeF("velX", i, gs.velX[i], gpd.velX[i]); return false; }
+			if (gs.velY[i] != gpd.velY[i]) { describeF("velY", i, gs.velY[i], gpd.velY[i]); return false; }
+			if (gs.angularVel[i] != gpd.angularVel[i]) { describeF("angularVel", i, gs.angularVel[i], gpd.angularVel[i]); return false; }
+			if (gs.dashTicks[i] != gpd.dashTicks[i]) { describeI("dashTicks", i, gs.dashTicks[i], gpd.dashTicks[i]); return false; }
+			if (gs.dashCooldown[i] != gpd.dashCooldown[i]) { describeI("dashCooldown", i, gs.dashCooldown[i], gpd.dashCooldown[i]); return false; }
+			if (gs.shieldTicks[i] != gpd.shieldTicks[i]) { describeI("shieldTicks", i, gs.shieldTicks[i], gpd.shieldTicks[i]); return false; }
+			if (gs.shieldCooldown[i] != gpd.shieldCooldown[i]) { describeI("shieldCooldown", i, gs.shieldCooldown[i], gpd.shieldCooldown[i]); return false; }
 		}
-		if (gs.startCountdownTicks != gpd.startCountdownTicks) return false;
+		if (gs.startCountdownTicks != gpd.startCountdownTicks) { describeI("startCountdownTicks", -1, gs.startCountdownTicks, gpd.startCountdownTicks); return false; }
+		if (gs.startWaitingForPlayers != gpd.startWaitingForPlayers) { describeI("startWaitingForPlayers", -1, gs.startWaitingForPlayers, gpd.startWaitingForPlayers); return false; }
 
 		return true;
+	}
+
+	std::string DescribeMismatch(const DeltaStateBlob& delta, const GameStateBlob& currentState) const override
+	{
+		GamePositionsDelta gpd = *reinterpret_cast<const GamePositionsDelta*>(delta.data);
+		AsteroidShooterGameState gs = *reinterpret_cast<const AsteroidShooterGameState*>(currentState.data);
+		std::string what;
+		FindMismatch(gpd, gs, &what);
+		return what;
+	}
+
+private:
+	static std::string FloatText(float v)
+	{
+		char buf[32];
+		std::snprintf(buf, sizeof(buf), "%.9g", v);
+		return buf;
 	}
 
 };

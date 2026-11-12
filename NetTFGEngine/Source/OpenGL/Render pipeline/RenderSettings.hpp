@@ -71,8 +71,10 @@ public:
 
     // RUNTIME — RENDER LOOP: caps ClientWindow's render thread rate (see renderLoop()). Not part of applyPreset():
     // a quality tier shouldn't dictate frame rate, and resetToPreset() must not change it.
-    void setTargetFPS(int v) { m_targetFPS = std::clamp(v, 1, 360); }
+    // 0 = no limit (the loop never waits; VSync, if on, still caps it at the refresh rate).
+    void setTargetFPS(int v) { m_targetFPS = (v <= 0) ? 0 : std::clamp(v, 1, 360); }
     int  getTargetFPS() const { return m_targetFPS; }
+    bool isFPSUnlimited() const { return m_targetFPS <= 0; }
 
     // RUNTIME — WINDOW: just persisted state here; ClientWindow/OpenGLWindow
     // (which own the GLFW window) apply it. Deliberately not part of
@@ -588,7 +590,7 @@ public:
         o << " | render height " << (m_renderHeight > 0 ? std::to_string(m_renderHeight) : std::string("native"))
           << " (" << pick(kUpscale, 4, static_cast<int>(m_upscaleMode)) << ")"
           << " | VSync " << onOff(m_vsyncEnabled)
-          << " | FPS limit " << m_targetFPS
+          << " | FPS limit " << (m_targetFPS > 0 ? std::to_string(m_targetFPS) : std::string("none"))
           << " | MSAA " << m_msaaSamples << "x"
           << " | aniso " << m_anisotropy << "x"
           << " | textures mip " << m_baseMip << (m_useCompression ? " compressed" : " uncompressed")
@@ -602,6 +604,56 @@ public:
           << " | env " << (m_envLightingEnabled ? std::to_string(getEnvMapResolution()) + (getEnvProbesEnabled() ? " + probes" : " sky only") : std::string("off"))
           << " | max lights " << m_maxLights;
         return o.str();
+    }
+
+    // First run only (no render_quality.cfg nor render_settings.cfg yet): picks the starting preset for this GPU and
+    // saves it, instead of everyone starting in High. Alpha test 2026-11-11: High was unplayable on all five integrated
+    // GPUs (16-22 FPS) and every one of those testers had to lower it by hand after some bad matches.
+    //   Older Intel integrated (HD / UHD 6xx): Very Low, rendered at 720 and upscaled.
+    //   Other integrated (Radeon Vega/610M/780M, Intel Xe/Iris): Low, rendered at 720 and upscaled.
+    //   Dedicated with less than 4 GB: Low.        Anything else: High.
+    // Returns true if it chose one. GL context current (render thread), before the first scene's RenderSystem::Init.
+    bool autoDetectIfFirstRun(const std::string& renderer, bool integrated, long long videoMemoryBytes, int windowHeight)
+    {
+        {
+            std::ifstream preset(cfgPath());
+            std::ifstream custom(settingsPath());
+            if (preset.is_open() || custom.is_open())
+                return false;
+        }
+
+        const bool oldIntel = integrated &&
+            (renderer.find("HD Graphics") != std::string::npos || renderer.find("UHD Graphics 6") != std::string::npos);
+
+        QualityPreset preset = QualityPreset::High;
+        bool lowerRenderHeight = false;
+        if (oldIntel) {
+            preset = QualityPreset::VeryLow;
+            lowerRenderHeight = true;
+        }
+        else if (integrated) {
+            preset = QualityPreset::Low;
+            lowerRenderHeight = true;
+        }
+        else if (videoMemoryBytes > 0 && videoMemoryBytes < (4LL << 30)) {
+            preset = QualityPreset::Low;
+        }
+
+        m_preset = preset;
+        applyPreset();
+
+        // 720 is where the alpha's integrated GPUs became playable. NIS only goes up to 2x per axis, so above a
+        // 1440-line window it's FSR1.
+        if (lowerRenderHeight && windowHeight > 720) {
+            setRenderHeight(720);
+            setUpscaleMode(windowHeight <= 1440 ? UpscaleMode::NIS : UpscaleMode::FSR1);
+        }
+
+        Debug::Info("RenderSettings") << "First run on \"" << renderer << "\" (" << (integrated ? "integrated" : "dedicated")
+            << ", " << (videoMemoryBytes >> 20) << " MB): starting preset " << static_cast<int>(preset)
+            << (lowerRenderHeight && windowHeight > 720 ? ", render height 720" : "") << "\n";
+        save();
+        return true;
     }
 
     // Back to the current preset's table values, throwing away any
@@ -671,7 +723,6 @@ private:
         switch (m_preset)
         {
         case QualityPreset::VeryLow:
-			m_targetFPS = 30;
             m_baseMip = 3;
             m_useCompression = true;
             m_maxLights = 64;
@@ -698,7 +749,6 @@ private:
             break;
 
         case QualityPreset::Low:
-			m_targetFPS = 30;
             m_baseMip = 2;
             m_useCompression = true;
             m_maxLights = 128;
@@ -725,7 +775,6 @@ private:
             break;
 
         case QualityPreset::Medium:
-			m_targetFPS = 60;
             m_baseMip = 1;
             m_useCompression = true;
             m_maxLights = 256;
@@ -762,7 +811,6 @@ private:
             break;
 
         case QualityPreset::High:
-			m_targetFPS = 144;
             m_baseMip = 0;
             m_useCompression = true;
             m_maxLights = 512;
@@ -799,7 +847,6 @@ private:
             break;
 
         case QualityPreset::Ultra:
-			m_targetFPS = 240;
             m_baseMip = 0;
             m_useCompression = false;
             m_maxLights = 1024;

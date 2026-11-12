@@ -176,6 +176,8 @@ public:
     virtual void GetGeneratedDeltas(std::vector<DeltaStateBlob>& deltas) { deltas = generatedDeltas; }
     virtual bool CompareStates(const GameStateBlob& a, const GameStateBlob& b) const = 0;
     virtual bool CompareStateWithDeltas(const GameStateBlob& state, const std::vector<DeltaStateBlob>& deltas)  const = 0;
+    // For the reconciliation log: which part of state differs from the deltas ("" if not known). Diagnostic only.
+    virtual std::string DescribeDeltaMismatch(const GameStateBlob& state, const std::vector<DeltaStateBlob>& deltas) const { return ""; }
     virtual void GenerateDeltas(const GameStateBlob& previousState, const GameStateBlob& newState) = 0;
     virtual void ApplyDeltasToGameState(GameStateBlob& state, const std::vector<DeltaStateBlob>& deltas) = 0;
     virtual void Init(GameStateBlob& state) = 0;
@@ -184,6 +186,11 @@ public:
 
     // Releases AssetManager-backed resources held by this logic's components; must run before the owning Client's asset bin is unloaded.
     virtual void ReleaseECSAssets() {}
+
+    // Server only, called once from the tick thread between ticks: every connected player has loaded the level
+    // (PACKET_CLIENT_READY) or the wait for them timed out. A game holding its start for slow loaders releases it here,
+    // through its own state so clients predict it like anything else.
+    virtual void OnAllPlayersReady() {}
 
     // Display name of each player by player id: the client id it joined with (the nickname under matchmaking). Not
     // simulation state (never in a GameStateBlob, so no deltas, hashes or rollbacks involved): the server sends it apart,
@@ -241,6 +248,7 @@ struct PeerInfo {
     std::string clientId;
     bool isConnected = false;
 	bool pendingReceiveFullState = true;
+    bool levelReady = false;   // sent PACKET_CLIENT_READY (level loaded); see Server's start gate
     std::chrono::steady_clock::time_point disconnectTime;
 };
 
@@ -255,6 +263,12 @@ enum class ConnectionState {
 constexpr uint8_t PACKET_CLIENT_HELLO = 10;
 constexpr uint8_t PACKET_SERVER_ACCEPT = 11;
 constexpr uint8_t PACKET_SERVER_REJECT = 12;
+// Server -> waiting clients, type byte only: the join timeout ran out with too few players, so the match won't start.
+// Followed by a close with end reason k_ESteamNetConnectionEnd_App_Min + REJECT_MATCH_ABORTED.
+constexpr uint8_t PACKET_MATCH_ABORTED = 13;
+// Client -> server, type byte only: the level is loaded and rendering smoothly. The start countdown waits for every
+// connected player's ready (or for a cap, see Server::READY_WAIT_CAP), so slow loaders don't join a match already running.
+constexpr uint8_t PACKET_CLIENT_READY = 14;
 
 struct ClientHelloPacket {
     uint8_t type;
@@ -267,7 +281,8 @@ struct ClientHelloPacket {
 // reason, as the GNS end reason of the close that follows (fallback if the packet doesn't make it).
 enum ServerRejectReason : uint8_t {
     REJECT_GENERIC = 0,
-    REJECT_GAME_VERSION = 1
+    REJECT_GAME_VERSION = 1,
+    REJECT_MATCH_ABORTED = 2   // only as an end reason, after PACKET_MATCH_ABORTED
 };
 
 struct ServerRejectPacket {

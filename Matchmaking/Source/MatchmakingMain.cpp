@@ -42,7 +42,7 @@ namespace
             << "  --game-server <path>        GameServer executable (default: next to this one).\n"
             << "  --game-version <version>    Only accept clients of this game version (default: any).\n"
             << "  --ready-timeout <seconds>   Max time for a game server to start (default: 15).\n"
-            << "  --join-timeout <seconds>    Max time for matched players to join (default: 60).\n"
+            << "  --join-timeout <seconds>    Max time for matched players to join (default: 25).\n"
             << "  --empty-timeout <seconds>   Stop a match with nobody connected (default: 30).\n"
             << "  --help                      Show this help message.\n"
             << "\nThe same options (without --) can be set in " << CONFIG_FILE << ", in the per-user\n"
@@ -77,7 +77,7 @@ namespace
         "# Tiempos en segundos: arranque del GameServer, entrada de los jugadores\n"
         "# y cierre de una partida que se queda sin nadie.\n"
         "ready-timeout 15\n"
-        "join-timeout 60\n"
+        "join-timeout 25\n"
         "empty-timeout 30\n";
 
     bool ParseInt(const std::string& text, int min, int max, int& out) {

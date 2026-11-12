@@ -65,6 +65,10 @@ public:
         return deltaProcessor->CompareDeltas(deltas,state);
     }
 
+    std::string DescribeDeltaMismatch(const GameStateBlob& state, const std::vector<DeltaStateBlob>& deltas) const override {
+        return deltaProcessor->DescribeMismatch(deltas, state);
+    }
+
 	void ApplyDeltasToGameState(GameStateBlob& state, const std::vector<DeltaStateBlob>& deltas) override {
 		deltaProcessor->ProcessDeltas(deltas, state);
 	}

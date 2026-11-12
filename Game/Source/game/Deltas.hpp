@@ -15,6 +15,13 @@ struct GamePositionsDelta {
     // Piggybacked here because this handler already sends every tick — exactly the cadence the countdown
     // needs for smooth display and for client prediction to unblock input in step with the server.
     int startCountdownTicks;
+    int startWaitingForPlayers;   // see AsteroidShooterGameState::startWaitingForPlayers
+
+    // Velocities: the next position is built from them, so a velocity the client predicted 1 ULP off (or from an
+    // input it got late) kept the position drifting every tick, and without them here nothing ever corrected it.
+    float velX[NUM_PLAYERS];
+    float velY[NUM_PLAYERS];
+    float angularVel[NUM_PLAYERS];
 
     // Ability timers (all fit 16 bits: the longest is a 12 s cooldown = 360 ticks). Predicted from inputs on the client,
     // but a dropped/late input or a shield broken by a bullet the client didn't see coming would otherwise never heal:

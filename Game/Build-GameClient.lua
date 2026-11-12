@@ -78,7 +78,7 @@ project "GameClient"
    filter "configurations:Release"
       defines { "RELEASE" }
       runtime "Release"
-      optimize "On"
+      optimize "Speed"
       symbols "On"
 
    -- Release Windows: hide console window
@@ -89,7 +89,7 @@ project "GameClient"
    filter "configurations:Dist"
       defines { "DIST" }
       runtime "Release"
-      optimize "On"
+      optimize "Speed"
       symbols "Off"
 
    -- Dist Windows: hide console window

@@ -109,11 +109,15 @@ struct CenterSpoke : public IComponent {
 // Singleton (one entity, both worlds): pre-match freeze countdown (see MatchStartSystem). Synced via
 // AsteroidShooterGameState::startCountdownTicks (piggybacked on GamePositionsDelta, sent every tick) so client
 // prediction blocks input in lockstep with the server.
+//
+// The countdown only starts once the server has every player's level loaded (waitingForPlayers, released by
+// AsteroidShooterGame::OnAllPlayersReady); until then the match is frozen and the HUD says it waits for the others.
 class MatchStartTimer : public IComponent {
 public:
 	int ticksRemaining;
-	MatchStartTimer() : ticksRemaining(0) {}
-	MatchStartTimer(int t) : ticksRemaining(t) {}
+	bool waitingForPlayers;
+	MatchStartTimer() : ticksRemaining(0), waitingForPlayers(false) {}
+	MatchStartTimer(int t, bool waiting = true) : ticksRemaining(t), waitingForPlayers(waiting) {}
 };
 
 // Laser walls: each half of a shared edge is ONE entity, stored from one of its
@@ -156,6 +160,7 @@ public:
 	float warnTime = 0.0f;  // seconds spent in the current warning window
 	float flash = 0.0f;     // 1 the instant the beam energises, decays to 0
 	bool  wasSolid = false;
+	float seed = 0.0f;      // = the material's uSeed: the beam's lights (PointLightGroupComponent) stutter in step
 };
 
 class PillarID : public IComponent {

@@ -28,8 +28,16 @@ inline void LogGPUMemory(const char* when)
         GLint tex[4] = {}, vbo[4] = {};
         glGetIntegerv(GL_TEXTURE_FREE_MEMORY_ATI, tex);
         glGetIntegerv(GL_VBO_FREE_MEMORY_ATI, vbo);
-        Debug::Info("GPUMemory") << when << ": free for textures " << tex[0] / 1024 << " MB, for buffers "
-            << vbo[0] / 1024 << " MB\n";
+        // AMD's integrated GPUs (Vega) report negative values once their carve-out is exhausted and they spill into
+        // shared memory (down to -687 MB in the alpha test): logged as such, not as a free amount.
+        if (tex[0] < 0 || vbo[0] < 0) {
+            Debug::Warning("GPUMemory") << when << ": dedicated memory exhausted (driver reports " << tex[0] / 1024
+                << " MB for textures, " << vbo[0] / 1024 << " MB for buffers; using shared memory)\n";
+        }
+        else {
+            Debug::Info("GPUMemory") << when << ": free for textures " << tex[0] / 1024 << " MB, for buffers "
+                << vbo[0] / 1024 << " MB\n";
+        }
     }
     else if (nvx) {
         GLint total = 0, avail = 0;

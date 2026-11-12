@@ -24,8 +24,8 @@ GLuint RenderSystem::CompileStage(GLenum type, const char* src)
     GLint ok = 0;
     glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
     if (!ok) {
-        char log[512];
-        glGetShaderInfoLog(s, 512, nullptr, log);
+        char log[4096];
+        glGetShaderInfoLog(s, sizeof(log), nullptr, log);
         Debug::Error("RenderSystem::Shader") << log << "\n";
     }
     return s;
@@ -39,8 +39,8 @@ GLuint RenderSystem::LinkProgram(std::initializer_list<GLuint> stages)
     GLint ok = 0;
     glGetProgramiv(prog, GL_LINK_STATUS, &ok);
     if (!ok) {
-        char log[512];
-        glGetProgramInfoLog(prog, 512, nullptr, log);
+        char log[4096];
+        glGetProgramInfoLog(prog, sizeof(log), nullptr, log);
         Debug::Error("RenderSystem::Program") << log << "\n";
     }
     for (GLuint s : stages) { glDetachShader(prog, s); glDeleteShader(s); }
@@ -563,9 +563,11 @@ void RenderSystem::DeleteScaleTargets()
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// VideoMemoryBytes: GL has no portable query and the Radeon 520's driver exposes neither GL_ATI_meminfo nor
-// GL_NVX_gpu_memory_info, so on Windows ask DXGI for the adapter of the GL context's vendor. Integrated GPUs report a
-// small dedicated carve-out and use system memory: half of their shared memory counts too. Queried once.
+// GPUInfo (see GPUInfo.hpp). GL has no portable memory query and the Radeon 520's driver exposes neither GL_ATI_meminfo
+// nor GL_NVX_gpu_memory_info, so on Windows ask DXGI for the adapter of the GL context's vendor. Integrated GPUs report
+// a small dedicated carve-out and use system memory: half of their shared memory counts too. Elsewhere: NVX (NVIDIA),
+// GLX_MESA_query_renderer (Mesa), ATI_meminfo's free memory at startup (AMD proprietary), in that order. Before, Linux
+// had no query at all and always assumed 256 MB (alpha test 2026-11-11: 16 shadow lights at 512 on a 6 GB NVIDIA).
 // ---------------------------------------------------------------------------------------------------------------------
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -578,43 +580,147 @@ void RenderSystem::DeleteScaleTargets()
 #include <dxgi.h>
 #include <string>
 #pragma comment(lib, "dxgi.lib")
-
-static long long VideoMemoryBytes()
-{
-    static long long cached = -1;
-    if (cached >= 0) return cached;
-    cached = 0;
-
-    const GLubyte* v = glGetString(GL_VENDOR);
-    const std::string vendor = v ? reinterpret_cast<const char*>(v) : "";
-    UINT wantId = 0;
-    if (vendor.find("ATI") != std::string::npos || vendor.find("AMD") != std::string::npos) wantId = 0x1002;
-    else if (vendor.find("NVIDIA") != std::string::npos)                                     wantId = 0x10DE;
-    else if (vendor.find("Intel") != std::string::npos)                                      wantId = 0x8086;
-
-    IDXGIFactory1* factory = nullptr;
-    if (FAILED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), reinterpret_cast<void**>(&factory))) || !factory)
-        return cached;
-
-    long long best = 0, bestAny = 0;
-    IDXGIAdapter1* adapter = nullptr;
-    for (UINT i = 0; factory->EnumAdapters1(i, &adapter) != DXGI_ERROR_NOT_FOUND; ++i) {
-        DXGI_ADAPTER_DESC1 desc{};
-        if (SUCCEEDED(adapter->GetDesc1(&desc)) && !(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) {
-            long long bytes = static_cast<long long>(desc.DedicatedVideoMemory);
-            if (bytes < (512LL << 20))
-                bytes += static_cast<long long>(desc.SharedSystemMemory) / 2;
-            if (desc.VendorId == wantId) best = std::max(best, bytes);
-            bestAny = std::max(bestAny, bytes);
-        }
-        adapter->Release();
-    }
-    factory->Release();
-
-    cached = best > 0 ? best : bestAny;
-    Debug::Info("RenderSystem") << "Video memory (DXGI): " << (cached >> 20) << " MB\n";
-    return cached;
-}
-#else
-static long long VideoMemoryBytes() { return 0; }
 #endif
+
+#include "OpenGL/GPUInfo.hpp"
+#include "OpenGL/GPUMemoryLog.hpp"
+
+namespace
+{
+    std::string GLString(GLenum name)
+    {
+        const GLubyte* v = glGetString(name);
+        return v ? reinterpret_cast<const char*>(v) : "";
+    }
+
+    bool Contains(const std::string& text, const char* what) { return text.find(what) != std::string::npos; }
+
+    // -1 = the name doesn't say, 0 = dedicated, 1 = integrated.
+    int IntegratedFromName(const std::string& renderer)
+    {
+        if (Contains(renderer, "NVIDIA") || Contains(renderer, "GeForce") || Contains(renderer, "Quadro") || Contains(renderer, "RTX"))
+            return 0;
+        if (Contains(renderer, "Intel"))
+            return Contains(renderer, "Arc") ? 0 : 1;
+        if (Contains(renderer, "Radeon") || Contains(renderer, "AMD")) {
+            // Discrete Radeons carry a series in the name (RX 5500M, Pro W6600, R9 ...); APUs are "Radeon(TM) Graphics",
+            // "Radeon Graphics (radeonsi, renoir...)", "Radeon Vega 8", "Radeon 610M/780M".
+            if (Contains(renderer, " RX ") || Contains(renderer, "RX ") || Contains(renderer, " Pro ") || Contains(renderer, " R9 ")
+                || Contains(renderer, " R7 ") || Contains(renderer, "FirePro"))
+                return 0;
+            return 1;
+        }
+        return -1;
+    }
+
+#ifdef _WIN32
+    struct DxgiInfo { long long bytes = 0; long long dedicated = 0; };
+
+    DxgiInfo QueryDxgi()
+    {
+        DxgiInfo out;
+        const std::string vendor = GLString(GL_VENDOR);
+        UINT wantId = 0;
+        if (Contains(vendor, "ATI") || Contains(vendor, "AMD")) wantId = 0x1002;
+        else if (Contains(vendor, "NVIDIA"))                    wantId = 0x10DE;
+        else if (Contains(vendor, "Intel"))                     wantId = 0x8086;
+
+        IDXGIFactory1* factory = nullptr;
+        if (FAILED(CreateDXGIFactory1(__uuidof(IDXGIFactory1), reinterpret_cast<void**>(&factory))) || !factory)
+            return out;
+
+        DxgiInfo best, bestAny;
+        IDXGIAdapter1* adapter = nullptr;
+        for (UINT i = 0; factory->EnumAdapters1(i, &adapter) != DXGI_ERROR_NOT_FOUND; ++i) {
+            DXGI_ADAPTER_DESC1 desc{};
+            if (SUCCEEDED(adapter->GetDesc1(&desc)) && !(desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)) {
+                DxgiInfo info;
+                info.dedicated = static_cast<long long>(desc.DedicatedVideoMemory);
+                info.bytes = info.dedicated;
+                if (info.dedicated < (512LL << 20))
+                    info.bytes += static_cast<long long>(desc.SharedSystemMemory) / 2;
+                if (desc.VendorId == wantId && info.bytes > best.bytes) best = info;
+                if (info.bytes > bestAny.bytes) bestAny = info;
+            }
+            adapter->Release();
+        }
+        factory->Release();
+        return best.bytes > 0 ? best : bestAny;
+    }
+
+    const DxgiInfo& Dxgi()
+    {
+        static const DxgiInfo info = QueryDxgi();
+        return info;
+    }
+#endif
+}
+
+namespace GPUInfo
+{
+    std::string RendererName()
+    {
+        static const std::string name = GLString(GL_RENDERER);
+        return name;
+    }
+
+    long long VideoMemoryBytes()
+    {
+        static long long cached = -1;
+        if (cached >= 0) return cached;
+        cached = 0;
+        const char* source = "unknown";
+
+#ifdef _WIN32
+        cached = Dxgi().bytes;
+        source = "DXGI";
+#else
+        if (HasGLExtension("GL_NVX_gpu_memory_info")) {
+            GLint kb = 0;
+            glGetIntegerv(GL_GPU_MEMORY_INFO_DEDICATED_VIDMEM_NVX, &kb);
+            cached = static_cast<long long>(kb) * 1024;
+            source = "NVX";
+        }
+        if (cached <= 0) {
+            // GLX_MESA_query_renderer: Mesa's video memory in MB (an integrated GPU reports what it may take from RAM).
+            using QueryFn = int (*)(int attribute, unsigned int* value);
+            constexpr int GLX_RENDERER_VIDEO_MEMORY_MESA = 0x8187;
+            if (auto query = reinterpret_cast<QueryFn>(glfwGetProcAddress("glXQueryCurrentRendererIntegerMESA"))) {
+                unsigned int mb = 0;
+                if (query(GLX_RENDERER_VIDEO_MEMORY_MESA, &mb) && mb > 0) {
+                    cached = static_cast<long long>(mb) << 20;
+                    source = "GLX_MESA_query_renderer";
+                }
+            }
+        }
+        if (cached <= 0 && HasGLExtension("GL_ATI_meminfo")) {
+            GLint tex[4] = {};
+            glGetIntegerv(GL_TEXTURE_FREE_MEMORY_ATI, tex);
+            if (tex[0] > 0) {
+                cached = static_cast<long long>(tex[0]) * 1024;   // free at startup: close to the total
+                source = "ATI_meminfo (free)";
+            }
+        }
+#endif
+        if (cached < 0) cached = 0;
+        Debug::Info("RenderSystem") << "Video memory (" << source << "): " << (cached >> 20) << " MB\n";
+        return cached;
+    }
+
+    bool IsIntegrated()
+    {
+        static int cached = -1;
+        if (cached >= 0) return cached == 1;
+
+        // The name first: a hybrid laptop has two AMD adapters, and DXGI can't tell which one runs this context.
+        int integrated = IntegratedFromName(RendererName());
+#ifdef _WIN32
+        if (integrated < 0)
+            integrated = (Dxgi().dedicated > 0 && Dxgi().dedicated < (512LL << 20)) ? 1 : 0;
+#endif
+        cached = integrated == 1 ? 1 : 0;
+        return cached == 1;
+    }
+}
+
+static long long VideoMemoryBytes() { return GPUInfo::VideoMemoryBytes(); }

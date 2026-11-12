@@ -38,6 +38,31 @@ workspace "TFG Project"
       buildoptions { "-ffp-contract=off" }
    filter {}
 
+   -- Release/Dist: full speed optimisation plus link-time code generation, and dead code/data stripped from the
+   -- binaries (the projects set the same `optimize "Speed"`). Float semantics stay strict on purpose (no
+   -- /fp:fast or -ffast-math): client prediction compares positions bit for bit with the server.
+   filter "configurations:Release or Dist"
+      optimize "Speed"
+      flags { "LinkTimeOptimization" }   -- this premake predates linktimeoptimization "On"
+   filter {}
+
+   filter { "configurations:Release or Dist", "toolset:msc*" }
+      -- optimize "Speed" already gives /Gy, /OPT:REF and /OPT:ICF (unused functions dropped, identical ones folded,
+      -- even with Release's .pdb). /Gw does the same for global data.
+      buildoptions { "/Gw" }
+   filter {}
+
+   filter { "configurations:Release or Dist", "system:linux" }
+      -- Same on GCC/Clang: per-function/data sections and --gc-sections to drop the unreferenced ones.
+      buildoptions { "-ffunction-sections", "-fdata-sections" }
+      linkoptions { "-Wl,--gc-sections", "-Wl,-O1" }
+   filter {}
+
+   -- Dist ships without symbols: strip what is left in the Linux binaries.
+   filter { "configurations:Dist", "system:linux" }
+      linkoptions { "-s" }
+   filter {}
+
 
 OutputDir = "%{cfg.system}-%{cfg.architecture}/%{cfg.buildcfg}"
 
@@ -50,6 +75,17 @@ Directories.IntermediateDir  = "%{wks.location}/Binaries/Intermediates/" .. Outp
 Directories.EngineDir        = "%{wks.location}/Binaries/" .. OutputDir .. "/Engine"
 Directories.ThirdPartyDir    = "%{wks.location}/Binaries/" .. OutputDir .. "/ThirdParty"
 Directories.ContentDir       = "%{wks.location}/Binaries/" .. OutputDir .. "/Content"
+-- Debug info of each executable, kept out of its deployable folder (Setup-Linux.sh does the same on Linux).
+Directories.SymbolsDir       = "%{wks.location}/Binaries/" .. OutputDir .. "/Symbols/%{prj.name}"
+
+-- Windows Release: the executables never carried their debug info (it is in the .pdb), but the 30 MB .pdb sat in the
+-- deployable folder and the .exe embedded its absolute path (C:\Users\<name>\...). The .pdb now goes to
+-- Symbols/<app>/ and the .exe only names the file (/PDBALTPATH). Visual Studio still finds it when debugging from the
+-- build; for a tester's minidump, point VS at Symbols/<app>/. crash.txt's stack then shows module+offset only.
+filter { "configurations:Release", "toolset:msc*", "kind:ConsoleApp or WindowedApp" }
+   prelinkcommands { '{MKDIR} "' .. Directories.SymbolsDir .. '"' }
+   linkoptions { '/PDB:"' .. Directories.SymbolsDir .. '/%{prj.name}.pdb"', "/PDBALTPATH:%_PDB%" }
+filter {}
 
 -- Include Engine project
 group "NetTFGEngine"

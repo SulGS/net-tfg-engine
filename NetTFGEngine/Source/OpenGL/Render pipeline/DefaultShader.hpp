@@ -5,6 +5,7 @@
 
 #include "OpenGL/ShaderLoader.hpp"
 #include "EnvLighting.hpp"
+#include "LightGrid.hpp"
 
 namespace DefaultShader
 {
@@ -132,6 +133,9 @@ layout(std140, binding = 2) uniform DirLightBlock {
 
 // Ambient light + reflections from the sky / reflection probes (units 10-11, SSBO binding 3). See EnvLighting.hpp.
 #include "engine/env_lighting.glsl"
+
+// Forward+ tile light lists (LightGrid.hpp).
+#include "engine/light_grid.glsl"
 
 // -------------------------------------------------------
 // Constants
@@ -414,8 +418,12 @@ vec3 CalcPointLights(vec3 N, vec3 V,
 {
     vec3 result = vec3(0.0);
 
-    for (int i = 0; i < uLightCount; i++)
+    // Forward+: only the lights the tile's culling kept (all of them when the grid is off). See LightGrid.hpp.
+    int gridBase;
+    int lightN = LightGridBegin(uLightCount, gridBase);
+    for (int k = 0; k < lightN; k++)
     {
+        int i = LightGridLight(gridBase, k);
         PointLight l = lights[i];
 
         vec3  lVec = l.posRadius.xyz - vWorldPos;
@@ -429,6 +437,10 @@ vec3 CalcPointLights(vec3 N, vec3 V,
         float atten = l.colorIntensity.a / max(dist * dist, 0.0001);
         float w     = max(0.0, 1.0 - (dist / rad) * (dist / rad));
         atten *= w * w;
+
+        // Adds nothing (facing away, or no light reaching): skip the shadow lookup, which for a PCSS light is up
+        // to 48 cube-map taps. The BRDF is scaled by NdotL and Li by atten, so this changes no pixel.
+        if (NdotL <= 0.0 || atten <= 0.0) continue;
 
         vec3  Li     = l.colorIntensity.rgb * atten;
         float shadow = GetShadowFactor(i, l.posRadius.xyz);
@@ -510,5 +522,6 @@ void main()
         ShaderLoader::registerBuiltIn(FragmentKey, FragmentSource);
         // Before any program is compiled: this one and the game's lit materials #include it.
         ShaderLoader::registerBuiltIn(EnvLighting::IncludeKey, EnvLighting::Source);
+        ShaderLoader::registerBuiltIn(LightGrid::IncludeKey, LightGrid::Source);
     }
 }

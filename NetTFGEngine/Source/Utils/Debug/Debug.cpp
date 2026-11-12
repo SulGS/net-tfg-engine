@@ -210,6 +210,34 @@ static void InstallCrashHandler()
     SetUnhandledExceptionFilter(UnhandledFilter);
     AddVectoredExceptionHandler(1, VectoredFatal);
 }
+
+std::string Debug::CallerStack(int skip, int maxFrames)
+{
+    void* frames[32] = {};
+    const USHORT n = CaptureStackBackTrace(static_cast<DWORD>(skip + 1), static_cast<DWORD>(std::min(maxFrames, 32)), frames, nullptr);
+    std::string out;
+    for (USHORT i = 0; i < n; ++i) {
+        const DWORD64 addr = reinterpret_cast<DWORD64>(frames[i]);
+        HMODULE mod = nullptr;
+        char name[MAX_PATH] = "?";
+        char buf[MAX_PATH + 32];
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                reinterpret_cast<LPCSTR>(addr), &mod) && mod) {
+            GetModuleFileNameA(mod, name, MAX_PATH);
+            const char* base = strrchr(name, '\\');
+            snprintf(buf, sizeof(buf), "%s+0x%llx", base ? base + 1 : name,
+                static_cast<unsigned long long>(addr - reinterpret_cast<DWORD64>(mod)));
+        }
+        else {
+            snprintf(buf, sizeof(buf), "0x%llx", static_cast<unsigned long long>(addr));
+        }
+        if (!out.empty()) out += " < ";
+        out += buf;
+    }
+    return out;
+}
 #else
 static void InstallCrashHandler() {}
+
+std::string Debug::CallerStack(int, int) { return ""; }
 #endif

@@ -25,6 +25,38 @@
 // NIS SDK, CPU side: NISConfig / NVScalerUpdateConfig (the shader constants).
 #include "NIS_SDK/NIS_Config.h"
 
+#include <algorithm>
+#include <limits>
+
+namespace {
+// Opaque meshes nearest-first, so early depth testing rejects what ends up hidden before its fragment shader runs.
+// Drawn in any order the result is the same (opaque, depth test LESS, no blending), but the ground planes under the
+// tiles (lava, water) were shaded in full, point light shadows (PCSS) and all, and then covered. Key = distance to
+// the far side of the bounding sphere: large meshes such as those planes go last; no bounds = last.
+struct OpaqueDraw {
+    Entity entity;
+    MeshComponent* meshC;
+    Transform* transform;
+    float key;
+};
+
+void GatherOpaqueNearestFirst(EntityManager::Query<MeshComponent, Transform>& meshQuery, const glm::vec3& cameraPos,
+    std::vector<OpaqueDraw>& out)
+{
+    out.clear();
+    for (auto [entity, meshC, transform] : meshQuery) {
+        if (!meshC->enabled || !meshC->mesh || meshC->additive) continue;
+        glm::vec3 c;
+        float r;
+        const float key = meshC->mesh->worldBoundingSphere(transform->getModelMatrix(), c, r)
+            ? glm::length(c - cameraPos) + r
+            : std::numeric_limits<float>::max();
+        out.push_back(OpaqueDraw{ entity, meshC, transform, key });
+    }
+    std::stable_sort(out.begin(), out.end(), [](const OpaqueDraw& a, const OpaqueDraw& b) { return a.key < b.key; });
+}
+} // namespace
+
 void RenderSystem::GBufferPass(EntityManager::Query<MeshComponent, Transform>& meshQuery,
     const glm::mat4& view, const glm::mat4& projection)
 {
@@ -50,8 +82,12 @@ void RenderSystem::GBufferPass(EntityManager::Query<MeshComponent, Transform>& m
     // entities drop out; a new (or reused-id) entity starts with no motion.
     m_currModels.clear();
 
-    for (auto [entity, meshC, transform] : meshQuery) {
-        if (!meshC->enabled || !meshC->mesh || meshC->additive) continue;
+    static std::vector<OpaqueDraw> draws; // render thread only; kept to reuse its capacity
+    GatherOpaqueNearestFirst(meshQuery, glm::vec3(glm::inverse(view)[3]), draws);
+    for (const OpaqueDraw& d : draws) {
+        const Entity entity = d.entity;
+        MeshComponent* meshC = d.meshC;
+        Transform* transform = d.transform;
 
         glm::mat4 model = transform->getModelMatrix();
         m_currModels[entity] = model;
@@ -219,21 +255,56 @@ void RenderSystem::ResolveMSAA()
 }
 
 // Uploads point lights to the light SSBO and the directional light (if any) to the dir light UBO.
-void RenderSystem::CollectLightsPass(EntityManager& em)
+void RenderSystem::CollectLightsPass(EntityManager& em, const glm::vec3& cameraPos)
 {
-    // Point lights
-    std::vector<GPUPointLight> lightVec;
-    lightVec.reserve(MAX_LIGHTS);
+    // Point lights. Switched-off ones (intensity or radius 0: a laser wall that is down, a bolt ramping in) light
+    // nothing, so they don't take a slot. Over MAX_LIGHTS, the nearest to the camera are kept: before, the first ones
+    // in ECS order won, so dozens of always-present lights (laser walls) could crowd out the bolts and blasts the
+    // player is looking at. castShadows is checked in ShadowPass; every light kept here reaches the shading pass.
+    struct Lit { Entity entity; GPUPointLight gpu; float dist2; };
+    static std::vector<Lit> lit;   // render thread only; kept to reuse its capacity
+    lit.clear();
 
     auto lightQuery = em.CreateQuery<PointLightComponent, Transform>();
     for (auto [entity, light, xform] : lightQuery) {
-        if ((int)lightVec.size() >= MAX_LIGHTS) break;
-        GPUPointLight gl;
-        gl.posRadius = glm::vec4(xform->getPosition(), light->radius);
-        gl.colorIntensity = glm::vec4(light->color, light->intensity);
-        lightVec.push_back(gl);
-        // Note: castShadows is checked in ShadowPass when building the shadow
-        // data SSBO — lights are still sent to the shading pass regardless.
+        if (light->intensity <= 0.0f || light->radius <= 0.0f) continue;
+        const glm::vec3 pos = xform->getPosition();
+        Lit l;
+        l.entity = entity;
+        l.gpu.posRadius = glm::vec4(pos, light->radius);
+        l.gpu.colorIntensity = glm::vec4(light->color, light->intensity);
+        const glm::vec3 d = pos - cameraPos;
+        l.dist2 = glm::dot(d, d);
+        lit.push_back(l);
+    }
+    // Light groups (PointLightGroupComponent): entity 0 in m_lightBufEntities, as they never cast shadows.
+    auto groupQuery = em.CreateQuery<PointLightGroupComponent, Transform>();
+    for (auto [entity, group, xform] : groupQuery) {
+        if (group->intensity <= 0.0f || group->radius <= 0.0f) continue;
+        const glm::vec3 base = xform->getPosition();
+        for (const glm::vec3& offset : group->offsets) {
+            const glm::vec3 pos = base + offset;
+            Lit l;
+            l.entity = 0;
+            l.gpu.posRadius = glm::vec4(pos, group->radius);
+            l.gpu.colorIntensity = glm::vec4(group->color, group->intensity);
+            const glm::vec3 d = pos - cameraPos;
+            l.dist2 = glm::dot(d, d);
+            lit.push_back(l);
+        }
+    }
+    if ((int)lit.size() > MAX_LIGHTS) {
+        std::nth_element(lit.begin(), lit.begin() + MAX_LIGHTS, lit.end(),
+            [](const Lit& a, const Lit& b) { return a.dist2 < b.dist2; });
+        lit.resize(MAX_LIGHTS);
+    }
+
+    std::vector<GPUPointLight> lightVec;
+    lightVec.reserve(lit.size());
+    m_lightBufEntities.clear();
+    for (const Lit& l : lit) {
+        lightVec.push_back(l.gpu);
+        m_lightBufEntities.push_back(l.entity);
     }
 
     m_lightCount = (int)lightVec.size();
@@ -269,7 +340,8 @@ void RenderSystem::CollectLightsPass(EntityManager& em)
 }
 
 // Point light cubemap array; only lights with castShadows == true consume a shadow slot.
-void RenderSystem::ShadowPass(EntityManager& em, EntityManager::Query<MeshComponent, Transform>& meshQuery)
+void RenderSystem::ShadowPass(EntityManager& em, EntityManager::Query<MeshComponent, Transform>& meshQuery,
+    const glm::mat4& viewProjection, const glm::vec3& cameraPos)
 {
     const auto& rs = RenderSettings::instance();
 
@@ -285,65 +357,122 @@ void RenderSystem::ShadowPass(EntityManager& em, EntityManager::Query<MeshCompon
 
     glUseProgram(m_shadowShader);
 
+    // Uniform locations once per pass (they were looked up by name per face, per light, per caster).
+    GLint locFaces[6];
+    for (int f = 0; f < 6; f++) {
+        const std::string uni = "uLightSpaceMatrices[" + std::to_string(f) + "]";
+        locFaces[f] = glGetUniformLocation(m_shadowShader, uni.c_str());
+    }
+    const GLint locLightPos = glGetUniformLocation(m_shadowShader, "uLightPos");
+    const GLint locFarPlane = glGetUniformLocation(m_shadowShader, "uFarPlane");
+    const GLint locLayer = glGetUniformLocation(m_shadowShader, "uCubeArrayLayer");
+    const GLint locModel = glGetUniformLocation(m_shadowShader, "uModel");
+
+    // Which lights get a shadow slot. Only ones that can light something on screen (sphere touching the camera
+    // frustum), and of those the nearest to the camera first: before, the first MAX_SHADOW_LIGHTS in ECS order won,
+    // so with many bolts in flight (12 players) the slots went to off-screen ones while visible ones went unshadowed,
+    // and every slot costs its PCSS sampling in ShadingPass plus a 6-face render here.
+    // Lights that opt out, or light nothing this frame (a bolt's light ramps in from 0), never get one; a light without
+    // a slot is simply unshadowed (GetShadowFactor returns 1).
+    glm::vec4 planes[6];
+    {
+        const glm::mat4& m = viewProjection;
+        const glm::vec4 r0(m[0][0], m[1][0], m[2][0], m[3][0]);
+        const glm::vec4 r1(m[0][1], m[1][1], m[2][1], m[3][1]);
+        const glm::vec4 r2(m[0][2], m[1][2], m[2][2], m[3][2]);
+        const glm::vec4 r3(m[0][3], m[1][3], m[2][3], m[3][3]);
+        planes[0] = r3 + r0; planes[1] = r3 - r0;
+        planes[2] = r3 + r1; planes[3] = r3 - r1;
+        planes[4] = r3 + r2; planes[5] = r3 - r2;
+        for (glm::vec4& pl : planes) pl /= std::max(glm::length(glm::vec3(pl)), 1e-6f);
+    }
+    auto sphereVisible = [&](const glm::vec3& c, float r) {
+        for (const glm::vec4& pl : planes)
+            if (glm::dot(glm::vec3(pl), c) + pl.w < -r) return false;
+        return true;
+    };
+
+    struct Candidate { int lightBufIdx; const PointLightComponent* light; glm::vec3 pos; float dist2; };
+    std::vector<Candidate> candidates;
+    {
+        // Same indices as the light SSBO (CollectLightsPass).
+        for (int idx = 0; idx < (int)m_lightBufEntities.size(); ++idx) {
+            const Entity entity = m_lightBufEntities[idx];
+            if (entity == 0) continue;   // a PointLightGroupComponent light: never shadowed
+            const PointLightComponent* light = em.GetComponent<PointLightComponent>(entity);
+            const Transform* xform = em.GetComponent<Transform>(entity);
+            if (!light || !xform) continue;
+            if (!light->castShadows || light->intensity <= 0.0f || light->radius <= 0.0f) continue;
+            const glm::vec3 pos = xform->getPosition();
+            if (!sphereVisible(pos, light->radius)) continue;
+            const glm::vec3 d = pos - cameraPos;
+            candidates.push_back(Candidate{ idx, light, pos, glm::dot(d, d) });
+        }
+    }
+    const size_t slots = std::min(candidates.size(), (size_t)std::max(MAX_SHADOW_LIGHTS, 0));
+    std::partial_sort(candidates.begin(), candidates.begin() + slots, candidates.end(),
+        [](const Candidate& a, const Candidate& b) { return a.dist2 < b.dist2; });
+    candidates.resize(slots);
+
+    // Casters gathered once (model matrix + world bounding sphere), then each light draws only the ones that reach
+    // into its radius: every shadowed light renders its 6 faces through a geometry shader, so drawing the whole scene
+    // for a short-range light (e.g. a laser bolt's, radius 40, several alive at once) was most of the frame.
+    struct Caster { const Mesh* mesh; glm::mat4 model; glm::vec3 center; float radius; bool bounded; };
+    std::vector<Caster> casters;
+    if (!candidates.empty()) {
+        for (auto [me, meshC, xf] : meshQuery) {
+            if (!meshC->enabled || !meshC->mesh || !meshC->castShadows || meshC->additive) continue;
+            Caster c{ meshC->mesh.get(), xf->getModelMatrix(), glm::vec3(0.0f), 0.0f, false };
+            c.bounded = meshC->mesh->worldBoundingSphere(c.model, c.center, c.radius);
+            casters.push_back(c);
+        }
+    }
+
     int shadowIdx = 0;
-    int lightBufIdx = 0; // mirrors insertion order in CollectLightsPass
+    for (const Candidate& cand : candidates) {
+        glClear(GL_DEPTH_BUFFER_BIT);
 
-    auto lightQuery = em.CreateQuery<PointLightComponent, Transform>();
-    for (auto [entity, light, xform] : lightQuery) {
-        if (lightBufIdx >= MAX_LIGHTS) break;
+        const glm::vec3 pos = cand.pos;
+        const float     farPlane = cand.light->radius;
 
-        // Skip lights that opt out of shadow casting.
-        if (!light->castShadows) {
-            lightBufIdx++;
-            continue;
+        glm::mat4 shadowProj = glm::perspective(glm::radians(90.0f), 1.0f,
+            rs.getShadowNearPlane(), farPlane);
+
+        glm::mat4 views[6] = {
+            shadowProj * glm::lookAt(pos, pos + glm::vec3(1, 0, 0), glm::vec3(0,-1, 0)),
+            shadowProj * glm::lookAt(pos, pos + glm::vec3(-1, 0, 0), glm::vec3(0,-1, 0)),
+            shadowProj * glm::lookAt(pos, pos + glm::vec3(0, 1, 0), glm::vec3(0, 0, 1)),
+            shadowProj * glm::lookAt(pos, pos + glm::vec3(0,-1, 0), glm::vec3(0, 0,-1)),
+            shadowProj * glm::lookAt(pos, pos + glm::vec3(0, 0, 1), glm::vec3(0,-1, 0)),
+            shadowProj * glm::lookAt(pos, pos + glm::vec3(0, 0,-1), glm::vec3(0,-1, 0)),
+        };
+
+        for (int f = 0; f < 6; f++)
+            glUniformMatrix4fv(locFaces[f], 1, GL_FALSE, glm::value_ptr(views[f]));
+        glUniform3fv(locLightPos, 1, glm::value_ptr(pos));
+        glUniform1f(locFarPlane, farPlane);
+        glUniform1i(locLayer, shadowIdx * 6);
+
+        for (const Caster& c : casters) {
+            // Outside the light's sphere: beyond farPlane in every face, it can't write any depth.
+            if (c.bounded) {
+                const glm::vec3 d = c.center - pos;
+                const float reach = farPlane + c.radius;
+                if (glm::dot(d, d) > reach * reach) continue;
+            }
+            glUniformMatrix4fv(locModel, 1, GL_FALSE, glm::value_ptr(c.model));
+            c.mesh->drawDepthOnly(glm::mat4(1.0f), m_shadowShader);
+            m_shadowCasterDraws++;
         }
 
-        if (shadowIdx < MAX_SHADOW_LIGHTS) {
-            glClear(GL_DEPTH_BUFFER_BIT);
-
-            glm::vec3 pos = xform->getPosition();
-            float     farPlane = light->radius;
-
-            glm::mat4 shadowProj = glm::perspective(glm::radians(90.0f), 1.0f,
-                rs.getShadowNearPlane(), farPlane);
-
-            glm::mat4 views[6] = {
-                shadowProj * glm::lookAt(pos, pos + glm::vec3(1, 0, 0), glm::vec3(0,-1, 0)),
-                shadowProj * glm::lookAt(pos, pos + glm::vec3(-1, 0, 0), glm::vec3(0,-1, 0)),
-                shadowProj * glm::lookAt(pos, pos + glm::vec3(0, 1, 0), glm::vec3(0, 0, 1)),
-                shadowProj * glm::lookAt(pos, pos + glm::vec3(0,-1, 0), glm::vec3(0, 0,-1)),
-                shadowProj * glm::lookAt(pos, pos + glm::vec3(0, 0, 1), glm::vec3(0,-1, 0)),
-                shadowProj * glm::lookAt(pos, pos + glm::vec3(0, 0,-1), glm::vec3(0,-1, 0)),
-            };
-
-            for (int f = 0; f < 6; f++) {
-                std::string uni = "uLightSpaceMatrices[" + std::to_string(f) + "]";
-                glUniformMatrix4fv(glGetUniformLocation(m_shadowShader, uni.c_str()),
-                    1, GL_FALSE, glm::value_ptr(views[f]));
-            }
-            glUniform3fv(glGetUniformLocation(m_shadowShader, "uLightPos"),
-                1, glm::value_ptr(pos));
-            glUniform1f(glGetUniformLocation(m_shadowShader, "uFarPlane"), farPlane);
-            glUniform1i(glGetUniformLocation(m_shadowShader, "uCubeArrayLayer"), shadowIdx * 6);
-
-            for (auto [me, meshC, xf] : meshQuery) {
-                if (!meshC->enabled || !meshC->mesh || !meshC->castShadows || meshC->additive) continue;
-                glUniformMatrix4fv(glGetUniformLocation(m_shadowShader, "uModel"),
-                    1, GL_FALSE, glm::value_ptr(xf->getModelMatrix()));
-                meshC->mesh->drawDepthOnly(glm::mat4(1.0f), m_shadowShader);
-            }
-
-            GPUShadowData sd;
-            for (int f = 0; f < 6; f++) sd.lightSpaceMatrices[f] = views[f];
-            sd.lightIndex = lightBufIdx;
-            sd.farPlane = farPlane;
-            sd.sourceRadius = light->sourceRadius;
-            sd.pad = 0;
-            shadowDataVec.push_back(sd);
-            shadowIdx++;
-        }
-
-        lightBufIdx++;
+        GPUShadowData sd;
+        for (int f = 0; f < 6; f++) sd.lightSpaceMatrices[f] = views[f];
+        sd.lightIndex = cand.lightBufIdx;
+        sd.farPlane = farPlane;
+        sd.sourceRadius = cand.light->sourceRadius;
+        sd.pad = 0;
+        shadowDataVec.push_back(sd);
+        shadowIdx++;
     }
 
     m_shadowCount = shadowIdx;
@@ -471,6 +600,50 @@ void RenderSystem::DirShadowPass(EntityManager::Query<MeshComponent, Transform>&
     glViewport(0, 0, m_screenW, m_screenH);
 }
 
+// Forward+: one 16x16 work group per tile writes the tile's light list (see LightGrid.hpp). The depth bounds come
+// from the GBuffer when it ran this frame; without it the tiles span near..far (side planes only).
+void RenderSystem::LightCullPass(const glm::mat4& view, const glm::mat4& projection)
+{
+    m_lightGridReady = false;
+    if (!m_lightCullShader || m_screenW <= 0 || m_screenH <= 0)
+        return;
+
+    const int tilesX = (m_screenW + LightGrid::kTileSize - 1) / LightGrid::kTileSize;
+    const int tilesY = (m_screenH + LightGrid::kTileSize - 1) / LightGrid::kTileSize;
+    if (!m_lightGridSSBO || tilesX != m_lightGridTilesX || tilesY != m_lightGridTilesY) {
+        if (!m_lightGridSSBO) glGenBuffers(1, &m_lightGridSSBO);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, m_lightGridSSBO);
+        glBufferData(GL_SHADER_STORAGE_BUFFER,
+            (GLsizeiptr)tilesX * tilesY * LightGrid::kWordsPerTile * sizeof(GLuint), nullptr, GL_DYNAMIC_DRAW);
+        glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+        m_lightGridTilesX = tilesX;
+        m_lightGridTilesY = tilesY;
+    }
+
+    const bool useDepth = m_gbufferDepthReady && m_gbufferDepthTex;
+    glUseProgram(m_lightCullShader);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, m_lightSSBO);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, LightGrid::kBinding, m_lightGridSSBO);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, useDepth ? m_gbufferDepthTex : m_whiteTex);
+    glUniform1i(glGetUniformLocation(m_lightCullShader, "uDepthTex"), 0);
+    glUniform1i(glGetUniformLocation(m_lightCullShader, "uUseDepth"), useDepth ? 1 : 0);
+    glUniform1i(glGetUniformLocation(m_lightCullShader, "uLightCount"), m_lightCount);
+    glUniform2i(glGetUniformLocation(m_lightCullShader, "uScreenSize"), m_screenW, m_screenH);
+    glUniform1i(glGetUniformLocation(m_lightCullShader, "uTilesX"), tilesX);
+    glUniformMatrix4fv(glGetUniformLocation(m_lightCullShader, "uView"), 1, GL_FALSE, glm::value_ptr(view));
+    glUniformMatrix4fv(glGetUniformLocation(m_lightCullShader, "uInvProjection"), 1, GL_FALSE,
+        glm::value_ptr(glm::inverse(projection)));
+
+    glDispatchCompute((GLuint)tilesX, (GLuint)tilesY, 1);
+    // The lit fragment shaders read the lists as an SSBO.
+    glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glUseProgram(0);
+    m_lightGridReady = true;
+}
+
 void RenderSystem::BindLightingInputs(bool probeCapture)
 {
     // Point light SSBO + shadow SSBO
@@ -512,6 +685,9 @@ void RenderSystem::BindLightingInputs(bool probeCapture)
     glBindTexture(GL_TEXTURE_2D, m_envBrdfLUT);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, EnvLighting::kProbeBinding, m_envProbeSSBO);
     glActiveTexture(GL_TEXTURE0);
+
+    // Forward+ tile lists. Bound even when unused: the shaders only read it with uLightGridEnabled set.
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, LightGrid::kBinding, m_lightGridSSBO);
 }
 
 void RenderSystem::UnbindLightingInputs()
@@ -533,6 +709,9 @@ void RenderSystem::SetLightingUniforms(Material* mat, const glm::vec3& cameraPos
     mat->setIntIfPresent("uSSAOScale", probeCapture ? 1 : m_ssaoScale);
     mat->setIntIfPresent("uShadowCount", probeCapture ? 0 : m_shadowCount);
     mat->setIntIfPresent("uLightCount", m_lightCount);
+    // A probe capture is another viewpoint and resolution: the tile lists don't apply to it.
+    mat->setIntIfPresent("uLightGridEnabled", (!probeCapture && m_lightGridReady) ? 1 : 0);
+    mat->setIntIfPresent("uLightGridTilesX", m_lightGridTilesX);
     mat->setIntIfPresent("uShadowRes", m_shadowRes);
     mat->setIntIfPresent("uDirShadowRes", m_dirShadowRes);
 
@@ -559,15 +738,40 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
     glViewport(0, 0, m_screenW, m_screenH);
 
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LESS);
     glDepthMask(GL_TRUE);
+
+    // Depth reuse: the GBuffer already holds the depth of the nearest opaque surface per pixel (same meshes, same
+    // order), so start from it and shade only that surface: each pixel runs the lighting (point loop, PCSS) once,
+    // whatever the overdraw. Not with MSAA: the GBuffer depth is single-sampled and can't feed the multisampled target.
+    // The material vertex shaders compute proj * view * world on the GPU while the GBuffer gets a CPU-built MVP, so
+    // the same surface can land a few ULPs further here: LEQUAL plus a small polygon offset toward the camera keeps it
+    // passing (a surface really behind is far more than that away). Depth writes stay on, so a mesh the GBuffer missed
+    // still occludes correctly for the passes after this one.
+    const bool reuseDepth = m_gbufferDepthReady && m_msaaSamples <= 1;
+    if (reuseDepth) {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, m_gbufferFBO);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, m_hdrFBO);
+        glBlitFramebuffer(0, 0, m_screenW, m_screenH, 0, 0, m_screenW, m_screenH, GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+        glBindFramebuffer(GL_FRAMEBUFFER, targetFBO);
+        glDrawBuffers(1, &drawBuf);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glDepthFunc(GL_LEQUAL);
+        glEnable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(-1.0f, -4.0f);
+    } else {
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glDepthFunc(GL_LESS);
+    }
 
     BindLightingInputs(false);
 
-    for (auto [entity, meshC, transform] : meshQuery) {
-        if (!meshC->enabled || !meshC->mesh || meshC->additive) continue; // additive ones: see AdditivePass
+    // Additive meshes are left out here: see AdditivePass.
+    static std::vector<OpaqueDraw> draws; // render thread only; kept to reuse its capacity
+    GatherOpaqueNearestFirst(meshQuery, cameraPos, draws);
+    for (const OpaqueDraw& d : draws) {
+        MeshComponent* meshC = d.meshC;
+        Transform* transform = d.transform;
 
         // Set BEFORE bind: Material::bind() uploads them, so afterwards they'd only reach the GPU next frame.
         if (Material* mat = meshC->mesh->getMaterial())
@@ -580,6 +784,11 @@ void RenderSystem::ShadingPass(EntityManager::Query<MeshComponent, Transform>& m
 
     UnbindLightingInputs();
 
+    if (reuseDepth) {
+        glDisable(GL_POLYGON_OFFSET_FILL);
+        glPolygonOffset(0.0f, 0.0f);
+        glDepthFunc(GL_LESS);
+    }
     glDepthMask(GL_TRUE);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 

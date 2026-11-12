@@ -71,12 +71,12 @@ project "GameServer"
    filter "configurations:Release"
       defines { "RELEASE" }
       runtime "Release"
-      optimize "On"
+      optimize "Speed"
       symbols "On"
 
    -- Dist
    filter "configurations:Dist"
       defines { "DIST" }
       runtime "Release"
-      optimize "On"
+      optimize "Speed"
       symbols "Off"

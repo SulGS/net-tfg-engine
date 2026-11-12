@@ -69,12 +69,20 @@ public:
 			prediction_ = nullptr;
 		}
 
+        // Every failure path below goes through AbortSetup, which hands the logic back; if it is still missing here
+        // something else lost it, and SetPlayerNames would crash on it (alpha test 2026-11-11, indar).
+        if (!gameLogic_) {
+            Debug::Error("OnlineClient") << "SetupClient: game logic missing (lost by an earlier setup), refusing to connect\n";
+            return CONN_DENIED;
+        }
+
         // The previous match's names would otherwise label this one's ships until the server sends the new list.
         gameLogic_->SetPlayerNames({});
+        matchAborted_ = false;
 
         cWindow_ = new ClientWindow(
-            [this](GameStateBlob& state, OpenGLWindow* win) {
-                gameRenderer_->Init(state, win);
+            [this](LoadPlan& plan, const GameStateBlob& state, OpenGLWindow* win) {
+                gameRenderer_->BuildLoadPlan(plan, state, win);
             },
             [this](GameStateBlob& state, OpenGLWindow* win) {
                 gameRenderer_->Render(state, win);
@@ -83,22 +91,19 @@ public:
                 gameRenderer_->Interpolate(previousServerState, currentServerState, previousLocalState, currentLocalState, renderState, serverInterpolation, localInterpolation);
             }
         );
+        cWindow_->waitsForServer = true;   // set before activate(): the render thread reads it once the scene loads
 
         ConnectionCode connCode = net_.ConnectTo(hostStr, port);
 
         if (connCode != CONN_SUCCESS) {
-            delete cWindow_;
-            cWindow_ = nullptr;
-            return connCode;
+            return AbortSetup(connCode);
         }
 
         Debug::Info("OnlineClient") << "Using client ID: " << clientId_ << "\n";
         Debug::Info("OnlineClient") << "Waiting for connection to server...\n";
 
         if (!WaitForConnectionAndAuth()) {
-            delete cWindow_;
-            cWindow_ = nullptr;
-            return versionRejected_ ? CONN_VERSION_MISMATCH : CONN_DENIED;
+            return AbortSetup(versionRejected_ ? CONN_VERSION_MISMATCH : CONN_DENIED);
         }
 
         if (isReconnection_) {
@@ -108,9 +113,7 @@ public:
             Debug::Info("OnlineClient") << "Successfully authenticated!\n";
 
             if (!WaitForGameStart()) {
-                delete cWindow_;
-                cWindow_ = nullptr;
-                return CONN_TIMEOUT;
+                return AbortSetup(matchAborted_ ? CONN_MATCH_ABORTED : CONN_TIMEOUT);
             }
         }
 
@@ -124,11 +127,7 @@ public:
         {
             Debug::Info("OnlineClient") << "Waiting for state update after reconnection...\n";
             if (!WaitForStateUpdateAfterReconnection(*prediction_)) {
-                delete cWindow_;
-                cWindow_ = nullptr;
-				delete prediction_;
-				prediction_ = nullptr;
-                return CONN_TIMEOUT;
+                return AbortSetup(CONN_TIMEOUT);
             }
         }
 
@@ -142,6 +141,7 @@ public:
 
         prediction_->UpdateCurrentFrame(1);
         delaySyncTick_ = 0;
+        readySent_ = false;
 
         Debug::Info("OnlineClient") << "Online Client setup OK\n";
 
@@ -159,6 +159,16 @@ public:
         // Predict to current frame (mutex-protected)
         prediction_->Tick();
         cWindow_->setLocalState(prediction_->GetCurrentState());
+
+        // Once: the level is loaded and renders smoothly, so the server can start the countdown (see Server's start gate).
+        if (!readySent_ && cWindow_->IsLevelLoaded()) {
+            const uint8_t ready = PACKET_CLIENT_READY;
+            if (ISteamNetworkingSockets* sockets = net_.GetSockets()) {
+                sockets->SendMessageToConnection(serverConnection_, &ready, sizeof(ready), k_nSteamNetworkingSend_Reliable, nullptr);
+            }
+            readySent_ = true;
+            Debug::Info("OnlineClient") << "Level loaded, sent ready to the server\n";
+        }
 
         HashPacket hashPacket;
         GameStateBlob currentServerState = prediction_->GetLatestServerState();
@@ -271,6 +281,48 @@ private:
 
     std::atomic<bool> networkRunning_;
     std::thread networkThread_;
+
+    // Set when the server reports that the match was called off before starting (PACKET_MATCH_ABORTED).
+    bool matchAborted_ = false;
+
+    // PACKET_CLIENT_READY already sent for this session (tick thread only).
+    bool readySent_ = false;
+
+    // Undoes a SetupClient that failed half way, so the next one starts from a clean client: gives the logic back
+    // from prediction_ (a missing gameLogic_ crashed the next setup), deletes the never-activated window on the render
+    // thread like everywhere else, and closes the connection (left open, the server kept this id connected and took
+    // the next attempt for a reconnection).
+    ConnectionCode AbortSetup(ConnectionCode code) {
+        if (prediction_) {
+            gameLogic_ = prediction_->ReleaseGameLogic();
+            delete prediction_;
+            prediction_ = nullptr;
+        }
+
+        if (cWindow_) {
+            ClientWindow* window = cWindow_;
+            cWindow_ = nullptr;
+            if (ClientWindow::isWindowThreadRunning()) {
+                ClientWindow::RunOnRenderThread([window]() { delete window; });
+            }
+            else {
+                delete window;
+            }
+        }
+
+        if (serverConnection_ != k_HSteamNetConnection_Invalid) {
+            if (ISteamNetworkingSockets* sockets = net_.GetSockets()) {
+                sockets->CloseConnection(serverConnection_, k_ESteamNetConnectionEnd_App_Generic, nullptr, false);
+            }
+            serverConnection_ = k_HSteamNetConnection_Invalid;
+        }
+
+        assignedPlayerId_ = -1;
+        isReconnection_ = false;
+
+        Debug::Info("OnlineClient") << "Setup aborted: " << code << "\n";
+        return code;
+    }
 
     std::string GenerateClientId() {
         auto now = std::chrono::system_clock::now();
@@ -452,6 +504,12 @@ private:
             return true;
         }
 
+        if (type == PACKET_MATCH_ABORTED) {
+            Debug::Info("OnlineClient") << "Server called the match off: not enough players joined in time\n";
+            matchAborted_ = true;
+            return false;
+        }
+
         Debug::Info("OnlineClient") << "Received unknown packet type: " << (int)type << "\n";
         return true;
     }
@@ -542,9 +600,10 @@ private:
         bool running = true;
 
         Debug::Info("OnlineClient") << "Waiting for game to start...\n";
+        // Only a fallback: the server either starts or sends PACKET_MATCH_ABORTED when its join timeout runs out.
         auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(60);
 
-        while (!gameStarted && running) {
+        while (!gameStarted && running && ClientWindow::isWindowThreadRunning()) {
             if (std::chrono::steady_clock::now() > timeout) {
                 Debug::Info("OnlineClient") << "Timeout waiting for game start\n";
                 return false;
@@ -552,13 +611,29 @@ private:
 
             net_.PumpCallbacks();
             net_.Poll([&](const uint8_t* data, int len, HSteamNetConnection conn) {
-                if (!gameStarted) {
+                if (!gameStarted && running) {
                     bool serverAccepted = false;
                     if (!HandleReceiveEvent(data, len, gameStarted, serverAccepted)) {
                         running = false;
                     }
                 }
                 }, true);
+
+            // A server that stopped (or dropped us) would otherwise leave the player waiting the whole fallback.
+            if (running && !gameStarted) {
+                ISteamNetworkingSockets* sockets = net_.GetSockets();
+                SteamNetConnectionInfo_t info;
+                if (sockets && (!sockets->GetConnectionInfo(serverConnection_, &info) ||
+                    info.m_eState == k_ESteamNetworkingConnectionState_ClosedByPeer ||
+                    info.m_eState == k_ESteamNetworkingConnectionState_ProblemDetectedLocally)) {
+                    Debug::Info("OnlineClient") << "Server closed the connection before the game started\n";
+                    if (sockets->GetConnectionInfo(serverConnection_, &info) &&
+                        info.m_eEndReason == k_ESteamNetConnectionEnd_App_Min + REJECT_MATCH_ABORTED) {
+                        matchAborted_ = true;
+                    }
+                    running = false;
+                }
+            }
 
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }

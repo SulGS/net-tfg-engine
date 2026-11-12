@@ -2,6 +2,7 @@
 #include "ecs/ecs.hpp"
 #include "netcode/netcode_common.hpp"
 #include <vector>
+#include <string>
 
 class IDeltaHandler {
 public:
@@ -15,4 +16,7 @@ public:
 
     virtual bool Compare(const DeltaStateBlob& delta,
         const GameStateBlob& currentState) = 0;
+
+    // Human-readable first difference found by Compare, for the reconciliation log ("" = not implemented).
+    virtual std::string DescribeMismatch(const DeltaStateBlob& delta, const GameStateBlob& currentState) const { return ""; }
 };

@@ -10,6 +10,8 @@
 #include "OpenGL/OpenGLIncludes.hpp"
 #include "RenderSettings.hpp"
 #include "EnvLighting.hpp"
+#include "LightGrid.hpp"
+#include "GpuPassTimer.hpp"
 #include <glm/gtc/type_ptr.hpp>
 #include <vector>
 #include <string>
@@ -109,6 +111,17 @@ private:
 
     // Point light SSBO (binding 0)
     GLuint m_lightSSBO = 0;
+    // Entity of each light in the SSBO, in buffer order (CollectLightsPass), so ShadowPass maps its slots to the
+    // same indices the shaders use. 0 for the lights of a PointLightGroupComponent (never shadowed).
+    std::vector<Entity> m_lightBufEntities;
+
+    // Forward+ tiled light culling (LightGrid.hpp): per-tile light lists (SSBO binding 4) built by m_lightCullShader.
+    GLuint m_lightCullShader = 0;      // compute; 0 = no GL 4.3 compute or failed build -> every light per fragment
+    GLuint m_lightGridSSBO = 0;
+    int    m_lightGridTilesX = 0;
+    int    m_lightGridTilesY = 0;
+    bool   m_lightGridReady = false;   // lists built for this frame's main view: ShadingPass uses them
+    bool   m_forwardPlusEnabled = true; // NETTFG_NO_FORWARD_PLUS=1 turns it off (A/B comparisons)
 
     // Point light shadow resources
     GLuint m_shadowCubeArray = 0;
@@ -118,6 +131,8 @@ private:
     GLuint m_shadowDataSSBO = 0;
     int    m_shadowRes = 512;
     int    m_shadowCount = 0;
+    int    m_shadowCasterDraws = 0; // casters drawn by ShadowPass this frame (summed over lights), for GpuPassTimer
+    GpuPassTimer m_gpuTimer;        // per-pass GPU times, logged once per second
 
     // Directional light UBO (binding 2), one GPUDirLight struct; colorEnabled.a == 0 means the shader skips the term.
     GLuint m_dirLightUBO = 0;
@@ -204,6 +219,8 @@ private:
     GLuint m_hdrFBO = 0;
     GLuint m_hdrColorTex = 0;
     GLuint m_hdrDepthTex = 0;
+    // GBufferPass ran this frame, so ShadingPass can start from its depth (see ShadingPass).
+    bool m_gbufferDepthReady = false;
     GLuint m_quadVAO = 0;
     GLuint m_quadVBO = 0;
 
@@ -280,6 +297,7 @@ private:
     uint64_t m_envSkyFacesHash = 0;    // face asset names m_envSkySource was loaded from
     uint64_t m_envProbeSetHash = 0;    // probe placement the current captures belong to
     bool     m_envProbeLimitWarned = false;
+    bool     m_envMissingWarned = false;   // EnvironmentPass said once why it can't run
 
     // Shader programs
     GLuint m_gbufferShader = 0;
@@ -394,8 +412,13 @@ private:
     void ClearSSAO();
     void SSRPass(const glm::mat4& projection);
     void MotionBlurPass(const glm::mat4& viewProjection, float deltaTime);
-    void CollectLightsPass(EntityManager& em);  // also handles directional light
-    void ShadowPass(EntityManager& em, EntityManager::Query<MeshComponent, Transform>& meshQuery);
+    void CollectLightsPass(EntityManager& em, const glm::vec3& cameraPos);
+    // Forward+: per-tile light lists for this frame's main view (after GBufferPass, which gives the depth bounds).
+    void LightCullPass(const glm::mat4& view, const glm::mat4& projection);
+    void CompileLightCullShader();  // also handles directional light
+    // Point light shadows for the visible shadow-casting lights nearest the camera, up to MAX_SHADOW_LIGHTS.
+    void ShadowPass(EntityManager& em, EntityManager::Query<MeshComponent, Transform>& meshQuery,
+        const glm::mat4& viewProjection, const glm::vec3& cameraPos);
     // probeCapture: only reflectionProbeVisible meshes cast (no ghost shadows of moving objects in the captures).
     void DirShadowPass(EntityManager::Query<MeshComponent, Transform>& meshQuery,
         const glm::mat4& view, const glm::mat4& projection, float cameraNear, float cameraFar,

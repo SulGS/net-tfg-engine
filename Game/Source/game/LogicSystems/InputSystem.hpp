@@ -6,6 +6,7 @@
 #include "ecs/ecs_common.hpp"
 #include "../Components.hpp"
 #include "InputMask.hpp"
+#include "../DeterministicMath.hpp"
 
 class InputSystem : public ISystem {
 public:
@@ -98,9 +99,9 @@ public:
             // shipZRotation is the authoritative rotation for the state blob.
             ship->shipZRotation = static_cast<int>(newZ);
 
-            float radians = newZ * 3.14159f / 180.0f;
-            float fwdX = cos(radians);
-            float fwdY = sin(radians);
+            // DetMath, not cos/sin: the C runtimes of the client and the ARM64 server round them differently.
+            float fwdX, fwdY;
+            DetMath::SinCosDeg(newZ, fwdY, fwdX);
 
             if (m & INPUT_TOP)
             {

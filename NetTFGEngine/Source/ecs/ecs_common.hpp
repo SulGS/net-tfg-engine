@@ -11,6 +11,7 @@
 #include <cmath>
 #include <array>
 #include <string>
+#include <vector>
 
 class Transform : public IComponent {
 public:
@@ -138,6 +139,18 @@ struct PointLightComponent : public IComponent {
     float     radius = 10.0f;
     float     sourceRadius = 0.15f; // physical size of the emitter (world units): sets the shadow penumbra width
     bool      castShadows = true;
+};
+
+// A row/set of unshadowed point lights sharing one colour, intensity and radius, at `offsets` from the entity's
+// Transform position (world axes: not rotated or scaled with it). For lights that only make sense together, such as
+// the even strip along a laser wall: one entity carries them all, instead of one entity per light, because every ECS
+// query scans all entities (each extra entity costs in every system, every frame). RenderSystem expands it into
+// individual lights; intensity <= 0 sends none.
+struct PointLightGroupComponent : public IComponent {
+    std::vector<glm::vec3> offsets;
+    glm::vec3 color = glm::vec3(1.0f);
+    float     intensity = 0.0f;
+    float     radius = 10.0f;
 };
 
 // Only the first entity carrying this component is used by RenderSystem; extras are silently ignored.

@@ -43,6 +43,19 @@ public:
         return true;
     }
 
+    // First delta that doesn't match, described by its handler; "" when they all match.
+    std::string DescribeMismatch(const std::vector<DeltaStateBlob>& deltas,
+        const GameStateBlob& currentState) {
+        for (const auto& deltaBlob : deltas) {
+            auto it = handlers.find(deltaBlob.delta_type);
+            if (it != handlers.end() && !it->second->Compare(deltaBlob, currentState)) {
+                std::string what = it->second->DescribeMismatch(deltaBlob, currentState);
+                return what.empty() ? "delta type " + std::to_string(deltaBlob.delta_type) : what;
+            }
+        }
+        return "";
+    }
+
     // Generate deltas by comparing states (server-side)
     void GenerateDeltas(const GameStateBlob& prevState,
         const GameStateBlob& currentState,

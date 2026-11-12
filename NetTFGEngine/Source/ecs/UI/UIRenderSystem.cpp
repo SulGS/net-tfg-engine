@@ -96,8 +96,8 @@ UIRenderSystem::~UIRenderSystem() {
     glDeleteProgram(textShaderProgram);
 }
 
-bool UIRenderSystem::LoadFont(const std::string& fontName, const std::string& fontPath, unsigned int fontSize) {
-    return fontManager->LoadFont(fontName, fontPath, fontSize);
+bool UIRenderSystem::LoadFont(const std::string& fontName, const std::string& fontPath, unsigned int fontSize, bool quiet) {
+    return fontManager->LoadFont(fontName, fontPath, fontSize, quiet);
 }
 
 void UIRenderSystem::Update(EntityManager& entityManager, std::vector<EventEntry>& events, bool isServer, float deltaTime) {
